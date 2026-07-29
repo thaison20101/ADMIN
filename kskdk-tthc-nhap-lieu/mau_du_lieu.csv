@@ -1,0 +1,8 @@
+# File mẫu — THAY bằng CSV export từ form thật (Ctrl+Shift+E trên trang KSKDK_TTHC).
+# Dòng 1 = dataField (không đổi tên cột khi dùng bulk_submit.py)
+# Dòng 2 = nhãn tiếng Việt (bulk_submit.py mặc định bỏ dòng này)
+# Từ dòng 3 = dữ liệu
+
+hoTen,ngaySinh,gioiTinh,cccd,dienThoai,diaChi
+Họ và tên,Ngày sinh,Giới tính,CCCD/CMND,Điện thoại,Địa chỉ
+Nguyễn Văn A,01/01/1990,Nam,001099000001,0901234567,Quận 1 TP.HCM

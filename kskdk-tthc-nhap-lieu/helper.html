@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KSKDK_TTHC — Helper nhập liệu</title>
+  <style>
+    :root {
+      --bg: #eef3f7;
+      --card: #ffffff;
+      --ink: #132033;
+      --muted: #5b6b7c;
+      --line: #c9d6e2;
+      --accent: #0f6a5a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Be Vietnam Pro", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 500px at 10% -10%, #d7ebe5 0%, transparent 55%),
+        radial-gradient(900px 400px at 100% 0%, #d9e4f2 0%, transparent 50%),
+        var(--bg);
+      min-height: 100vh;
+      padding: 24px;
+    }
+    h1 { margin: 0 0 8px; font-size: 1.6rem; letter-spacing: -0.02em; }
+    p.lead { margin: 0 0 20px; color: var(--muted); max-width: 70ch; }
+    .grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
+    @media (min-width: 980px) { .grid { grid-template-columns: 1fr 1fr; } }
+    section {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+    }
+    label { display: block; font-weight: 600; margin-bottom: 6px; }
+    textarea, input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: #fbfdff;
+    }
+    textarea { min-height: 180px; resize: vertical; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    button {
+      border: 0;
+      background: var(--accent);
+      color: #fff;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.secondary { background: #1f3a5f; }
+    button.ghost { background: #e8eef5; color: var(--ink); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+    th { background: #f3f7fb; position: sticky; top: 0; }
+    .table-wrap { max-height: 360px; overflow: auto; margin-top: 10px; }
+    .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+    .full { grid-column: 1 / -1; }
+    code { background: #eef2f7; padding: 1px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>KSKDK_TTHC — Helper nhập liệu</h1>
+  <p class="lead">
+    Dán schema JSON đã export từ userscript (<code>Ctrl+Shift+E</code>), dán dữ liệu Excel/TSV,
+    rồi tải CSV hoặc payload JSON để gửi bằng <code>bulk_submit.py</code>.
+  </p>
+
+  <div class="grid">
+    <section>
+      <label for="schema">Schema JSON (từ KSKDK_TTHC_schema.json)</label>
+      <textarea id="schema" placeholder='{"fields":[{"dataField":"hoTen","label":"Họ tên"}, ...]}'></textarea>
+      <div class="actions">
+        <button type="button" id="btnParse">Đọc schema</button>
+        <button type="button" class="ghost" id="btnSample">Chèn schema mẫu tối thiểu</button>
+      </div>
+      <p class="hint" id="schemaInfo">Chưa có schema.</p>
+    </section>
+
+    <section>
+      <label for="paste">Dán dữ liệu Excel (nhiều dòng, có hoặc không có header)</label>
+      <textarea id="paste" placeholder="Họ tên&#9;Ngày sinh&#9;CCCD&#10;Nguyễn Văn A&#9;01/01/1990&#9;0..."></textarea>
+      <div class="actions">
+        <button type="button" id="btnBuild">Tạo bảng</button>
+        <button type="button" class="secondary" id="btnCsv">Tải CSV</button>
+        <button type="button" class="ghost" id="btnJson">Tải JSON payloads</button>
+      </div>
+      <p class="hint">Nếu không có header, cột sẽ map theo thứ tự field trong schema.</p>
+    </section>
+
+    <section class="full">
+      <label>Xem trước</label>
+      <div class="table-wrap">
+        <table>
+          <thead id="thead"></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    let fields = [];
+    let rows = [];
+
+    function parseTable(text) {
+      const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter(l => l.trim() !== '');
+      if (!lines.length) return [];
+      const delim = lines[0].includes('\t') ? '\t' : ',';
+      const split = (line) => {
+        if (delim === '\t') return line.split('\t');
+        const out = []; let cur = ''; let q = false;
+        for (let i = 0; i < line.length; i++) {
+          const ch = line[i];
+          if (ch === '"') {
+            if (q && line[i+1] === '"') { cur += '"'; i++; }
+            else q = !q;
+          } else if (ch === ',' && !q) { out.push(cur); cur = ''; }
+          else cur += ch;
+        }
+        out.push(cur);
+        return out;
+      };
+      return lines.map(split);
+    }
+
+    function download(name, content, type) {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([content], { type }));
+      a.download = name;
+      a.click();
+    }
+
+    function csvEscape(v) {
+      const s = v == null ? '' : String(v);
+      return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }
+
+    function render() {
+      const thead = document.getElementById('thead');
+      const tbody = document.getElementById('tbody');
+      thead.innerHTML = '<tr>' + fields.map(f => `<th title="${f.dataField}">${f.label || f.dataField}<br><code>${f.dataField}</code></th>`).join('') + '</tr>';
+      tbody.innerHTML = rows.map(r => '<tr>' + fields.map(f => `<td>${(r[f.dataField] ?? '').toString().replace(/</g,'&lt;')}</td>`).join('') + '</tr>').join('');
+    }
+
+    document.getElementById('btnSample').onclick = () => {
+      document.getElementById('schema').value = JSON.stringify({
+        formCode: 'KSKDK_TTHC',
+        formId: 1000092,
+        fields: [
+          { dataField: 'hoTen', label: 'Họ và tên' },
+          { dataField: 'ngaySinh', label: 'Ngày sinh' },
+          { dataField: 'gioiTinh', label: 'Giới tính' },
+          { dataField: 'cccd', label: 'CCCD/CMND' },
+          { dataField: 'dienThoai', label: 'Điện thoại' },
+          { dataField: 'diaChi', label: 'Địa chỉ' }
+        ]
+      }, null, 2);
+    };
+
+    document.getElementById('btnParse').onclick = () => {
+      try {
+        const schema = JSON.parse(document.getElementById('schema').value);
+        fields = (schema.fields || []).map(f => ({
+          dataField: f.dataField,
+          label: f.label || f.dataField
+        })).filter(f => f.dataField);
+        document.getElementById('schemaInfo').textContent = `Đã đọc ${fields.length} field` + (schema.name ? ` — ${schema.name}` : '');
+        render();
+      } catch (e) {
+        alert('Schema JSON không hợp lệ: ' + e.message);
+      }
+    };
+
+    document.getElementById('btnBuild').onclick = () => {
+      if (!fields.length) {
+        alert('Hãy đọc schema trước.');
+        return;
+      }
+      const table = parseTable(document.getElementById('paste').value);
+      if (!table.length) return;
+      const first = table[0].map(x => (x || '').trim());
+      const headerMode = first.some(h => fields.some(f => f.dataField === h || f.label === h));
+      let start = 0;
+      let map = fields.map(f => f.dataField);
+      if (headerMode) {
+        map = first.map(h => {
+          const byField = fields.find(f => f.dataField === h);
+          if (byField) return byField.dataField;
+          const byLabel = fields.find(f => f.label === h);
+          return byLabel ? byLabel.dataField : h;
+        });
+        start = 1;
+      }
+      rows = [];
+      for (let i = start; i < table.length; i++) {
+        const obj = {};
+        fields.forEach((f, idx) => {
+          const key = headerMode ? null : f.dataField;
+          if (headerMode) {
+            const col = map.indexOf(f.dataField);
+            obj[f.dataField] = col >= 0 ? (table[i][col] || '').trim() : '';
+          } else {
+            obj[f.dataField] = (table[i][idx] || '').trim();
+          }
+        });
+        if (Object.values(obj).some(Boolean)) rows.push(obj);
+      }
+      render();
+    };
+
+    document.getElementById('btnCsv').onclick = () => {
+      if (!rows.length) { alert('Chưa có dữ liệu'); return; }
+      const headers = fields.map(f => f.dataField);
+      const lines = [headers.map(csvEscape).join(',')].concat(
+        rows.map(r => headers.map(h => csvEscape(r[h])).join(','))
+      );
+      download('KSKDK_TTHC_data.csv', '\uFEFF' + lines.join('\n'), 'text/csv;charset=utf-8');
+    };
+
+    document.getElementById('btnJson').onclick = () => {
+      if (!rows.length) { alert('Chưa có dữ liệu'); return; }
+      download('KSKDK_TTHC_payloads.json', JSON.stringify(rows, null, 2), 'application/json');
+    };
+  </script>
+</body>
+</html>
