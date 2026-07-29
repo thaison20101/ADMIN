@@ -9,8 +9,9 @@ Web **không có nút Import file**. Bộ công cụ này tạo Excel đúng c�
 
 | File | Mục đích |
 |------|----------|
-| `KSKDK_TTHC_mau_nhap.xlsx` | File Excel để nhập liệu (sheet `NhapLieu` + danh mục `DM_*`) |
+| `KSKDK_TTHC_mau_nhap.xlsx` | File Excel để nhập liệu (sheet `NhapLieu` + danh mục `DM_*` + `TimKiem` + `DaImport`) |
 | `import_excel.py` | Import Excel lên hệ thống |
+| `search_fill.py` | Tìm một phần theo CCCD / họ tên / SĐT trong Excel |
 | `generate_excel_template.py` | Tạo lại Excel + danh mục mới nhất từ API |
 | `userscript-kskdk-tthc.user.js` | Phím tắt khi nhập tay trên web (`Ctrl+S` lưu...) |
 
@@ -38,17 +39,31 @@ python3 import_excel.py \
   --password 'YOUR_PASSWORD' \
   --dry-run --limit 1 --skip-sample
 
-# Import thật
+# Import thật (bỏ qua nếu trùng cùng ngày)
 python3 import_excel.py \
   --excel KSKDK_TTHC_mau_nhap.xlsx \
   --user YOUR_USER \
   --password 'YOUR_PASSWORD' \
-  --skip-sample
+  --on-duplicate skip
 ```
 
-Kết quả từng dòng nằm trong `import_result.jsonl`.
+Kết quả từng dòng nằm trong `import_result.jsonl`. Script ghi lại cột **MaBanGhi**, **TrangThai**, **GhiChu** trên sheet `NhapLieu`.
 
-### 3) Tạo lại Excel (khi danh mục đổi)
+### 3) Tìm kiếm một phần (trong Excel)
+
+1. Mở sheet **TimKiem**, nhập một phần CCCD / họ tên / SĐT (ví dụ `00236`, `dung`, `mai`)
+2. Chạy:
+
+```bash
+python3 search_fill.py --excel KSKDK_TTHC_mau_nhap.xlsx
+# hoặc trực tiếp:
+python3 search_fill.py --excel KSKDK_TTHC_mau_nhap.xlsx --cccd 00236
+python3 search_fill.py --excel KSKDK_TTHC_mau_nhap.xlsx --hoten dung --fill-nhaplieu
+```
+
+Tìm trong sheet **DaImport** (đã import) và **NhapLieu** (đang nhập). `--fill-nhaplieu` chép kết quả tốt nhất sang dòng trống `NhapLieu`.
+
+### 4) Tạo lại Excel (khi danh mục đổi)
 
 ```bash
 python3 generate_excel_template.py \
@@ -64,6 +79,25 @@ python3 generate_excel_template.py \
 - CCCD, HoTen, NgaySinh, GioiTinh, DanToc, NhomMau, YeuToNhomMau, BHYT, SDT
 - NoiOHienTai, TinhThanh, XaPhuong
 - NgheNghiepId, NgheNghiep, NoiCongTac, XaPhuongCongTac, LyDoKham
+- **MaBanGhi**, **TrangThai**, **GhiChu** — script ghi sau khi import
+
+## Người đã có trên hệ thống (trùng)
+
+Nếu công dân **đã khám cùng ngày**, cùng hình thức chi trả và đơn vị, API trả lỗi dạng:
+
+> Công dân đã khám bằng 'Ngân sách nhà nước' tại Phòng khám ... vào ngày dd/MM/yyyy
+
+Script đánh dấu **TrangThai = TRUNG**, **không tạo bản ghi mới** (mặc định `--on-duplicate skip`). Dòng vẫn được ghi vào sheet `DaImport` để tra cứu sau.
+
+| TrangThai | Ý nghĩa |
+|-----------|---------|
+| THANH_CONG | Lưu mới thành công, có MaBanGhi |
+| TRUNG | Đã khám cùng ngày / trùng trên hệ thống |
+| LOI | Lỗi (SĐT không hợp lệ, CCCD không khớp ngày sinh, thiếu nghề nghiệp...) |
+
+**Lưu ý SĐT:** phải đủ 10 số, bắt đầu bằng `0`, và hệ thống kiểm tra đầu số nhà mạng thật (số giả như `0987654321` thường bị từ chối).
+
+**Lưu ý CCCD:** phải đúng định dạng và khớp ngày sinh / giới tính.
 
 ## Kỹ thuật (đã xác minh với tài khoản đơn vị)
 

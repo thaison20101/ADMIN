@@ -50,6 +50,9 @@ COLUMNS: List[Tuple[str, str, str]] = [
     ("NoiCongTac", "NoiCongTac", "Id hoặc Name từ DM_NoiCongTac"),
     ("XaPhuongCongTac", "NoiCongTac_XaPhuong", "Xã/phường nơi công tác"),
     ("LyDoKham", "LyDoKham", "Lý do khám sức khỏe"),
+    ("MaBanGhi", "_output", "Script ghi — mã bản ghi trên web"),
+    ("TrangThai", "_output", "THANH_CONG / TRUNG / LOI"),
+    ("GhiChu", "_output", "Thông báo từ hệ thống"),
 ]
 
 
@@ -178,8 +181,9 @@ def build_workbook(lookups: Dict[str, List[Dict[str, Any]]], out_path: Path):
         ["", "2) Cột danh mục: gõ đúng Name hoặc Id như sheet DM_*"],
         ["", "3) Ngày tháng: dd/MM/yyyy (ví dụ 29/07/2026)"],
         ["", "4) Giới tính: Nam hoặc Nữ"],
-        ["", "5) Chạy: python3 import_excel.py --excel KSKDK_TTHC_mau_nhap.xlsx --user ... --password ..."],
-        ["", "6) Thử trước: thêm --dry-run --limit 1"],
+        ["", "5) Chạy import: python3 import_excel.py --excel KSKDK_TTHC_mau_nhap.xlsx --user ... --password ..."],
+        ["", "6) Tìm một phần: nhập CCCD/họ tên/SĐT ở sheet TimKiem → python3 search_fill.py --excel ..."],
+        ["", "7) Nếu người đã khám cùng ngày: TrangThai=TRUNG (không tạo bản ghi mới)"],
         ["Lưu ý", "Web không có nút Import — script này gọi API FormToDatabaseInsert thay thế"],
         ["", "Không commit mật khẩu vào git"],
     ]
@@ -229,42 +233,49 @@ def build_workbook(lookups: Dict[str, List[Dict[str, Any]]], out_path: Path):
         cell.alignment = Alignment(wrap_text=True, vertical="top")
     ws.row_dimensions[2].height = 48
 
-    # Sample row (không submit thật nếu user không chạy import)
-    sample = {
+    # Dòng 1: TRẦN NGỌC DUNG (đã có trên hệ thống — test trùng)
+    sample1 = {
         "NgayKham": "29/07/2026",
-        "DoiTuong": (lookups.get("DoiTuong") or [{"Name": ""}])[0].get("Name", ""),
-        "DiaDiemKham": (lookups.get("DiaDiemKham") or [{"Name": ""}])[0].get("Name", ""),
-        "HinhThucChiTra": next(
-            (x["Name"] for x in (lookups.get("HinhThucChiTra") or []) if "tự chi trả" in x.get("Name", "").lower()),
-            (lookups.get("HinhThucChiTra") or [{"Name": ""}])[0].get("Name", ""),
-        ),
-        "HinhThucKham": next(
-            (x["Name"] for x in (lookups.get("HinhThucKham") or []) if "tự" in x.get("Name", "").lower()),
-            (lookups.get("HinhThucKham") or [{"Name": ""}])[0].get("Name", ""),
-        ),
+        "DoiTuong": "Người lao động (theo pháp luật về an toàn, vệ sinh lao động)",
+        "DiaDiemKham": "Khám Lưu Động",
+        "HinhThucChiTra": "Ngân sách thành phố hỗ trợ ",
+        "HinhThucKham": "Khám Theo Hợp Đồng",
         "NguonKhac_GhiRo": "",
-        "CCCD": "079099001234",
-        "HoTen": "NGUYEN VAN A",
-        "NgaySinh": "01/01/1990",
-        "GioiTinh": "Nam",
+        "CCCD": "087187000236",
+        "HoTen": "TRẦN NGỌC DUNG",
+        "NgaySinh": "27/06/1987",
+        "GioiTinh": "Nữ",
         "DanToc": "Kinh",
-        "NhomMau": "",
-        "YeuToNhomMau": "",
-        "BHYT": "",
-        "SDT": "0901234567",
-        "NoiOHienTai": "123 Nguyen Trai",
+        "SDT": "0989681925",
+        "NoiOHienTai": "262/20 LẠC LONG QUÂN",
         "TinhThanh": next(
             (x["Name"] for x in (lookups.get("TinhThanh") or []) if "Hồ Chí Minh" in x.get("Name", "")),
-            "",
+            "Thành Phố Hồ Chí Minh",
         ),
-        "XaPhuong": (lookups.get("XaPhuong") or [{"Name": ""}])[0].get("Name", ""),
-        "NgheNghiepId": "",
-        "NgheNghiep": "Nhân viên văn phòng",
-        "NoiCongTac": (lookups.get("NoiCongTac") or [{"Name": ""}])[0].get("Name", ""),
-        "XaPhuongCongTac": "",
+        "XaPhuong": "Phường Bình Thới",
+        "NgheNghiep": "GIÁO VIÊN MẦM NON",
         "LyDoKham": "Khám sức khỏe định kỳ",
+        "MaBanGhi": "",
+        "TrangThai": "",
+        "GhiChu": "",
     }
-    ws.append([sample.get(h, "") for h in headers])
+    ws.append([sample1.get(h, "") for h in headers])
+
+    # Dòng 2: người mới
+    sample2 = dict(sample1)
+    sample2.update({
+        "CCCD": "079195031510",
+        "HoTen": "LE THI MAI",
+        "NgaySinh": "15/03/1995",
+        "SDT": "0989681920",
+        "NoiOHienTai": "45 Le Loi",
+        "XaPhuong": "Phường Bình Thới",
+        "MaBanGhi": "",
+        "TrangThai": "",
+        "GhiChu": "",
+    })
+    ws.append([sample2.get(h, "") for h in headers])
+
     for col, _ in enumerate(headers, 1):
         ws.column_dimensions[get_column_letter(col)].width = 18
     ws.freeze_panes = "A3"
@@ -299,6 +310,59 @@ def build_workbook(lookups: Dict[str, List[Dict[str, Any]]], out_path: Path):
     ]:
         n = len(lookups.get(dm_key) or []) + 1
         add_list_validation(header_index[excel_col], dm_sheet, n)
+
+    # Sheet TimKiem — tìm theo một phần
+    tk = wb.create_sheet("TimKiem")
+    tk["A1"] = "TÌM KIẾM (nhập một phần cũng được)"
+    tk["A3"], tk["B3"] = "CCCD (đủ hoặc vài số cuối)", ""
+    tk["A4"], tk["B4"] = "HoTen (một phần)", ""
+    tk["A5"], tk["B5"] = "SDT (một phần)", ""
+    tk["A6"], tk["B6"] = "NgaySinh", ""
+    tk["A8"], tk["B8"] = "Số kết quả", ""
+    tk["A9"], tk["B9"] = "HoTen (kết quả)", ""
+    tk["A10"], tk["B10"] = "CCCD", ""
+    tk["A11"], tk["B11"] = "SDT", ""
+    tk["A12"], tk["B12"] = "NgaySinh", ""
+    tk["A13"], tk["B13"] = "MaBanGhi", ""
+    tk["A14"], tk["B14"] = "TrangThai", ""
+    tk["A15"], tk["B15"] = "GhiChu", ""
+    tk["A17"] = "Chạy: python3 search_fill.py --excel KSKDK_TTHC_mau_nhap.xlsx"
+    tk.column_dimensions["A"].width = 28
+    tk.column_dimensions["B"].width = 40
+
+    # Sheet DaImport — lịch sử import thành công
+    di = wb.create_sheet("DaImport")
+    di.append(headers)
+    style_header(di)
+    # Ghi sẵn 1 bản ghi đã import (Traan Ngoc Dung)
+    di.append([
+        "29/07/2026",
+        "Người lao động (theo pháp luật về an toàn, vệ sinh lao động)",
+        "Khám Lưu Động",
+        "Ngân sách thành phố hỗ trợ ",
+        "Khám Theo Hợp Đồng",
+        "",
+        "087187000236",
+        "TRẦN NGỌC DUNG",
+        "27/06/1987",
+        "Nữ",
+        "",
+        "",
+        "",
+        "",
+        "0989681925",
+        "262/20 LẠC LONG QUÂN",
+        "Thành Phố Hồ Chí Minh",
+        "Phường Bình Thới",
+        "",
+        "GIÁO VIÊN MẦM NON",
+        "",
+        "",
+        "Khám sức khỏe định kỳ",
+        904629,
+        "THANH_CONG",
+        "Đã import trước đó",
+    ])
 
     wb.save(out_path)
     print(f"Đã tạo: {out_path}")

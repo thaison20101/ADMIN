@@ -55,6 +55,16 @@ COL_MAP = {
     "LyDoKham": "LyDoKham",
 }
 
+# Cột kết quả (script ghi lại, không gửi API)
+OUTPUT_COLS = ["MaBanGhi", "TrangThai", "GhiChu"]
+
+DUPLICATE_PATTERNS = (
+    "đã khám",
+    "da kham",
+    "đã được khám",
+    "da duoc kham",
+)
+
 # Fields that should be resolved via lookup Name→Id
 LOOKUP_FIELDS = {
     "DoiTuong_M13": 1000195,
@@ -254,6 +264,64 @@ def parse_date(value: Any) -> Optional[str]:
     raise ValueError(f"Ngày không hợp lệ: {value}")
 
 
+def validate_phone(sdt: str) -> Optional[str]:
+    """Kiểm tra sơ bộ SĐT trước khi gọi API (hệ thống còn kiểm tra đầu số thật)."""
+    d = re.sub(r"\D", "", str(sdt or ""))
+    if len(d) != 10:
+        return f"SĐT phải đủ 10 chữ số (đang có {len(d)}): {sdt}"
+    if not d.startswith("0"):
+        return f"SĐT phải bắt đầu bằng 0: {sdt}"
+    return None
+
+
+def is_duplicate_message(msg: str) -> bool:
+    m = normalize_name(msg or "")
+    return any(p in m for p in DUPLICATE_PATTERNS)
+
+
+def extract_record_id(res: Dict[str, Any]) -> Optional[Any]:
+    result = res.get("result") or {}
+    data = result.get("data")
+    if isinstance(data, list) and data:
+        row = data[0]
+        if isinstance(row, dict):
+            return row.get("id") or row.get("Id")
+    return None
+
+
+def append_daimport(wb_path: Path, row: Dict[str, Any], record_id: Any, status: str, note: str) -> None:
+    wb = load_workbook(wb_path)
+    if "DaImport" not in wb.sheetnames:
+        return
+    ws = wb["DaImport"]
+    headers = [str(c.value).strip() if c.value is not None else "" for c in ws[1]]
+    values = []
+    out_map = dict(row)
+    out_map["MaBanGhi"] = record_id
+    out_map["TrangThai"] = status
+    out_map["GhiChu"] = note
+    for h in headers:
+        values.append(out_map.get(h, ""))
+    ws.append(values)
+    wb.save(wb_path)
+
+
+def write_row_status(wb_path: Path, excel_row: int, record_id: Any, status: str, note: str) -> None:
+    wb = load_workbook(wb_path)
+    if "NhapLieu" not in wb.sheetnames:
+        return
+    ws = wb["NhapLieu"]
+    headers = [str(c.value).strip() if c.value is not None else "" for c in ws[1]]
+    col = {h: i + 1 for i, h in enumerate(headers)}
+    if "MaBanGhi" in col:
+        ws.cell(excel_row, col["MaBanGhi"], record_id or "")
+    if "TrangThai" in col:
+        ws.cell(excel_row, col["TrangThai"], status)
+    if "GhiChu" in col:
+        ws.cell(excel_row, col["GhiChu"], note)
+    wb.save(wb_path)
+
+
 def read_excel_rows(path: Path) -> List[Dict[str, Any]]:
     wb = load_workbook(path, data_only=True)
     if "NhapLieu" not in wb.sheetnames:
@@ -262,21 +330,19 @@ def read_excel_rows(path: Path) -> List[Dict[str, Any]]:
     headers = [str(c.value).strip() if c.value is not None else "" for c in ws[1]]
     rows: List[Dict[str, Any]] = []
     for i, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-        # skip hint row (row 2) if first cell looks like instruction
         values = list(row)
         if i == 2 and values and isinstance(values[0], str) and "dd/MM" in values[0]:
             continue
-        item: Dict[str, Any] = {}
+        item: Dict[str, Any] = {"_excel_row": i}
         empty = True
         for h, v in zip(headers, values):
-            if not h or h not in COL_MAP:
+            if not h:
                 continue
             if v is not None and str(v).strip() != "":
                 empty = False
             item[h] = v
         if empty:
             continue
-        # skip sample placeholder if user left it unchanged? keep — user may want it
         rows.append(item)
     return rows
 
@@ -305,6 +371,11 @@ def build_payload(row: Dict[str, Any], indexes: Dict[str, LookupIndex], token: s
 
     if "HoTen" in payload:
         payload["HoTenKhongDau"] = strip_accents(payload["HoTen"]).upper()
+
+    if "SDT" in payload:
+        phone_err = validate_phone(payload["SDT"])
+        if phone_err:
+            raise ValueError(phone_err)
 
     if "NgheNghiepId" in raw and str(raw["NgheNghiepId"]).strip() != "":
         payload["NgheNghiepId"] = int(raw["NgheNghiepId"]) if str(raw["NgheNghiepId"]).isdigit() else raw["NgheNghiepId"]
@@ -388,6 +459,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--skip-sample", action="store_true", help="Bỏ dòng mẫu NGUYEN VAN A")
+    p.add_argument("--on-duplicate", choices=["skip", "fail"], default="skip",
+                   help="skip=đánh dấu TRUNG và bỏ qua; fail=dừng import")
+    p.add_argument("--write-excel", action="store_true", default=True,
+                   help="Ghi MaBanGhi/TrangThai/GhiChu vào Excel và sheet DaImport")
+    p.add_argument("--no-write-excel", action="store_false", dest="write_excel")
     p.add_argument("--out", default="import_result.jsonl")
     args = p.parse_args(argv)
 
@@ -408,16 +484,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("Không có dòng dữ liệu để import.", file=sys.stderr)
         return 2
 
-    ok = fail = 0
+    ok = fail = skip = 0
+    excel_path = Path(args.excel)
     with open(args.out, "w", encoding="utf-8") as log:
         for i, row in enumerate(rows, start=1):
+            excel_row = row.get("_excel_row", i + 2)
             try:
                 payload = build_payload(row, indexes, token, site_id)
                 if args.dry_run:
                     res = {"dry_run": True, "payload": payload}
                     print(f"[{i}/{len(rows)}] DRY-RUN {payload.get('HoTen')}")
+                    status, note, rec_id = "DRY-RUN", "Chưa gửi lên web", None
                 else:
-                    # Re-login nhẹ nếu token bị invalid giữa chừng
                     try:
                         res = insert_one(token, site_id, payload)
                     except RuntimeError as e:
@@ -426,22 +504,52 @@ def main(argv: Optional[List[str]] = None) -> int:
                             res = insert_one(token, site_id, payload)
                         else:
                             raise
-                    succeeded = True
-                    if isinstance(res.get("result"), dict):
-                        succeeded = bool(res["result"].get("isSucceeded", res.get("success")))
-                        if not succeeded:
-                            raise RuntimeError(res["result"].get("message") or res)
-                    print(f"[{i}/{len(rows)}] OK {payload.get('HoTen')}")
-                ok += 1
-                log.write(json.dumps({"index": i, "ok": True, "row": row, "payload": payload, "response": res}, ensure_ascii=False, default=str) + "\n")
+                    result = res.get("result") if isinstance(res.get("result"), dict) else {}
+                    succeeded = bool(result.get("isSucceeded", res.get("success")))
+                    msg = str(result.get("message") or result.get("errorMessage") or "")
+                    if succeeded:
+                        rec_id = extract_record_id(res)
+                        status, note = "THANH_CONG", msg or "Lưu thành công"
+                        print(f"[{i}/{len(rows)}] OK {payload.get('HoTen')} id={rec_id}")
+                    elif is_duplicate_message(msg):
+                        rec_id = None
+                        status, note = "TRUNG", msg
+                        if args.on_duplicate == "fail":
+                            raise RuntimeError(msg)
+                        skip += 1
+                        print(f"[{i}/{len(rows)}] TRUNG {payload.get('HoTen')}: {msg}")
+                    else:
+                        raise RuntimeError(msg or res)
+                ok += 1 if status != "TRUNG" else 0
+                log.write(json.dumps({"index": i, "ok": status != "TRUNG", "skipped": status == "TRUNG",
+                                      "row": row, "payload": payload, "response": res,
+                                      "status": status, "note": note}, ensure_ascii=False, default=str) + "\n")
+                if args.write_excel and not args.dry_run:
+                    prev_id = row.get("MaBanGhi")
+                    write_row_status(
+                        excel_path,
+                        excel_row,
+                        rec_id if status == "THANH_CONG" else prev_id,
+                        status,
+                        note,
+                    )
+                    if status == "THANH_CONG":
+                        append_daimport(excel_path, row, rec_id, status, note)
+                    elif status == "TRUNG":
+                        out_row = dict(row)
+                        out_row["TrangThai"] = status
+                        out_row["GhiChu"] = note
+                        append_daimport(excel_path, out_row, prev_id or "", status, note)
             except Exception as e:
                 fail += 1
                 print(f"[{i}/{len(rows)}] FAIL {row.get('HoTen')}: {e}", file=sys.stderr)
                 log.write(json.dumps({"index": i, "ok": False, "row": row, "error": str(e)}, ensure_ascii=False, default=str) + "\n")
+                if args.write_excel and not args.dry_run:
+                    write_row_status(excel_path, excel_row, None, "LOI", str(e))
             if args.delay > 0 and not args.dry_run:
                 time.sleep(args.delay)
 
-    print(f"Xong: ok={ok}, fail={fail}, log={args.out}")
+    print(f"Xong: ok={ok}, trung={skip}, fail={fail}, log={args.out}")
     return 0 if fail == 0 else 1
 
 
