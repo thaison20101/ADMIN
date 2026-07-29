@@ -335,13 +335,122 @@ def write_row_status(wb_path: Path, excel_row: int, record_id: Any, status: str,
     ws = wb["NhapLieu"]
     headers = [str(c.value).strip() if c.value is not None else "" for c in ws[1]]
     col = {h: i + 1 for i, h in enumerate(headers)}
-    if "MaBanGhi" in col:
-        ws.cell(excel_row, col["MaBanGhi"], record_id or "")
-    if "TrangThai" in col:
-        ws.cell(excel_row, col["TrangThai"], status)
-    if "GhiChu" in col:
-        ws.cell(excel_row, col["GhiChu"], note)
+    for name, val in (("MaBanGhi", record_id or ""), ("TrangThai", status), ("GhiChu", note)):
+        if name not in col:
+            col[name] = len(headers) + 1
+            ws.cell(1, col[name], name)
+            headers.append(name)
+        ws.cell(excel_row, col[name], val)
     wb.save(wb_path)
+
+
+def ensure_output_columns(wb_path: Path) -> None:
+    wb = load_workbook(wb_path)
+    if "NhapLieu" not in wb.sheetnames:
+        wb.save(wb_path)
+        return
+    ws = wb["NhapLieu"]
+    headers = [str(c.value).strip() if c.value is not None else "" for c in ws[1]]
+    for col_name in OUTPUT_COLS:
+        if col_name not in headers:
+            ws.cell(1, len(headers) + 1, col_name)
+            headers.append(col_name)
+    wb.save(wb_path)
+
+
+def write_review_excel(
+    source_path: Path,
+    review_path: Path,
+    review_rows: List[Dict[str, Any]],
+) -> None:
+    """Ghi file Excel riêng các dòng TRUNG / LOI để kiểm tra."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
+
+    wb_src = load_workbook(source_path, data_only=True)
+    src_headers = []
+    if "NhapLieu" in wb_src.sheetnames:
+        src_headers = [str(c.value).strip() if c.value else "" for c in wb_src["NhapLieu"][1]]
+
+    wb = Workbook()
+    hd = wb.active
+    hd.title = "TongHop"
+    hd.append(["TrangThai", "SoDong", "MoTa"])
+    trung = sum(1 for r in review_rows if r.get("TrangThai") == "TRUNG")
+    loi = sum(1 for r in review_rows if r.get("TrangThai") == "LOI")
+    hd.append(["TRUNG", trung, "Đã khám / trùng trên hệ thống — không tạo bản ghi mới"])
+    hd.append(["LOI", loi, "Lỗi khi import — cần sửa và import lại"])
+    hd.append(["TONG", len(review_rows), "Tổng dòng cần kiểm tra"])
+    hd.column_dimensions["A"].width = 14
+    hd.column_dimensions["B"].width = 10
+    hd.column_dimensions["C"].width = 60
+
+    fill_hdr = PatternFill("solid", fgColor="B45309")
+    font_hdr = Font(color="FFFFFF", bold=True)
+
+    def make_data_sheet(title: str, status_filter: str, tab_color: str):
+        ws = wb.create_sheet(title)
+        ws.sheet_properties.tabColor = tab_color
+        headers = src_headers if src_headers else list(review_rows[0].keys()) if review_rows else []
+        if "TrangThai" not in headers:
+            headers = headers + ["MaBanGhi", "TrangThai", "GhiChu"]
+        ws.append(headers)
+        for cell in ws[1]:
+            cell.fill = fill_hdr
+            cell.font = font_hdr
+            cell.alignment = Alignment(wrap_text=True, vertical="center")
+        filtered = [r for r in review_rows if r.get("TrangThai") == status_filter]
+        for item in filtered:
+            row_data = item.get("_row_data") or item
+            ws.append([row_data.get(h, item.get(h, "")) for h in headers])
+        ws.freeze_panes = "A2"
+        for col in range(1, len(headers) + 1):
+            ws.column_dimensions[chr(64 + col) if col <= 26 else "A"].width = 18
+        return len(filtered)
+
+    all_ws = wb.create_sheet("CanKiemTra")
+    all_ws.sheet_properties.tabColor = "DC2626"
+    headers = src_headers if src_headers else []
+    extra = ["MaBanGhi", "TrangThai", "GhiChu", "_excel_row"]
+    for h in extra:
+        if h not in headers:
+            headers.append(h)
+    all_ws.append(headers)
+    for cell in all_ws[1]:
+        cell.fill = fill_hdr
+        cell.font = font_hdr
+    for item in review_rows:
+        row_data = item.get("_row_data") or item
+        all_ws.append([row_data.get(h, item.get(h, "")) for h in headers])
+    all_ws.freeze_panes = "A2"
+
+    make_data_sheet("Trung", "TRUNG", "F59E0B")
+    make_data_sheet("Loi", "LOI", "EF4444")
+
+    wb.save(review_path)
+    print(f"File kiểm tra: {review_path} (TRUNG={trung}, LOI={loi})")
+
+
+def append_review_row(
+    review_rows: List[Dict[str, Any]],
+    row: Dict[str, Any],
+    status: str,
+    note: str,
+) -> None:
+    review_rows.append({**row, "TrangThai": status, "GhiChu": note, "_row_data": dict(row)})
+
+
+def load_review_rows_from_jsonl(log_path: Path) -> List[Dict[str, Any]]:
+    """Đọc log import (.jsonl) và trích các dòng TRUNG / LOI."""
+    review_rows: List[Dict[str, Any]] = []
+    with open(log_path, encoding="utf-8") as f:
+        for line in f:
+            entry = json.loads(line)
+            if entry.get("status") == "TRUNG":
+                append_review_row(review_rows, entry["row"], "TRUNG", entry.get("note", ""))
+            elif "error" in entry:
+                append_review_row(review_rows, entry["row"], "LOI", entry["error"])
+    return review_rows
 
 
 def read_excel_rows(path: Path) -> List[Dict[str, Any]]:
@@ -485,8 +594,8 @@ def insert_one(token: str, site_id: int, form_data: Dict[str, Any]) -> Dict[str,
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description="Import Excel lên form KSKDK_TTHC")
     p.add_argument("--excel", required=True, help="Đường dẫn file Excel NhapLieu")
-    p.add_argument("--user", required=True)
-    p.add_argument("--password", required=True)
+    p.add_argument("--user", default="")
+    p.add_argument("--password", default="")
     p.add_argument("--site-id", type=int, default=None)
     p.add_argument("--delay", type=float, default=0.4)
     p.add_argument("--limit", type=int, default=0)
@@ -498,11 +607,36 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Ghi MaBanGhi/TrangThai/GhiChu vào Excel và sheet DaImport")
     p.add_argument("--no-write-excel", action="store_false", dest="write_excel")
     p.add_argument("--out", default="import_result.jsonl")
+    p.add_argument("--review-excel", default="", metavar="PATH",
+                   help="File Excel riêng ghi các dòng TRUNG/LOI (mặc định: <ten_file>_kiem_tra.xlsx)")
+    p.add_argument("--review-from-log", default="", metavar="PATH",
+                   help="Tạo file kiểm tra từ log .jsonl (không import lại)")
     args = p.parse_args(argv)
+
+    excel_path = Path(args.excel)
+    review_path = Path(args.review_excel) if args.review_excel else excel_path.with_name(
+        excel_path.stem + "_kiem_tra.xlsx"
+    )
+    if args.review_from_log:
+        review_rows = load_review_rows_from_jsonl(Path(args.review_from_log))
+        if not review_rows:
+            print("Không có dòng TRUNG/LOI trong log.", file=sys.stderr)
+            return 2
+        write_review_excel(excel_path, review_path, review_rows)
+        return 0
+
+    if not args.user or not args.password:
+        print("Cần --user và --password để import.", file=sys.stderr)
+        return 2
 
     token = login(args.user, args.password)
     site_id = args.site_id or resolve_site(token)
     print(f"Đăng nhập OK — user={args.user}, SessionSiteId={site_id}")
+
+    if args.write_excel:
+        ensure_output_columns(excel_path)
+
+    review_rows: List[Dict[str, Any]] = []
 
     indexes = load_indexes_from_excel(Path(args.excel))
     for k, idx in indexes.items():
@@ -518,7 +652,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     ok = fail = skip = 0
-    excel_path = Path(args.excel)
     with open(args.out, "w", encoding="utf-8") as log:
         for i, row in enumerate(rows, start=1):
             excel_row = row.get("_excel_row", i + 2)
@@ -573,16 +706,24 @@ def main(argv: Optional[List[str]] = None) -> int:
                         out_row["TrangThai"] = status
                         out_row["GhiChu"] = note
                         append_daimport(excel_path, out_row, prev_id or "", status, note)
+                if status == "TRUNG" and not args.dry_run:
+                    append_review_row(review_rows, row, status, note)
             except Exception as e:
                 fail += 1
                 print(f"[{i}/{len(rows)}] FAIL {row.get('HoTen')}: {e}", file=sys.stderr)
                 log.write(json.dumps({"index": i, "ok": False, "row": row, "error": str(e)}, ensure_ascii=False, default=str) + "\n")
                 if args.write_excel and not args.dry_run:
                     write_row_status(excel_path, excel_row, None, "LOI", str(e))
+                if not args.dry_run:
+                    append_review_row(review_rows, row, "LOI", str(e))
             if args.delay > 0 and not args.dry_run:
                 time.sleep(args.delay)
 
     print(f"Xong: ok={ok}, trung={skip}, fail={fail}, log={args.out}")
+    if review_rows and not args.dry_run:
+        write_review_excel(excel_path, review_path, review_rows)
+    elif not review_rows and not args.dry_run:
+        print("Không có dòng TRUNG/LOI — không tạo file kiểm tra.")
     return 0 if fail == 0 else 1
 
 
