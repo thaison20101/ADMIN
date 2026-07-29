@@ -388,6 +388,12 @@ def write_review_excel(
     fill_hdr = PatternFill("solid", fgColor="B45309")
     font_hdr = Font(color="FFFFFF", bold=True)
 
+    def cell_value(item: Dict[str, Any], row_data: Dict[str, Any], header: str) -> Any:
+        if header in OUTPUT_COLS:
+            return item.get(header, row_data.get(header, ""))
+        val = row_data.get(header, item.get(header, ""))
+        return "" if val is None else val
+
     def make_data_sheet(title: str, status_filter: str, tab_color: str):
         ws = wb.create_sheet(title)
         ws.sheet_properties.tabColor = tab_color
@@ -402,7 +408,7 @@ def write_review_excel(
         filtered = [r for r in review_rows if r.get("TrangThai") == status_filter]
         for item in filtered:
             row_data = item.get("_row_data") or item
-            ws.append([row_data.get(h, item.get(h, "")) for h in headers])
+            ws.append([cell_value(item, row_data, h) for h in headers])
         ws.freeze_panes = "A2"
         for col in range(1, len(headers) + 1):
             ws.column_dimensions[chr(64 + col) if col <= 26 else "A"].width = 18
@@ -421,7 +427,7 @@ def write_review_excel(
         cell.font = font_hdr
     for item in review_rows:
         row_data = item.get("_row_data") or item
-        all_ws.append([row_data.get(h, item.get(h, "")) for h in headers])
+        all_ws.append([cell_value(item, row_data, h) for h in headers])
     all_ws.freeze_panes = "A2"
 
     make_data_sheet("Trung", "TRUNG", "F59E0B")
