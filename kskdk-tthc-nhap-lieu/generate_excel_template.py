@@ -43,8 +43,8 @@ COLUMNS: List[Tuple[str, str, str]] = [
     ("BHYT", "BHYT", "Số thẻ BHYT"),
     ("SDT", "SDT", "Điện thoại"),
     ("NoiOHienTai", "DiaChiHienTai", "Số nhà, đường..."),
-    ("TinhThanh", "DiaChiHienTai_Tinh", "Chọn từ DM_TinhThanh"),
-    ("XaPhuong", "DiaChiHienTai_XaPhuong", "Chọn từ DM_XaPhuong (theo tỉnh)"),
+    ("TinhThanh", "DiaChiHienTai_Tinh", "Gõ một phần (vd. HO CHI MINH) — xem GoiY_TinhThanh"),
+    ("XaPhuong", "DiaChiHienTai_XaPhuong", "Gõ một phần (vd. MINH PHUNG) — xem GoiY_XaPhuong"),
     ("NgheNghiepId", "NgheNghiepId", "Id nghề nghiệp nếu biết"),
     ("NgheNghiep", "NgheNghiep", "Tên nghề nghiệp (text)"),
     ("NoiCongTac", "NoiCongTac", "Id hoặc Name từ DM_NoiCongTac"),
@@ -158,13 +158,17 @@ def style_header(ws, row: int = 1):
 
 
 def write_dm_sheet(wb: Workbook, title: str, items: List[Dict[str, Any]]):
+    from excel_autocomplete import normalize_search
+
     ws = wb.create_sheet(title[:31])
-    ws.append(["Id", "Name"])
+    ws.append(["Id", "Name", "TimKiem"])
     style_header(ws)
     for it in items:
-        ws.append([it.get("Id"), it.get("Name")])
+        name = it.get("Name")
+        ws.append([it.get("Id"), name, normalize_search(name)])
     ws.column_dimensions["A"].width = 12
     ws.column_dimensions["B"].width = 60
+    ws.column_dimensions["C"].width = 28
     return ws
 
 
@@ -183,7 +187,8 @@ def build_workbook(lookups: Dict[str, List[Dict[str, Any]]], out_path: Path):
         ["", "4) Giới tính: Nam hoặc Nữ"],
         ["", "5) Chạy import: python3 import_excel.py --excel KSKDK_TTHC_mau_nhap.xlsx --user ... --password ..."],
         ["", "6) Tìm một phần: nhập CCCD/họ tên/SĐT ở sheet TimKiem → python3 search_fill.py --excel ..."],
-        ["", "7) Nếu người đã khám cùng ngày: TrangThai=TRUNG (không tạo bản ghi mới)"],
+        ["", "7) Danh mục (xã/phường...): gõ một phần → cột GoiY_* gợi ý tên đầy đủ"],
+        ["", "8) Nếu người đã khám cùng ngày: TrangThai=TRUNG (không tạo bản ghi mới)"],
         ["Lưu ý", "Web không có nút Import — script này gọi API FormToDatabaseInsert thay thế"],
         ["", "Không commit mật khẩu vào git"],
     ]
@@ -365,6 +370,10 @@ def build_workbook(lookups: Dict[str, List[Dict[str, Any]]], out_path: Path):
     ])
 
     wb.save(out_path)
+    # Thêm cột GoiY_* + sheet TraCuuDM
+    from excel_autocomplete import patch_workbook
+
+    patch_workbook(str(out_path))
     print(f"Đã tạo: {out_path}")
 
 

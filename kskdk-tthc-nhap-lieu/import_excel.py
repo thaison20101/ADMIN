@@ -58,6 +58,46 @@ COL_MAP = {
 # Cột kết quả (script ghi lại, không gửi API)
 OUTPUT_COLS = ["MaBanGhi", "TrangThai", "GhiChu"]
 
+# Cột gợi ý Excel (GoiY_*) — script dùng khi cột nhập chỉ gõ một phần
+GOIY_EXCEL_KEYS = {
+    "DoiTuong_M13": "DoiTuong",
+    "DoiTuongKham": "DiaDiemKham",
+    "HinhThucChiTraKhamSK": "HinhThucChiTra",
+    "HinhThucChiTraKhamSK_ChiTiet": "HinhThucKham",
+    "GioiTinh": "GioiTinh",
+    "DanTocId": "DanToc",
+    "NhomMauId": "NhomMau",
+    "YeuToNhomMauId": "YeuToNhomMau",
+    "DiaChiHienTai_Tinh": "TinhThanh",
+    "NoiCongTac": "NoiCongTac",
+    "DiaChiHienTai_XaPhuong": "XaPhuong",
+    "NoiCongTac_XaPhuong": "XaPhuongCongTac",
+    "NgheNghiep": "NgheNghiep",
+}
+
+
+def lookup_candidates(row: Dict[str, Any], excel_key: str, primary: Any) -> List[Any]:
+    out: List[Any] = []
+    if primary is not None and str(primary).strip() != "":
+        out.append(primary)
+    goiy = row.get(f"GoiY_{excel_key}")
+    if goiy is not None:
+        gs = str(goiy).strip()
+        if gs and "không tìm thấy" not in gs.lower() and gs not in out:
+            out.append(goiy)
+    return out
+
+
+def resolve_lookup(idx: LookupIndex, row: Dict[str, Any], excel_key: str, primary: Any) -> Any:
+    last_err: Optional[Exception] = None
+    for val in lookup_candidates(row, excel_key, primary):
+        try:
+            return idx.resolve(val)
+        except KeyError as e:
+            last_err = e
+    raise KeyError(last_err or f"Không map được '{primary}'")
+
+
 DUPLICATE_PATTERNS = (
     "đã khám",
     "da kham",
@@ -380,55 +420,66 @@ def build_payload(row: Dict[str, Any], indexes: Dict[str, LookupIndex], token: s
     if "NgheNghiepId" in raw and str(raw["NgheNghiepId"]).strip() != "":
         payload["NgheNghiepId"] = int(raw["NgheNghiepId"]) if str(raw["NgheNghiepId"]).isdigit() else raw["NgheNghiepId"]
     elif "NgheNghiep" in payload and payload["NgheNghiep"]:
-        # Resolve Id bằng SearchValue (danh mục nghề nghiệp rất lớn, không load hết vào Excel)
-        try:
-            items = hf(
-                token,
-                site_id,
-                1000294,
-                [{"Varible": "SearchValue", "Value": payload["NgheNghiep"]}],
-            )
-            idx = LookupIndex(items)
-            payload["NgheNghiepId"] = idx.resolve(payload["NgheNghiep"])
-            # Chuẩn hóa lại tên theo danh mục
-            for it in items:
-                if it.get("Id") == payload["NgheNghiepId"]:
-                    payload["NgheNghiep"] = it.get("Name") or payload["NgheNghiep"]
-                    break
-        except Exception as e:
+        nghe_candidates = lookup_candidates(row, "NgheNghiep", payload["NgheNghiep"])
+        resolved = False
+        last_err: Optional[Exception] = None
+        for nghe_val in nghe_candidates:
+            try:
+                items = hf(
+                    token,
+                    site_id,
+                    1000294,
+                    [{"Varible": "SearchValue", "Value": str(nghe_val).strip()}],
+                )
+                idx = LookupIndex(items)
+                payload["NgheNghiepId"] = idx.resolve(nghe_val)
+                for it in items:
+                    if it.get("Id") == payload["NgheNghiepId"]:
+                        payload["NgheNghiep"] = it.get("Name") or str(nghe_val).strip()
+                        break
+                resolved = True
+                break
+            except Exception as e:
+                last_err = e
+        if not resolved:
             raise ValueError(
-                f"NgheNghiep: không tìm thấy '{payload['NgheNghiep']}' trong danh mục. "
-                f"Hãy điền đúng tên nghề hoặc Id vào cột NgheNghiepId. ({e})"
-            ) from e
+                f"NgheNghiep: không tìm thấy trong danh mục. "
+                f"Hãy gõ một phần và xem cột GoiY_NgheNghiep. ({last_err})"
+            ) from last_err
 
+    excel_by_api = {v: k for k, v in COL_MAP.items()}
     for api_key in LOOKUP_FIELDS:
         if api_key not in raw:
             continue
         idx = indexes.get(api_key) or LookupIndex([])
+        excel_key = excel_by_api.get(api_key, api_key)
         try:
-            payload[api_key] = idx.resolve(raw[api_key])
+            payload[api_key] = resolve_lookup(idx, row, excel_key, raw[api_key])
         except KeyError as e:
             raise ValueError(f"{api_key}: {e}") from e
 
-    def resolve_xa(field_name: str) -> None:
+    def resolve_xa(field_name: str, excel_key: str) -> None:
         if field_name not in raw:
             return
-        # Ưu tiên danh mục trong Excel; nếu fail và có token thì gọi API theo tỉnh
         default_idx = indexes.get("_XaPhuongDefault") or LookupIndex([])
-        try:
-            payload[field_name] = default_idx.resolve(raw[field_name])
-            return
-        except KeyError:
-            pass
+        for val in lookup_candidates(row, excel_key, raw[field_name]):
+            try:
+                payload[field_name] = default_idx.resolve(val)
+                return
+            except KeyError:
+                pass
         tinh_id = payload.get("DiaChiHienTai_Tinh") or 50
         try:
             xa_items = hf(token, site_id, 1000058, [{"Varible": "Id", "Value": tinh_id}])
-            payload[field_name] = LookupIndex(xa_items).resolve(raw[field_name])
+            xa_idx = LookupIndex(xa_items)
+            payload[field_name] = resolve_lookup(xa_idx, row, excel_key, raw[field_name])
         except Exception as e:
-            raise ValueError(f"{field_name}: không map được '{raw[field_name]}' ({e})") from e
+            raise ValueError(
+                f"{field_name}: không map được '{raw[field_name]}' — thử xem GoiY_{excel_key}. ({e})"
+            ) from e
 
-    resolve_xa("DiaChiHienTai_XaPhuong")
-    resolve_xa("NoiCongTac_XaPhuong")
+    resolve_xa("DiaChiHienTai_XaPhuong", "XaPhuong")
+    resolve_xa("NoiCongTac_XaPhuong", "XaPhuongCongTac")
 
     if payload.get("DinhDanhCaNhan"):
         payload.setdefault("CoCCCD", 264)
