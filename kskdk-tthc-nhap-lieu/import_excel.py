@@ -308,6 +308,27 @@ def build_payload(row: Dict[str, Any], indexes: Dict[str, LookupIndex], token: s
 
     if "NgheNghiepId" in raw and str(raw["NgheNghiepId"]).strip() != "":
         payload["NgheNghiepId"] = int(raw["NgheNghiepId"]) if str(raw["NgheNghiepId"]).isdigit() else raw["NgheNghiepId"]
+    elif "NgheNghiep" in payload and payload["NgheNghiep"]:
+        # Resolve Id bằng SearchValue (danh mục nghề nghiệp rất lớn, không load hết vào Excel)
+        try:
+            items = hf(
+                token,
+                site_id,
+                1000294,
+                [{"Varible": "SearchValue", "Value": payload["NgheNghiep"]}],
+            )
+            idx = LookupIndex(items)
+            payload["NgheNghiepId"] = idx.resolve(payload["NgheNghiep"])
+            # Chuẩn hóa lại tên theo danh mục
+            for it in items:
+                if it.get("Id") == payload["NgheNghiepId"]:
+                    payload["NgheNghiep"] = it.get("Name") or payload["NgheNghiep"]
+                    break
+        except Exception as e:
+            raise ValueError(
+                f"NgheNghiep: không tìm thấy '{payload['NgheNghiep']}' trong danh mục. "
+                f"Hãy điền đúng tên nghề hoặc Id vào cột NgheNghiepId. ({e})"
+            ) from e
 
     for api_key in LOOKUP_FIELDS:
         if api_key not in raw:
