@@ -58,24 +58,6 @@ COL_MAP = {
 # Cột kết quả (script ghi lại, không gửi API)
 OUTPUT_COLS = ["MaBanGhi", "TrangThai", "GhiChu"]
 
-# Cột gợi ý Excel (GoiY_*) — script dùng khi cột nhập chỉ gõ một phần
-GOIY_EXCEL_KEYS = {
-    "DoiTuong_M13": "DoiTuong",
-    "DoiTuongKham": "DiaDiemKham",
-    "HinhThucChiTraKhamSK": "HinhThucChiTra",
-    "HinhThucChiTraKhamSK_ChiTiet": "HinhThucKham",
-    "GioiTinh": "GioiTinh",
-    "DanTocId": "DanToc",
-    "NhomMauId": "NhomMau",
-    "YeuToNhomMauId": "YeuToNhomMau",
-    "DiaChiHienTai_Tinh": "TinhThanh",
-    "NoiCongTac": "NoiCongTac",
-    "DiaChiHienTai_XaPhuong": "XaPhuong",
-    "NoiCongTac_XaPhuong": "XaPhuongCongTac",
-    "NgheNghiep": "NgheNghiep",
-}
-
-
 def lookup_candidates(row: Dict[str, Any], excel_key: str, primary: Any) -> List[Any]:
     out: List[Any] = []
     if primary is not None and str(primary).strip() != "":

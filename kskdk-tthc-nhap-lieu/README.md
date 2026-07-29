@@ -12,6 +12,7 @@ Web **không có nút Import file**. Bộ công cụ này tạo Excel đúng c�
 | `KSKDK_TTHC_mau_nhap.xlsx` | File Excel để nhập liệu (sheet `NhapLieu` + danh mục `DM_*` + `TimKiem` + `DaImport`) |
 | `import_excel.py` | Import Excel lên hệ thống |
 | `search_fill.py` | Tìm một phần theo CCCD / họ tên / SĐT trong Excel |
+| `excel_autocomplete.py` | Thêm cột GoiY_* gợi ý danh mục khi gõ một phần |
 | `generate_excel_template.py` | Tạo lại Excel + danh mục mới nhất từ API |
 | `userscript-kskdk-tthc.user.js` | Phím tắt khi nhập tay trên web (`Ctrl+S` lưu...) |
 
@@ -63,7 +64,28 @@ python3 search_fill.py --excel KSKDK_TTHC_mau_nhap.xlsx --hoten dung --fill-nhap
 
 Tìm trong sheet **DaImport** (đã import) và **NhapLieu** (đang nhập). `--fill-nhaplieu` chép kết quả tốt nhất sang dòng trống `NhapLieu`.
 
-### 4) Tạo lại Excel (khi danh mục đổi)
+### 4) Gợi ý danh mục khi gõ một phần (xã/phường, tỉnh...)
+
+Trên sheet **NhapLieu**, mỗi cột danh mục có cột **GoiY_*** bên cạnh (nền vàng):
+
+| Bạn gõ (cột XaPhuong) | Excel gợi ý (cột GoiY_XaPhuong) |
+|-----------------------|----------------------------------|
+| `MINH PHUNG` | `Phường Minh Phụng` |
+| `BINH THOI` | `Phường Bình Thới` |
+
+- Gõ **một phần**, **không dấu cũng được** (vd. `MINH PHUNG`)
+- Cột **GoiY_*** tự hiện tên đầy đủ — copy sang cột nhập nếu cần
+- Script import **tự dùng GoiY_*** nếu cột nhập chỉ gõ một phần
+
+Sheet **TraCuuDM**: tra nhiều gợi ý cùng lúc (chọn loại danh mục + từ khóa).
+
+Cập nhật file Excel cũ:
+
+```bash
+python3 excel_autocomplete.py --excel KSKDK_TTHC_mau_nhap.xlsx
+```
+
+### 5) Tạo lại Excel (khi danh mục đổi)
 
 ```bash
 python3 generate_excel_template.py \
