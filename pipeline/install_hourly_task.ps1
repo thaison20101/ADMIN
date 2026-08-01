@@ -25,9 +25,11 @@ $action = New-ScheduledTaskAction `
   -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$Runner`"" `
   -WorkingDirectory $Repo
 
-# Start in 2 minutes, repeat every 1 hour indefinitely
+# Start in 2 minutes, repeat every 1 hour for ~10 years (Task Scheduler rejects MaxValue)
 $start = (Get-Date).AddMinutes(2)
-$trigger = New-ScheduledTaskTrigger -Once -At $start -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration ([TimeSpan]::MaxValue)
+$trigger = New-ScheduledTaskTrigger -Once -At $start `
+  -RepetitionInterval (New-TimeSpan -Hours 1) `
+  -RepetitionDuration (New-TimeSpan -Days 3650)
 
 $settings = New-ScheduledTaskSettingsSet `
   -AllowStartIfOnBatteries `
