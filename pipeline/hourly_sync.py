@@ -39,7 +39,8 @@ def now_iso() -> str:
 
 def load_config() -> dict:
     path = LOCAL_CONFIG if LOCAL_CONFIG.exists() else DEFAULT_CONFIG
-    with path.open(encoding="utf-8") as f:
+    # utf-8-sig: tolerate Windows PowerShell Set-Content BOM
+    with path.open(encoding="utf-8-sig") as f:
         cfg = json.load(f)
     cfg["_config_path"] = str(path)
     return cfg
