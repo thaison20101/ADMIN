@@ -1,0 +1,27 @@
+{
+  "drive": {
+    "root_folder_name": "PKDK_Thuankieu_Pipeline",
+    "inbox_folder": "INBOX_CLS",
+    "processed_folder": "PROCESSED",
+    "error_folder": "ERROR",
+    "local_sync_root": "C:/Users/Administrator/Google Drive/PKDK_Thuankieu_Pipeline"
+  },
+  "tracking": {
+    "cases_csv": "tracking/cases.csv",
+    "max_import_attempts": 5
+  },
+  "schedule": {
+    "every_minutes": 60
+  },
+  "medinet": {
+    "base_url": "https://quanlyskcd.medinet.org.vn",
+    "api_base": "https://be-qlskcd.medinet.org.vn",
+    "date_from": "01/07/2026",
+    "date_to": "31/07/2026",
+    "note": "Credentials must be set via env MEDINET_USER / MEDINET_PASS, never commit."
+  },
+  "import_rules": {
+    "enabled": false,
+    "note": "Sẽ bổ sung sau khi bạn chốt yêu cầu import lên web."
+  }
+}

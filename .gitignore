@@ -1,0 +1,28 @@
+# Local secrets / credentials
+.env
+.env.*
+pipeline/config.local.json
+**/credentials*.json
+**/client_secret*.json
+**/token.json
+**/service-account*.json
+
+# Local Medinet scrape outputs (PII)
+medinet_output/
+export_medinet_full.py
+export_no_cls.py
+
+# Local Drive sync / downloaded work files
+INBOX_CLS/**
+!INBOX_CLS/.gitkeep
+PROCESSED/**
+!PROCESSED/.gitkeep
+ERROR/**
+!ERROR/.gitkeep
+pipeline/work/**
+!pipeline/work/.gitkeep
+
+# OS / editor
+Thumbs.db
+Desktop.ini
+.DS_Store
