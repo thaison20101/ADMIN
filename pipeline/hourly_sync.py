@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""Hourly pipeline skeleton for Drive inbox → admin check → import queue.
+"""Hourly pipeline: Drive INBOX_CLS → match Medinet → auto-import CLS.
 
-Flow:
-1) Scan local Drive-synced INBOX_CLS for new files
-2) Register new cases as NEW_LAB
-3) For NEW_LAB / WAITING_ADMIN: check whether admin info exists (hook)
-4) If admin exists -> READY_IMPORT (later: import to Medinet web)
-5) Skip IMPORTED forever
-6) Move files to PROCESSED / ERROR when terminal
-
-Import-to-web rules are intentionally stubbed until you provide exact requirements.
+Flow each hour (laptop on + Task Scheduler + Google Drive sync):
+1) Scan local Drive-synced INBOX_CLS for new PDFs
+2) Register new cases in tracking/cases.csv
+3) Parse PDF, match TTHC (M3/M4), skip if already has CLS
+4) Import READY cases into Khám cận lâm sàng (định kỳ only)
+5) Move IMPORTED → PROCESSED, hard failures → ERROR
+6) Write result Excel + cases snapshot under build_root
 """
 
 from __future__ import annotations
@@ -20,17 +18,20 @@ import hashlib
 import json
 import os
 import re
-import shutil
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from win_console import safe_print, setup_utf8_stdio  # noqa: E402
+
+setup_utf8_stdio()
+
 DEFAULT_CONFIG = ROOT / "pipeline" / "config.example.json"
 LOCAL_CONFIG = ROOT / "pipeline" / "config.local.json"
 CASES_CSV = ROOT / "tracking" / "cases.csv"
-
-STATUSES_SKIP = {"IMPORTED"}
-STATUSES_RECHECK = {"NEW_LAB", "WAITING_ADMIN", "READY_IMPORT", "ERROR"}
 
 
 def now_iso() -> str:
@@ -39,7 +40,6 @@ def now_iso() -> str:
 
 def load_config() -> dict:
     path = LOCAL_CONFIG if LOCAL_CONFIG.exists() else DEFAULT_CONFIG
-    # utf-8-sig: tolerate Windows PowerShell Set-Content BOM
     with path.open(encoding="utf-8-sig") as f:
         cfg = json.load(f)
     cfg["_config_path"] = str(path)
@@ -122,72 +122,22 @@ def sha256_file(path: Path, limit_mb: int = 64) -> str:
 
 
 def parse_filename_hints(name: str) -> dict:
-    """Best-effort parse from names like: 220726-464922 - HUYNH THI LE HANG - 1973 - F.pdf"""
     stem = Path(name).stem
     out = {"ho_ten": "", "cccd": "", "ngay_kham": "", "mau_kham": "", "ma_phieu": ""}
     parts = [p.strip() for p in re.split(r"\s+-\s+", stem)]
     if len(parts) >= 2:
         out["ho_ten"] = parts[1]
-    # leading code may encode date + id
     if parts:
         m = re.match(r"(\d{6})-(\d+)", parts[0])
         if m:
-            ddmmyy, seq = m.groups()
+            ddmmyy, _seq = m.groups()
             dd, mm, yy = ddmmyy[:2], ddmmyy[2:4], ddmmyy[4:6]
             out["ngay_kham"] = f"20{yy}-{mm}-{dd}"
             out["ma_phieu"] = parts[0]
-    # M2/M3/M4 marker if present
     m = re.search(r"\b(M1{0,2}|M2|M3|M4|M11|M12|M13)\b", stem, re.I)
     if m:
         out["mau_kham"] = m.group(1).upper()
     return out
-
-
-def resolve_inbox_dirs(cfg: dict) -> tuple[Path, Path, Path]:
-    sync_root = Path(cfg["drive"].get("local_sync_root") or "")
-    if sync_root and sync_root.exists():
-        inbox = sync_root / cfg["drive"]["inbox_folder"]
-        processed = sync_root / cfg["drive"]["processed_folder"]
-        error = sync_root / cfg["drive"]["error_folder"]
-    else:
-        # Fallback to repo-local folders (for dry-run / early setup)
-        inbox = ROOT / "INBOX_CLS"
-        processed = ROOT / "PROCESSED"
-        error = ROOT / "ERROR"
-    inbox.mkdir(parents=True, exist_ok=True)
-    processed.mkdir(parents=True, exist_ok=True)
-    error.mkdir(parents=True, exist_ok=True)
-    return inbox, processed, error
-
-
-def ensure_build_dirs(cfg: dict) -> Path:
-    build = Path(
-        cfg.get("drive", {}).get("build_root")
-        or r"G:\Drive của tôi\build for Supper Data"
-    )
-    for sub in ("logs", "excel_preview", "missing_or_updated", "cases_snapshot"):
-        (build / sub).mkdir(parents=True, exist_ok=True)
-    return build
-
-
-def check_admin_info(case: dict) -> tuple[bool | None, str]:
-    """Hook: check Medinet whether administrative info exists.
-
-    Returns (has_admin, note).
-    Currently a stub — returns None meaning 'not checked / not configured'.
-    """
-    # Placeholder for future Medinet API/UI check using MEDINET_USER/MEDINET_PASS.
-    _ = os.environ.get("MEDINET_USER"), os.environ.get("MEDINET_PASS")
-    return None, "admin_check_not_configured_yet"
-
-
-def import_lab_to_web(case: dict, source_file: Path) -> tuple[bool, str]:
-    """Hook: import lab results to Medinet web.
-
-    Stub until you provide exact import requirements.
-    """
-    _ = case, source_file
-    return False, "import_rules_not_enabled"
 
 
 def register_new_files(inbox: Path, rows: list[dict]) -> int:
@@ -195,11 +145,9 @@ def register_new_files(inbox: Path, rows: list[dict]) -> int:
     by_key = {r.get("case_key"): r for r in rows if r.get("case_key")}
     added = 0
     for path in sorted(inbox.rglob("*")):
-        if not path.is_file():
+        if not path.is_file() or path.name.startswith("."):
             continue
-        if path.name.startswith("."):
-            continue
-        if path.suffix.lower() not in {".pdf", ".jpg", ".jpeg", ".png", ".xlsx", ".xls", ".csv"}:
+        if path.suffix.lower() not in {".pdf", ".jpg", ".jpeg", ".png"}:
             continue
         digest = sha256_file(path)
         if digest in by_hash:
@@ -207,7 +155,6 @@ def register_new_files(inbox: Path, rows: list[dict]) -> int:
         hints = parse_filename_hints(path.name)
         case_key = hints.get("ma_phieu") or digest[:16]
         if case_key in by_key:
-            # same key different file — keep both via hash suffix
             case_key = f"{case_key}_{digest[:8]}"
         row = {
             "case_key": case_key,
@@ -230,116 +177,39 @@ def register_new_files(inbox: Path, rows: list[dict]) -> int:
         by_hash[digest] = row
         by_key[case_key] = row
         added += 1
-        print(f"+ NEW_LAB {case_key} <- {path.name}")
+        safe_print(f"+ NEW_LAB {case_key} <- {path.name}")
     return added
 
 
-def process_pending(rows: list[dict], cfg: dict, processed: Path, error: Path, dry_run: bool) -> dict:
-    stats = {"rechecked": 0, "waiting_admin": 0, "ready": 0, "imported": 0, "errors": 0, "skipped": 0}
-    max_attempts = int(cfg.get("tracking", {}).get("max_import_attempts", 5))
-    import_enabled = bool(cfg.get("import_rules", {}).get("enabled", False))
-
-    for row in rows:
-        status = (row.get("status") or "").upper()
-        if status in STATUSES_SKIP:
-            stats["skipped"] += 1
-            continue
-        if status not in STATUSES_RECHECK:
-            continue
-
-        stats["rechecked"] += 1
-        row["last_checked_at"] = now_iso()
-
-        has_admin, admin_note = check_admin_info(row)
-        if has_admin is None:
-            # Not configured yet: keep as WAITING_ADMIN after first sight
-            if status == "NEW_LAB":
-                row["status"] = "WAITING_ADMIN"
-                row["notes"] = admin_note
-                stats["waiting_admin"] += 1
-            else:
-                row["notes"] = admin_note
-                stats["waiting_admin"] += 1
-            continue
-
-        row["has_admin_info"] = "YES" if has_admin else "NO"
-        if not has_admin:
-            row["status"] = "WAITING_ADMIN"
-            row["notes"] = admin_note or "missing_admin_info"
-            stats["waiting_admin"] += 1
-            continue
-
-        row["status"] = "READY_IMPORT"
-        stats["ready"] += 1
-
-        if not import_enabled:
-            row["notes"] = "ready_but_import_rules_disabled"
-            continue
-
-        src = Path(row.get("source_file") or "")
-        ok, msg = import_lab_to_web(row, src)
-        attempts = int(row.get("import_attempts") or 0) + 1
-        row["import_attempts"] = str(attempts)
-        if ok:
-            row["status"] = "IMPORTED"
-            row["imported_at"] = now_iso()
-            row["notes"] = msg
-            stats["imported"] += 1
-            if src.exists() and not dry_run:
-                dest = processed / src.name
-                shutil.move(str(src), str(dest))
-                row["source_file"] = str(dest)
-        else:
-            if attempts >= max_attempts:
-                row["status"] = "ERROR"
-                row["notes"] = msg
-                stats["errors"] += 1
-                if src.exists() and not dry_run:
-                    dest = error / src.name
-                    shutil.move(str(src), str(dest))
-                    row["source_file"] = str(dest)
-            else:
-                row["status"] = "READY_IMPORT"
-                row["notes"] = f"retryable: {msg}"
-    return stats
-
-
-def summarize(rows: list[dict]) -> dict:
-    c: dict[str, int] = {}
-    for r in rows:
-        s = r.get("status") or "?"
-        c[s] = c.get(s, 0) + 1
-    return c
-
-
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Hourly Drive→Medinet pipeline skeleton")
-    ap.add_argument("--dry-run", action="store_true", help="Do not move files")
-    ap.add_argument("--cases", default=str(CASES_CSV), help="Path to cases.csv")
+    ap = argparse.ArgumentParser(description="Hourly Drive→Medinet CLS auto import")
+    ap.add_argument("--dry-run", action="store_true", help="Parse/match only, do not write Medinet")
+    ap.add_argument("--limit", type=int, default=0, help="Max imports this run (0=config default)")
+    ap.add_argument("--force", action="store_true", help="Overwrite CLS if already present")
+    ap.add_argument("--register-only", action="store_true", help="Only register inbox files, no import")
     args = ap.parse_args()
 
     cfg = load_config()
-    cases_path = Path(args.cases)
-    inbox, processed, error = resolve_inbox_dirs(cfg)
-    build = ensure_build_dirs(cfg)
+    safe_print(f"Config: {cfg['_config_path']}")
 
-    print(f"Config: {cfg['_config_path']}")
-    print(f"Inbox: {inbox}")
-    print(f"Processed: {processed}")
-    print(f"Error: {error}")
-    print(f"Build: {build}")
+    if args.register_only:
+        from pathlib import Path as P
 
-    rows = read_cases(cases_path)
-    added = register_new_files(inbox, rows)
-    stats = process_pending(rows, cfg, processed, error, dry_run=args.dry_run)
-    write_cases(cases_path, rows)
+        sync = P(cfg.get("drive", {}).get("local_sync_root") or "")
+        inbox = sync / cfg["drive"]["inbox_folder"] if sync.exists() else ROOT / "INBOX_CLS"
+        inbox.mkdir(parents=True, exist_ok=True)
+        rows = read_cases(CASES_CSV)
+        added = register_new_files(inbox, rows)
+        write_cases(CASES_CSV, rows)
+        safe_print(f"Registered {added}; ledger {CASES_CSV}")
+        return 0
 
-    print("---")
-    print(f"New files registered: {added}")
-    print(f"Process stats: {stats}")
-    print(f"Status summary: {summarize(rows)}")
-    print(f"Updated: {cases_path}")
-    print("NOTE: admin_check + web import are stubs until you provide import rules.")
+    # Full auto cycle (register + parse + import)
+    from auto_cycle import run_auto_cycle
+
+    summary = run_auto_cycle(dry_run=args.dry_run, limit=args.limit, force=args.force)
+    safe_print(f"Done: {summary}")
+    # Non-zero if hard import errors dominated? keep 0 for scheduler stability
     return 0
 
 

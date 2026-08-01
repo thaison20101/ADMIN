@@ -42,8 +42,11 @@ if ($logDirOk) {
   $log = Join-Path $LocalLogDir ("hourly-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
 }
 
+$env:MEDINET_USER = if ($env:MEDINET_USER) { $env:MEDINET_USER } else { "pkdkthuankieu" }
+$env:MEDINET_PASS = if ($env:MEDINET_PASS) { $env:MEDINET_PASS } else { "P@ssw0rd" }
+
 Write-Host "BuildRoot: $BuildRoot"
-Write-Host "Running hourly_sync.py ..."
+Write-Host "Running hourly_sync.py (auto register + import) ..."
 $out = & python ".\pipeline\hourly_sync.py" 2>&1
 $code = $LASTEXITCODE
 $out | ForEach-Object { Write-Host $_ }

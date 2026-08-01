@@ -219,11 +219,38 @@ def cls_has_lab_values(row: dict | None) -> bool:
 
 
 def insert_cls(token: str, payload: dict, reauth=None) -> tuple[bool, str, dict, str]:
-    """Insert/save CLS. Returns (ok, message, raw_result, token).
+    """Save CLS via store Set (reliable). Returns (ok, message, raw_result, token).
 
-    Medinet VersionType=3 often returns VersionType-3-Non-Insert-Id even when data is saved.
-    Caller should verify with get_cls.
+    Prefer KSKDK_Phieu_CanLamSang_Set with phieukhamId. FormToDatabaseInsert is
+    fallback only — VersionType=3 often omits insert id even when data is saved.
+    Caller should still verify with get_cls.
     """
+    if "phieukhamId" not in payload:
+        return False, "missing phieukhamId", {}, token
+
+    # Primary: direct store Set
+    s, d, token = api(
+        token,
+        f"/api/services/app/DRViewer/ExecuteStoreWithParam_ByDatasource"
+        f"?dataSourceId={CLS_DATASOURCE_ID}&store={CLS_STORE_SET}",
+        "POST",
+        to_fparams(payload),
+        reauth=reauth,
+    )
+    res = (d or {}).get("result") or {}
+    ok = bool(res.get("isSucceeded"))
+    msg = str(res.get("message") or "")
+    data = res.get("data")
+    # Some Set responses return Thành công with ErrorMessage inside data
+    if ok and isinstance(data, list) and data:
+        err = data[0].get("ErrorMessage") if isinstance(data[0], dict) else None
+        if err:
+            ok = False
+            msg = str(err)
+    if ok:
+        return True, msg or "SET ok", res, token
+
+    # Fallback: FormViewer insert
     urlpage = (
         "/app/main/dynamicform/viewer/KSKDK_Phieu_CanLamSang"
         f"?phieukhamId={payload.get('phieukhamId')}"
@@ -236,19 +263,20 @@ def insert_cls(token: str, payload: dict, reauth=None) -> tuple[bool, str, dict,
             "istab": "true",
         }
     )
-    s, d, token = api(
+    s2, d2, token = api(
         token,
         f"/api/services/app/FormViewer/FormToDatabaseInsert?{q}",
         "POST",
         payload,
         reauth=reauth,
     )
-    res = (d or {}).get("result") or {}
-    ok = bool(res.get("isSucceeded"))
-    code = str(res.get("code") or "")
-    msg = str(res.get("message") or "")
-    # Soft-success: store wrote row but did not return insert id
-    if (not ok) and code == "VersionType-3-Non-Insert-Id":
-        ok = True
-        msg = f"soft-ok:{code}:{msg}"
-    return ok, msg or f"http={s}", res, token
+    res2 = (d2 or {}).get("result") or {}
+    ok2 = bool(res2.get("isSucceeded"))
+    code2 = str(res2.get("code") or "")
+    msg2 = str(res2.get("message") or "")
+    if (not ok2) and code2 == "VersionType-3-Non-Insert-Id":
+        ok2 = True
+        msg2 = f"soft-ok:{code2}:{msg2}"
+    if ok2:
+        return True, f"INSERT-fallback:{msg2}", res2, token
+    return False, f"SET:{msg or s}; INSERT:{msg2 or s2}", {"set": res, "insert": res2}, token

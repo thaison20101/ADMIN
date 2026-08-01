@@ -19,8 +19,8 @@
     "api_base": "https://be-qlskcd.medinet.org.vn",
     "login_path": "/account/login",
     "date_from": "01/07/2026",
-    "date_to": "31/07/2026",
-    "note": "Set MEDINET_USER / MEDINET_PASS in environment. Do not commit secrets."
+    "date_to": "",
+    "note": "date_to empty = today. Set MEDINET_USER / MEDINET_PASS in environment. Do not commit secrets."
   },
   "routing": {
     "m4_birth_year_max": 1967,
@@ -31,6 +31,8 @@
   },
   "import_rules": {
     "enabled": true,
+    "auto_hourly": true,
+    "max_imports_per_run": 80,
     "form": "Khám cận lâm sàng",
     "form_code": "KSKDK_Phieu_CanLamSang",
     "form_id": 1000250,
@@ -39,7 +41,7 @@
     "nitrit_am_tinh_id": 5120,
     "nitrit_duong_tinh_id": 5119,
     "count_suffix_hash": true,
-    "preview_excel_before_import": true,
-    "note": "See docs/drive-setup/RULE_IMPORT_MEDINET.md. Run pipeline/run_phase_b_import.ps1 after approving preview."
+    "preview_excel_before_import": false,
+    "note": "Hourly task runs pipeline/run_hourly.ps1 → auto parse+import READY cases. Manual: run_phase_b_import.ps1"
   }
 }

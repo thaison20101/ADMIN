@@ -4,91 +4,69 @@ Tài khoản: dùng biến môi trường `MEDINET_USER` / `MEDINET_PASS` (khôn
 
 Web: https://quanlyskcd.medinet.org.vn/account/login
 
-## Luồng
-1. Đọc PDF trong Drive `INBOX_CLS` → trích kết quả XN
-2. Xuất Excel preview để kiểm tra (bắt buộc trước khi import hàng loạt)
-3. Đăng nhập Medinet
-4. Tìm BN theo năm sinh:
-   - Sinh **≤ 1967** → Khám sức khỏe → **Người cao tuổi (M4)**
-   - Sinh **≥ 1968** → Khám sức khỏe → **Người từ đủ 18–59 tuổi (M3)**
-5. Với M3: phần **Loại khám** chỉ tích **Khám định kỳ** — **KHÔNG** import vào **Khám tuyển**
-6. Điền toàn bộ kết quả vào form **Khám cận lâm sàng**
-7. Case thiếu TTHC / đã có CLS rồi → ghi Excel riêng để nhập lại / bỏ qua
-8. Case đã `IMPORTED` → không chạy lại
+## Luồng tự động (hourly)
+
+Điều kiện:
+- Laptop **bật**
+- Google Drive Desktop sync folder `G:\Drive của tôi\PKDK_Thuankieu_Pipeline`
+- Task Scheduler job `PKDK_Hourly_Sync` đã cài (`pipeline\install_hourly_task.ps1`)
+
+Mỗi ~1 giờ job chạy `pipeline\run_hourly.ps1` → `hourly_sync.py`:
+1. Quét PDF mới trong `INBOX_CLS`
+2. Trích kết quả XN từ PDF
+3. Khớp BN trên Medinet (M3/M4 theo năm sinh)
+4. Nếu **đã có TTHC** và **chưa có CLS** → import form **Khám cận lâm sàng**
+5. Luôn **Khám định kỳ** (`LoaiKham=5152`) — không ghi Khám tuyển / `DHDL_*`
+6. `IMPORTED` → chuyển file sang `PROCESSED`
+7. Thiếu TTHC → `WAITING_ADMIN` (giữ PDF, chờ giờ sau)
+8. Web đã có CLS → `SKIP_ALREADY_CLS` (không ghi đè)
+
+Giới hạn mỗi lần chạy: `import_rules.max_imports_per_run` (mặc định 80). Case còn lại chờ vòng sau.
+
+Output:
+```text
+G:\Drive của tôi\build for Supper Data\
+  excel_preview\CLS_auto_import_*.xlsx
+  logs\
+  cases_snapshot\
+```
+
+Cài / kiểm tra task:
+```powershell
+cd C:\Users\thais\ADMIN
+git pull origin cursor/drive-hourly-pipeline-df0f
+powershell -ExecutionPolicy Bypass -File .\pipeline\install_hourly_task.ps1
+# chạy thử ngay:
+powershell -ExecutionPolicy Bypass -File .\pipeline\run_hourly.ps1
+```
+
+Trong `pipeline\config.local.json`:
+- `drive.local_sync_root` = `G:/Drive của tôi/PKDK_Thuankieu_Pipeline`
+- `drive.build_root` = `G:/Drive của tôi/build for Supper Data`
+- `medinet.date_from` = ngày bắt đầu tìm BN (vd `01/07/2026`)
+- `medinet.date_to` = để trống `""` → lấy **hôm nay**
 
 ## Quy tắc map kết quả
-- WBC: một số giá trị trên web đã dịch tiếng Việt → đọc PDF kỹ, map đúng option web
-- `Neutrophils #` = Số lượng bạch cầu trung tính (các chỉ số kết thúc bằng `#` là số lượng)
-- Nước tiểu: PDF ghi `Âm tính` → trên web điền `Negative`
-- Đổi đơn vị cho khớp đơn vị trên web nếu PDF khác đơn vị
-
-## File output (bắt buộc)
-Tất cả file tạo ra trong quá trình lưu tại:
-
-`G:\Drive của tôi\build for Supper Data`
-
-Gợi ý cấu trúc:
-```text
-build for Supper Data/
-  excel_preview/          ← Excel kết quả trích từ PDF (để duyệt trước)
-  missing_or_updated/     ← thiếu TTHC / đã có CLS cần kiểm tra lại
-  logs/                   ← log hourly
-  cases_snapshot/         ← bản sao cases.csv theo ngày
-```
+- `Neutrophils #` = số lượng bạch cầu trung tính
+- Nước tiểu `Âm tính` → `Negative`; Nitrit → option `5120`
+- Đổi đơn vị khi cần (g/dL→g/L, %→L/L, mg/dL→mmol/L…)
 
 ## Trạng thái case
 - `WAITING_ADMIN` — có PDF, chưa có TTHC trên web
 - `READY_IMPORT` — đã có TTHC, chờ/đang import CLS
 - `IMPORTED` — đã import xong, skip
-- `SKIP_ALREADY_CLS` — web đã có CLS, ghi Excel kiểm tra
-- `ERROR` — lỗi parse/import
+- `SKIP_ALREADY_CLS` — web đã có CLS
+- `ERROR_IMPORT` / `PARSE_ERROR` — lỗi
 
-## Phase B — chạy trên laptop
+## Chạy tay (batch cũ / kiểm tra)
 
-### B1. Tạo Excel preview (làm trước, bắt buộc)
+Preview Excel:
 ```powershell
-cd C:\Users\thais\ADMIN
-git pull origin cursor/drive-hourly-pipeline-df0f
 powershell -ExecutionPolicy Bypass -File .\pipeline\run_phase_b_preview.ps1
 ```
 
-Test 20 file trước:
-```powershell
-powershell -ExecutionPolicy Bypass -File .\pipeline\run_phase_b_preview.ps1 -Limit 20
-```
-
-Output:
-- `G:\Drive của tôi\build for Supper Data\excel_preview\CLS_preview_*.xlsx`
-- `G:\Drive của tôi\build for Supper Data\missing_or_updated\missing_or_updated_*.xlsx`
-
-Cột quan trọng trong Excel: `*_web` / `*_unit_web` / `*_note` (đã map Âm tính→Negative, đổi đơn vị).
-
-### B2. Import lên web
-Chỉ chạy sau khi bạn duyệt Excel preview OK.
-
-Dry-run 5 case (không ghi web):
-```powershell
-cd C:\Users\thais\ADMIN
-git pull origin cursor/drive-hourly-pipeline-df0f
-powershell -ExecutionPolicy Bypass -File .\pipeline\run_phase_b_import.ps1 -Limit 5 -DryRun
-```
-
-Import thử 5 case thật:
+Import từ Excel preview (đã duyệt):
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\pipeline\run_phase_b_import.ps1 -Limit 5
-```
-
-Import toàn bộ `READY_IMPORT` (ví dụ 369):
-```powershell
 powershell -ExecutionPolicy Bypass -File .\pipeline\run_phase_b_import.ps1
 ```
-
-Script sẽ:
-- đọc Excel preview mới nhất trong `excel_preview/`
-- chỉ import `READY_IMPORT`
-- bỏ qua nếu web đã có CLS (trừ khi `-Force`)
-- luôn ghi **Khám định kỳ** (`LoaiKham=5152`), không ghi Khám tuyển
-- map field định kỳ (không dùng `DHDL_*`)
-- Nitrit: Âm tính/Negative → option web `5120`
-- verify lại bằng store Get theo `phieukhamId`
-- xuất `CLS_import_result_*.xlsx` + cập nhật `tracking/cases.csv`
