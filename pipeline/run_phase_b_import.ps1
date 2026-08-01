@@ -4,16 +4,7 @@
 # Usage:
 #   cd C:\Users\thais\ADMIN
 #   git pull origin cursor/drive-hourly-pipeline-df0f
-#   powershell -ExecutionPolicy Bypass -File .\pipeline\run_phase_b_import.ps1
-#
-# Dry-run first 5:
-#   powershell -ExecutionPolicy Bypass -File .\pipeline\run_phase_b_import.ps1 -Limit 5 -DryRun
-#
-# Real import first 5:
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\run_phase_b_import.ps1 -Limit 5
-#
-# Full READY_IMPORT:
-#   powershell -ExecutionPolicy Bypass -File .\pipeline\run_phase_b_import.ps1
 
 param(
   [int]$Limit = 0,
@@ -26,16 +17,25 @@ $ErrorActionPreference = "Continue"
 $Repo = Split-Path -Parent $PSScriptRoot
 Set-Location $Repo
 
+# Force UTF-8 for Python prints on Windows consoles
+$env:PYTHONIOENCODING = "utf-8"
+$env:PYTHONUTF8 = "1"
+try {
+  [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+  $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+} catch {}
+
 if (-not (Test-Path ".\pipeline\config.local.json")) {
   Copy-Item ".\pipeline\config.example.json" ".\pipeline\config.local.json" -Force
 }
 
-# Read build_root from JSON via Python (avoids PowerShell encoding issues with Vietnamese paths)
-$BuildRoot = & python -c "import json; from pathlib import Path; p=Path('pipeline/config.local.json'); p=p if p.exists() else Path('pipeline/config.example.json'); print(json.loads(p.read_text(encoding='utf-8-sig')).get('drive',{}).get('build_root') or r'G:\Drive cua toi\build for Supper Data')"
-if (-not $BuildRoot) {
+$buildRootFile = Join-Path $env:TEMP "pkdk_build_root.txt"
+& python ".\pipeline\resolve_build_root.py" --out "$buildRootFile" | Out-Null
+if (Test-Path -LiteralPath $buildRootFile) {
+  $BuildRoot = (Get-Content -LiteralPath $buildRootFile -Encoding UTF8 -Raw).Trim()
+} else {
   $BuildRoot = Join-Path $Repo "pipeline\work\build"
 }
-$BuildRoot = $BuildRoot.Trim()
 
 function Ensure-Dir([string]$Path) {
   try {
@@ -47,12 +47,10 @@ function Ensure-Dir([string]$Path) {
   }
 }
 
-$logDirOk = Ensure-Dir (Join-Path $BuildRoot "logs")
-Ensure-Dir (Join-Path $BuildRoot "excel_preview") | Out-Null
-
-# Fallback local log dir if Drive path is broken/encoding-mismatched
 $LocalLogDir = Join-Path $Repo "pipeline\work\logs"
 Ensure-Dir $LocalLogDir | Out-Null
+$logDirOk = Ensure-Dir (Join-Path $BuildRoot "logs")
+Ensure-Dir (Join-Path $BuildRoot "excel_preview") | Out-Null
 if ($logDirOk) {
   $log = Join-Path $BuildRoot ("logs\phase_b_import-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
 } else {

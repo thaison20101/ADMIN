@@ -23,6 +23,10 @@ from openpyxl.styles import Font, PatternFill, Alignment
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from win_console import safe_print, setup_utf8_stdio  # noqa: E402
+
+setup_utf8_stdio()
+
 from pdf_extract import extract_pdf  # noqa: E402
 
 DEFAULT_CONFIG = ROOT / "pipeline" / "config.example.json"
@@ -73,8 +77,40 @@ def load_config() -> dict:
         return json.load(f)
 
 
+def _resolve_existing_build(raw: str) -> Path:
+    """Prefer an existing Drive build folder; try common Google Drive name variants."""
+    candidates = []
+    if raw:
+        candidates.append(Path(raw))
+    # Common Google Drive Desktop folder names on Windows
+    for drive in ("G:", "H:", "D:"):
+        for mid in (
+            "Drive của tôi",
+            "Drive của Tôi",
+            "My Drive",
+            "Drive cua toi",
+        ):
+            candidates.append(Path(f"{drive}/{mid}/build for Supper Data"))
+    candidates.append(ROOT / "pipeline" / "work" / "build")
+
+    seen = set()
+    for p in candidates:
+        key = str(p).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            if p.exists():
+                return p
+        except Exception:
+            continue
+    # default: configured/raw even if missing (will be created)
+    return Path(raw) if raw else candidates[0]
+
+
 def build_root(cfg: dict) -> Path:
-    p = Path(cfg.get("drive", {}).get("build_root") or r"G:\Drive của tôi\build for Supper Data")
+    raw = cfg.get("drive", {}).get("build_root") or r"G:\Drive của tôi\build for Supper Data"
+    p = _resolve_existing_build(str(raw))
     for sub in ("excel_preview", "missing_or_updated", "logs", "cases_snapshot"):
         (p / sub).mkdir(parents=True, exist_ok=True)
     return p
@@ -172,10 +208,10 @@ def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
     for mau, code, date_field in reports:
         rep = get_report(code)
         if not rep:
-            print(f"  report missing {code}")
+            safe_print(f"  report missing {code}")
             continue
         store, ds = rep["sqlContent"], rep["dataSourceId"]
-        print(f"Indexing {mau} ({code}) ...", flush=True)
+        safe_print(f"Indexing {mau} ({code}) ...", flush=True)
         for day in days:
             dr = f"{day.strftime('%d/%m/%Y')} - {day.strftime('%d/%m/%Y')}"
             # all
@@ -228,7 +264,7 @@ def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
             )
             for r in ((d or {}).get("result") or {}).get("data") or []:
                 index["no_cls_ids"].add(r.get("phieukhamId") or r.get("Id"))
-        print(f"  {mau} indexed phones={len(index['by_phone'])} names={len(index['by_name_year'])}", flush=True)
+        safe_print(f"  {mau} indexed phones={len(index['by_phone'])} names={len(index['by_name_year'])}", flush=True)
     return index
 
 
@@ -409,13 +445,13 @@ def main() -> int:
     cfg = load_config()
     build = build_root(cfg)
     inbox = Path(args.inbox) if args.inbox else inbox_dir(cfg)
-    print(f"Inbox: {inbox}")
-    print(f"Build: {build}")
+    safe_print(f"Inbox: {inbox}")
+    safe_print(f"Build: {build}")
 
     pdfs = list_pdfs(inbox, args.limit or None)
-    print(f"PDF count: {len(pdfs)}", flush=True)
+    safe_print(f"PDF count: {len(pdfs)}", flush=True)
     if not pdfs:
-        print("No PDFs found.")
+        safe_print("No PDFs found.")
         return 1
 
     rows = []
@@ -435,7 +471,7 @@ def main() -> int:
             data["status_medinet"] = data.get("status_medinet") or "PARSE_ERROR"
         rows.append(data)
         if i % 50 == 0 or i == len(pdfs):
-            print(f"  parsed {i}/{len(pdfs)}", flush=True)
+            safe_print(f"  parsed {i}/{len(pdfs)}", flush=True)
 
     index = None
     if not args.skip_medinet:
@@ -443,7 +479,7 @@ def main() -> int:
 
         user = os.environ.get("MEDINET_USER", "pkdkthuankieu")
         password = os.environ.get("MEDINET_PASS", "P@ssw0rd")
-        print("Auth Medinet + index July lists...", flush=True)
+        safe_print("Auth Medinet + index July lists...", flush=True)
         token = authenticate(user, password)
         date_from = cfg.get("medinet", {}).get("date_from", "01/07/2026")
         date_to = cfg.get("medinet", {}).get("date_to", "31/07/2026")
@@ -483,11 +519,11 @@ def main() -> int:
     from collections import Counter
 
     c = Counter(r.get("status_medinet") for r in rows)
-    print("---")
-    print(f"Preview Excel: {out}")
-    print(f"Missing/Updated Excel: {miss_path}")
-    print(f"Status: {dict(c)}")
-    print("NEXT: open Preview Excel, check value_web/unit_web. Then run import step.")
+    safe_print("---")
+    safe_print(f"Preview Excel: {out}")
+    safe_print(f"Missing/Updated Excel: {miss_path}")
+    safe_print(f"Status: {dict(c)}")
+    safe_print("NEXT: open Preview Excel, check value_web/unit_web. Then run import step.")
     return 0
 
 

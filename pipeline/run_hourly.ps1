@@ -5,13 +5,24 @@ $ErrorActionPreference = "Continue"
 $Repo = Split-Path -Parent $PSScriptRoot
 Set-Location $Repo
 
+$env:PYTHONIOENCODING = "utf-8"
+$env:PYTHONUTF8 = "1"
+try {
+  [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+  $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+} catch {}
+
 if (-not (Test-Path ".\pipeline\config.local.json")) {
   Copy-Item ".\pipeline\config.example.json" ".\pipeline\config.local.json" -Force
 }
 
-$BuildRoot = & python -c "import json; from pathlib import Path; p=Path('pipeline/config.local.json'); p=p if p.exists() else Path('pipeline/config.example.json'); print(json.loads(p.read_text(encoding='utf-8-sig')).get('drive',{}).get('build_root') or r'G:\Drive cua toi\build for Supper Data')"
-$BuildRoot = ($BuildRoot | Out-String).Trim()
-if (-not $BuildRoot) { $BuildRoot = Join-Path $Repo "pipeline\work\build" }
+$buildRootFile = Join-Path $env:TEMP "pkdk_build_root.txt"
+& python ".\pipeline\resolve_build_root.py" --out "$buildRootFile" | Out-Null
+if (Test-Path -LiteralPath $buildRootFile) {
+  $BuildRoot = (Get-Content -LiteralPath $buildRootFile -Encoding UTF8 -Raw).Trim()
+} else {
+  $BuildRoot = Join-Path $Repo "pipeline\work\build"
+}
 
 function Ensure-Dir([string]$Path) {
   try { New-Item -ItemType Directory -Force -Path $Path | Out-Null; return $true }
@@ -42,7 +53,6 @@ try { $out | Out-File -FilePath $log -Encoding utf8 } catch {
   Write-Host "WARN: log fallback -> $fallback"
 }
 
-# Snapshot tracking ledger into Drive build folder
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $snapDir = Join-Path $BuildRoot "cases_snapshot"
 if (Ensure-Dir $snapDir) {

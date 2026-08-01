@@ -23,6 +23,10 @@ from openpyxl.styles import Alignment, Font, PatternFill
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from win_console import safe_print, setup_utf8_stdio  # noqa: E402
+
+setup_utf8_stdio()
+
 from medinet_api import (  # noqa: E402
     LAB_TO_FORM,
     authenticate,
@@ -218,15 +222,15 @@ def main() -> int:
     cfg = load_config()
     build = build_root(cfg)
     preview = latest_preview(build, args.preview)
-    print(f"Preview: {preview}", flush=True)
+    safe_print(f"Preview: {preview}")
 
     ready = read_preview_ready(preview)
-    print(f"READY_IMPORT rows: {len(ready)}", flush=True)
+    safe_print(f"READY_IMPORT rows: {len(ready)}")
     if args.limit:
         ready = ready[: args.limit]
-        print(f"Limited to: {len(ready)}", flush=True)
+        safe_print(f"Limited to: {len(ready)}")
     if not ready:
-        print("Nothing to import.")
+        safe_print("Nothing to import.")
         return 0
 
     user = os.environ.get("MEDINET_USER", "pkdkthuankieu")
@@ -239,7 +243,7 @@ def main() -> int:
 
     date_from = cfg.get("medinet", {}).get("date_from", "01/07/2026")
     date_to = cfg.get("medinet", {}).get("date_to", "31/07/2026")
-    print("Indexing Medinet lists for phieukhamId resolve...", flush=True)
+    safe_print("Indexing Medinet lists for phieukhamId resolve...")
     index = fetch_unit_index(token_box["t"], date_from, date_to)
     # refresh token after long index
     token_box["t"] = authenticate(user, password)
@@ -248,7 +252,7 @@ def main() -> int:
     results = []
     for i, row in enumerate(ready, 1):
         name = row.get("ho_ten")
-        print(f"[{i}/{len(ready)}] {name} ...", flush=True)
+        safe_print(f"[{i}/{len(ready)}] {name} ...")
         pid, rec = resolve_phieukham(row, index)
         if rec:
             row["medinet_MaPhieu"] = rec.get("MaPhieu") or row.get("medinet_MaPhieu")
@@ -335,7 +339,7 @@ def main() -> int:
             }
         )
         results.append(row)
-        print(f"  -> {import_status} fields={fields_sent} verified={verified}", flush=True)
+        safe_print(f"  -> {import_status} fields={fields_sent} verified={verified}")
         if args.sleep:
             time.sleep(args.sleep)
 
@@ -346,9 +350,9 @@ def main() -> int:
     update_cases_csv(cases_path, results)
 
     c = Counter(r.get("import_status") for r in results)
-    print("---")
-    print(f"Result Excel: {out}")
-    print(f"Status: {dict(c)}")
+    safe_print("---")
+    safe_print(f"Result Excel: {out}")
+    safe_print(f"Status: {dict(c)}")
     return 0 if c.get("ERROR_IMPORT", 0) == 0 else 2
 
 
