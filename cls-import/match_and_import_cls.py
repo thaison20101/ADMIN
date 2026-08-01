@@ -133,6 +133,23 @@ def index_web(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
     return {"by_phone": by_phone, "by_name_year": by_name_year}
 
 
+def _parse_ngay_kham(val: Any) -> str:
+    """Normalize NgayKham to sortable ISO-ish string."""
+    s = str(val or "")
+    # 2026-07-23T00:00:00 or 23/07/2026
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", s)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    m = re.match(r"(\d{2})/(\d{2})/(\d{4})", s)
+    if m:
+        return f"{m.group(3)}-{m.group(2)}-{m.group(1)}"
+    return s
+
+
+def pick_latest(cands: List[Dict[str, Any]]) -> Dict[str, Any]:
+    return max(cands, key=lambda c: (_parse_ngay_kham(c.get("NgayKham")), int(c.get("Id") or 0)))
+
+
 def match_one(pdf: Dict[str, Any], idx: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
     phone = norm_phone(pdf.get("sdt"))
     name = norm_name(pdf.get("ho_ten") or pdf.get("name_from_file") or "")
@@ -141,18 +158,32 @@ def match_one(pdf: Dict[str, Any], idx: Dict[str, Any]) -> Tuple[Optional[Dict[s
     cands: List[Dict[str, Any]] = []
     if phone and phone in idx["by_phone"]:
         cands = idx["by_phone"][phone]
-        # refine by year/name if multiple
-        if year:
-            c2 = [c for c in cands if birth_year(c.get("NgaySinh")) == year]
-            if c2:
-                cands = c2
+        # Reject phone hits that clearly belong to another person
         if name:
-            c2 = [c for c in cands if norm_name(c.get("HoTen") or "") == name]
+            same_name = [c for c in cands if norm_name(c.get("HoTen") or "") == name]
+            if same_name:
+                cands = same_name
+            elif year:
+                # phone reused / wrong: keep only same birth year, else drop phone match
+                same_year = [c for c in cands if birth_year(c.get("NgaySinh")) == year]
+                if same_year and all(norm_name(c.get("HoTen") or "") == name for c in same_year):
+                    cands = same_year
+                else:
+                    cands = []
+            else:
+                cands = []
+        elif year:
+            c2 = [c for c in cands if birth_year(c.get("NgaySinh")) == year]
             if c2:
                 cands = c2
         if len(cands) == 1:
             return cands[0], "phone"
         if len(cands) > 1:
+            # Same person may appear twice (re-exam); pick latest NgayKham
+            names = {norm_name(c.get("HoTen") or "") for c in cands}
+            years = {birth_year(c.get("NgaySinh")) for c in cands}
+            if len(names) == 1 and (len(years) == 1 or (year is not None and year in years)):
+                return pick_latest(cands), "phone_latest"
             return None, f"AMBIGUOUS_PHONE:{len(cands)}"
 
     key = f"{name}|{year or ''}"
@@ -163,6 +194,13 @@ def match_one(pdf: Dict[str, Any], idx: Dict[str, Any]) -> Tuple[Optional[Dict[s
     if len(cands) == 1:
         return cands[0], "name_year"
     if len(cands) > 1:
+        phones = {norm_phone(c.get("SDT")) for c in cands if norm_phone(c.get("SDT"))}
+        if len(phones) <= 1 or (phone and phone in phones):
+            if phone:
+                c2 = [c for c in cands if norm_phone(c.get("SDT")) == phone]
+                if c2:
+                    cands = c2
+            return pick_latest(cands), "name_year_latest"
         return None, f"AMBIGUOUS_NAME:{len(cands)}"
     return None, "NOT_FOUND"
 
@@ -445,12 +483,27 @@ def main():
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--skip-filled", action="store_true", default=True)
     p.add_argument("--only-nhom", default="", help="M3 or M4")
+    p.add_argument("--only-sids", default="", help="Comma-separated SIDs to process")
+    p.add_argument("--retry-not-found", action="store_true", help="Only retry SIDs previously SKIP_NOT_FOUND")
     p.add_argument("--delay", type=float, default=0.35)
+    p.add_argument("--merge-log", action="store_true", help="Merge into existing CLS_import_log.jsonl by sid")
     args = p.parse_args()
 
     pdf_rows = read_pdf_excel(Path(args.pdf_excel))
     if args.only_nhom:
         pdf_rows = [r for r in pdf_rows if r.get("nhom") == args.only_nhom]
+    only_sids = {s.strip() for s in args.only_sids.split(",") if s.strip()}
+    if args.retry_not_found:
+        prev = Path(OUT / "CLS_import_log.jsonl")
+        if prev.exists():
+            for line in prev.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                r = json.loads(line)
+                if r.get("status") == "SKIP_NOT_FOUND" and r.get("sid"):
+                    only_sids.add(str(r["sid"]))
+    if only_sids:
+        pdf_rows = [r for r in pdf_rows if str(r.get("sid") or "") in only_sids]
     if args.limit:
         pdf_rows = pdf_rows[: args.limit]
 
@@ -464,11 +517,25 @@ def main():
 
     issues: List[Dict[str, Any]] = []
     logs: List[Dict[str, Any]] = []
+    existing_by_sid: Dict[str, Dict[str, Any]] = {}
+    if args.merge_log and (OUT / "CLS_import_log.jsonl").exists():
+        for line in (OUT / "CLS_import_log.jsonl").read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            r = json.loads(line)
+            if r.get("sid") is not None:
+                existing_by_sid[str(r["sid"])] = r
 
     for i, pdf in enumerate(pdf_rows, 1):
         nhom = pdf.get("nhom") or ("M4" if (pdf.get("nam_sinh") or 9999) <= 1967 else "M3")
         idx = idx_m4 if nhom == "M4" else idx_m3
+        alt_idx = idx_m3 if nhom == "M4" else idx_m4
         web, how = match_one(pdf, idx)
+        # Fallback: some ≤1967 are registered under M3 (18-59) on web, and vice versa
+        if not web:
+            web2, how2 = match_one(pdf, alt_idx)
+            if web2:
+                web, how = web2, f"{how2}_alt_{'M3' if nhom == 'M4' else 'M4'}"
         base = {
             "sid": pdf.get("sid"),
             "ho_ten": pdf.get("ho_ten"),
@@ -544,13 +611,62 @@ def main():
         if args.delay:
             time.sleep(args.delay)
 
-        # periodic save
-        if i % 25 == 0:
+        # periodic save (skip when merging to avoid overwriting full log mid-retry)
+        if i % 25 == 0 and not args.merge_log:
             write_issues_excel(issues, OUT / "CLS_can_kiem_tra_lai.xlsx")
             write_import_log(logs, OUT / "CLS_import_log.xlsx")
             (OUT / "CLS_import_log.jsonl").write_text(
                 "\n".join(json.dumps(x, ensure_ascii=False) for x in logs), encoding="utf-8"
             )
+
+    if args.merge_log and existing_by_sid:
+        for r in logs:
+            sid = str(r.get("sid") or "")
+            if sid:
+                existing_by_sid[sid] = r
+        # preserve original order when possible
+        ordered: List[Dict[str, Any]] = []
+        seen = set()
+        for line in (OUT / "CLS_import_log.jsonl").read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            old = json.loads(line)
+            sid = str(old.get("sid") or "")
+            ordered.append(existing_by_sid.get(sid, old))
+            seen.add(sid)
+        for sid, r in existing_by_sid.items():
+            if sid not in seen:
+                ordered.append(r)
+        logs = ordered
+        issues = [
+            {
+                "ly_do": (
+                    "DA_CO_KET_QUA_CLS"
+                    if x["status"] == "SKIP_FILLED"
+                    else "THIEU_THONG_TIN_HOAC_KHONG_TIM_THAY"
+                    if x["status"] == "SKIP_NOT_FOUND"
+                    else "THIEU_KET_QUA_PDF"
+                    if x["status"] == "SKIP_PDF_MISSING"
+                    else "LOI_IMPORT"
+                    if x["status"] in ("LOI", "LOI_DOC")
+                    else x["status"]
+                ),
+                "sid": x.get("sid"),
+                "ho_ten": x.get("ho_ten"),
+                "nam_sinh": x.get("nam_sinh"),
+                "sdt": x.get("sdt"),
+                "nhom": x.get("nhom"),
+                "match_status": x.get("match_by"),
+                "tthc_id": x.get("tthc_id"),
+                "web_hoten": x.get("web_hoten"),
+                "web_sdt": x.get("web_sdt"),
+                "web_ngaysinh": x.get("web_ngaysinh"),
+                "ghi_chu": x.get("message"),
+                "file": x.get("file"),
+            }
+            for x in logs
+            if x.get("status") not in ("THANH_CONG", "DRY_RUN")
+        ]
 
     write_issues_excel(issues, OUT / "CLS_can_kiem_tra_lai.xlsx")
     write_import_log(logs, OUT / "CLS_import_log.xlsx")
@@ -558,13 +674,14 @@ def main():
         "\n".join(json.dumps(x, ensure_ascii=False) for x in logs), encoding="utf-8"
     )
     summary = {
-        "total": len(pdf_rows),
+        "total": len(logs),
         "ok": sum(1 for x in logs if x["status"] == "THANH_CONG"),
         "dry": sum(1 for x in logs if x["status"] == "DRY_RUN"),
         "skip_filled": sum(1 for x in logs if x["status"] == "SKIP_FILLED"),
         "not_found": sum(1 for x in logs if x["status"] == "SKIP_NOT_FOUND"),
         "errors": sum(1 for x in logs if x["status"] in ("LOI", "LOI_DOC")),
         "issues": len(issues),
+        "retry_batch": len(pdf_rows),
     }
     (OUT / "CLS_import_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     print("SUMMARY", summary)
