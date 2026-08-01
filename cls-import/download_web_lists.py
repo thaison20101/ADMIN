@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-import os
 """Download M3/M4 patient lists from Medinet for matching against PDF results."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from medinet_client import MedinetClient

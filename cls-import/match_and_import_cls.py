@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import os
 """Match PDF lab results to Medinet TTHC records and import into Khám cận lâm sàng.
 
 Rules:
@@ -14,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import time
 import unicodedata
