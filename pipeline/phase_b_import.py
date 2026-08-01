@@ -11,6 +11,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import sys
 import time
 from collections import Counter
@@ -46,17 +47,71 @@ from phase_b_preview import (  # noqa: E402
 )
 
 
-def latest_preview(build: Path, explicit: str = "") -> Path:
+def _preview_stamp(path: Path) -> str:
+    """Extract YYYYMMDD-HHMMSS from CLS_preview_*.xlsx name; else empty."""
+    m = re.search(r"CLS_preview_(\d{8}-\d{6})", path.name, re.I)
+    return m.group(1) if m else ""
+
+
+def count_preview_statuses(path: Path) -> Counter:
+    """Count status_medinet values in preview Excel (first sheet)."""
+    wb = load_workbook(path, read_only=True, data_only=True)
+    try:
+        ws = wb[wb.sheetnames[0]]
+        rows_iter = ws.iter_rows(values_only=True)
+        header = [str(h or "").strip() for h in next(rows_iter)]
+        # tolerate slight header variants
+        status_idx = None
+        for i, h in enumerate(header):
+            hl = h.lower().replace(" ", "")
+            if hl in {"status_medinet", "statusmedinet", "status"}:
+                status_idx = i
+                break
+        c: Counter = Counter()
+        if status_idx is None:
+            c["(missing status_medinet column)"] = 1
+            return c
+        for row in rows_iter:
+            if not row or status_idx >= len(row):
+                continue
+            st = str(row[status_idx] or "").strip().upper()
+            if not st:
+                st = "(empty)"
+            c[st] += 1
+        return c
+    finally:
+        wb.close()
+
+
+def choose_preview(build: Path, explicit: str = "") -> Path:
+    """Pick preview Excel: explicit path, else file with most READY_IMPORT (tie -> newest stamp)."""
     if explicit:
         p = Path(explicit)
         if not p.exists():
             raise FileNotFoundError(p)
         return p
     folder = build / "excel_preview"
-    files = sorted(folder.glob("CLS_preview_*.xlsx"), key=lambda x: x.stat().st_mtime, reverse=True)
+    files = [p for p in folder.glob("CLS_preview_*.xlsx") if p.is_file()]
     if not files:
         raise FileNotFoundError(f"No CLS_preview_*.xlsx in {folder}")
-    return files[0]
+
+    ranked = []
+    for p in files:
+        counts = count_preview_statuses(p)
+        ready = int(counts.get("READY_IMPORT", 0))
+        stamp = _preview_stamp(p) or "00000000-000000"
+        ranked.append((ready, stamp, p, counts))
+        safe_print(f"  preview candidate: {p.name} READY_IMPORT={ready} statuses={dict(counts)}")
+
+    # Prefer most READY_IMPORT, then newest filename stamp
+    ranked.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    best = ranked[0]
+    if best[0] == 0:
+        safe_print(
+            "WARN: no preview file contains READY_IMPORT. "
+            "Re-run phase_b_preview, or pass -Preview path to the approved Excel."
+        )
+    return best[2]
 
 
 def read_preview_ready(path: Path) -> list[dict]:
@@ -65,9 +120,13 @@ def read_preview_ready(path: Path) -> list[dict]:
     rows_iter = ws.iter_rows(values_only=True)
     header = [str(h or "").strip() for h in next(rows_iter)]
     idx = {h: i for i, h in enumerate(header)}
+    # case-insensitive header map
+    idx_ci = {h.lower(): i for h, i in idx.items()}
 
     def get(row, name, default=""):
         i = idx.get(name)
+        if i is None:
+            i = idx_ci.get(name.lower())
         if i is None or i >= len(row):
             return default
         v = row[i]
@@ -77,7 +136,7 @@ def read_preview_ready(path: Path) -> list[dict]:
     for row in rows_iter:
         if not row:
             continue
-        status = str(get(row, "status_medinet") or "").strip()
+        status = str(get(row, "status_medinet") or "").strip().upper()
         if status != "READY_IMPORT":
             continue
         labs = {}
@@ -221,8 +280,12 @@ def main() -> int:
 
     cfg = load_config()
     build = build_root(cfg)
-    preview = latest_preview(build, args.preview)
-    safe_print(f"Preview: {preview}")
+    safe_print(f"Build: {build}")
+    safe_print("Scanning excel_preview for READY_IMPORT ...")
+    preview = choose_preview(build, args.preview)
+    safe_print(f"Using Preview: {preview}")
+    status_counts = count_preview_statuses(preview)
+    safe_print(f"Status in file: {dict(status_counts)}")
 
     ready = read_preview_ready(preview)
     safe_print(f"READY_IMPORT rows: {len(ready)}")
@@ -231,6 +294,10 @@ def main() -> int:
         safe_print(f"Limited to: {len(ready)}")
     if not ready:
         safe_print("Nothing to import.")
+        safe_print(
+            "Hint: pass the approved Excel explicitly, e.g.\n"
+            '  -Preview "G:\\Drive của tôi\\build for Supper Data\\excel_preview\\CLS_preview_20260802-001204.xlsx"'
+        )
         return 0
 
     user = os.environ.get("MEDINET_USER", "pkdkthuankieu")
