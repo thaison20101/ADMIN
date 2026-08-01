@@ -30,11 +30,16 @@
     "m3_forbid": "Khám tuyển"
   },
   "import_rules": {
-    "enabled": false,
+    "enabled": true,
     "form": "Khám cận lâm sàng",
+    "form_code": "KSKDK_Phieu_CanLamSang",
+    "form_id": 1000250,
+    "loai_kham_dinh_ky": 5152,
     "urine_negative_map": { "Âm tính": "Negative" },
+    "nitrit_am_tinh_id": 5120,
+    "nitrit_duong_tinh_id": 5119,
     "count_suffix_hash": true,
     "preview_excel_before_import": true,
-    "note": "See docs/drive-setup/RULE_IMPORT_MEDINET.md"
+    "note": "See docs/drive-setup/RULE_IMPORT_MEDINET.md. Run pipeline/run_phase_b_import.ps1 after approving preview."
   }
 }

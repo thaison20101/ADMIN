@@ -64,4 +64,31 @@ Output:
 Cột quan trọng trong Excel: `*_web` / `*_unit_web` / `*_note` (đã map Âm tính→Negative, đổi đơn vị).
 
 ### B2. Import lên web
-Chỉ chạy sau khi bạn duyệt Excel preview OK. (Script import sẽ bổ sung ngay sau khi bạn xác nhận số liệu.)
+Chỉ chạy sau khi bạn duyệt Excel preview OK.
+
+Dry-run 5 case (không ghi web):
+```powershell
+cd C:\Users\thais\ADMIN
+git pull origin cursor/drive-hourly-pipeline-df0f
+powershell -ExecutionPolicy Bypass -File .\pipeline\run_phase_b_import.ps1 -Limit 5 -DryRun
+```
+
+Import thử 5 case thật:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\pipeline\run_phase_b_import.ps1 -Limit 5
+```
+
+Import toàn bộ `READY_IMPORT` (ví dụ 369):
+```powershell
+powershell -ExecutionPolicy Bypass -File .\pipeline\run_phase_b_import.ps1
+```
+
+Script sẽ:
+- đọc Excel preview mới nhất trong `excel_preview/`
+- chỉ import `READY_IMPORT`
+- bỏ qua nếu web đã có CLS (trừ khi `-Force`)
+- luôn ghi **Khám định kỳ** (`LoaiKham=5152`), không ghi Khám tuyển
+- map field định kỳ (không dùng `DHDL_*`)
+- Nitrit: Âm tính/Negative → option web `5120`
+- verify lại bằng store Get theo `phieukhamId`
+- xuất `CLS_import_result_*.xlsx` + cập nhật `tracking/cases.csv`

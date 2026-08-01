@@ -120,6 +120,7 @@ def api(token: str, path: str, method: str = "GET", body=None):
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
         "Accept": "application/json",
+        "SessionSiteId": "130",
     }
     for attempt in range(4):
         try:
@@ -286,6 +287,8 @@ def write_preview_excel(rows: list[dict], path: Path) -> None:
         "status_medinet",
         "medinet_MaPhieu",
         "medinet_NgayKham",
+        "medinet_phieukhamId",
+        "medinet_cdId",
         "parse_ok",
     ]
     for lab in LAB_COLS:
@@ -314,6 +317,8 @@ def write_preview_excel(rows: list[dict], path: Path) -> None:
             row.get("status_medinet"),
             row.get("medinet_MaPhieu"),
             row.get("medinet_NgayKham"),
+            row.get("medinet_phieukhamId"),
+            row.get("medinet_cdId"),
             "YES" if row.get("parse_ok") else "NO",
         ]
         for lab in LAB_COLS:
@@ -453,9 +458,12 @@ def main() -> int:
                 nk = rec.get("NgayKham") or ""
                 row["medinet_NgayKham"] = str(nk).split("T")[0]
                 row["medinet_phieukhamId"] = rec.get("phieukhamId") or rec.get("Id")
+                row["medinet_cdId"] = rec.get("cdId") or ""
             else:
                 row["medinet_MaPhieu"] = ""
                 row["medinet_NgayKham"] = ""
+                row["medinet_phieukhamId"] = ""
+                row["medinet_cdId"] = ""
     else:
         for row in rows:
             row.setdefault("status_medinet", "NOT_CHECKED")
