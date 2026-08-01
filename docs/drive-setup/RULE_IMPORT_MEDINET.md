@@ -42,3 +42,26 @@ build for Supper Data/
 - `IMPORTED` — đã import xong, skip
 - `SKIP_ALREADY_CLS` — web đã có CLS, ghi Excel kiểm tra
 - `ERROR` — lỗi parse/import
+
+## Phase B — chạy trên laptop
+
+### B1. Tạo Excel preview (làm trước, bắt buộc)
+```powershell
+cd C:\Users\thais\ADMIN
+git pull origin cursor/drive-hourly-pipeline-df0f
+powershell -ExecutionPolicy Bypass -File .\pipeline\run_phase_b_preview.ps1
+```
+
+Test 20 file trước:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\pipeline\run_phase_b_preview.ps1 -Limit 20
+```
+
+Output:
+- `G:\Drive của tôi\build for Supper Data\excel_preview\CLS_preview_*.xlsx`
+- `G:\Drive của tôi\build for Supper Data\missing_or_updated\missing_or_updated_*.xlsx`
+
+Cột quan trọng trong Excel: `*_web` / `*_unit_web` / `*_note` (đã map Âm tính→Negative, đổi đơn vị).
+
+### B2. Import lên web
+Chỉ chạy sau khi bạn duyệt Excel preview OK. (Script import sẽ bổ sung ngay sau khi bạn xác nhận số liệu.)
