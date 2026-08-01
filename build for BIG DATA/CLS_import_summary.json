@@ -1,0 +1,11 @@
+{
+  "total": 1287,
+  "ok": 201,
+  "skip_filled": 886,
+  "not_found": 199,
+  "pdf_missing": 1,
+  "errors": 0,
+  "issues": 1086,
+  "ok_M3": 120,
+  "ok_M4": 81
+}
