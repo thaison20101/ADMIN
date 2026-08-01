@@ -4,7 +4,8 @@
     "inbox_folder": "INBOX_CLS",
     "processed_folder": "PROCESSED",
     "error_folder": "ERROR",
-    "local_sync_root": "C:/Users/Administrator/Google Drive/PKDK_Thuankieu_Pipeline"
+    "local_sync_root": "G:/Drive của tôi/PKDK_Thuankieu_Pipeline",
+    "build_root": "G:/Drive của tôi/build for Supper Data"
   },
   "tracking": {
     "cases_csv": "tracking/cases.csv",
@@ -16,12 +17,24 @@
   "medinet": {
     "base_url": "https://quanlyskcd.medinet.org.vn",
     "api_base": "https://be-qlskcd.medinet.org.vn",
+    "login_path": "/account/login",
     "date_from": "01/07/2026",
     "date_to": "31/07/2026",
-    "note": "Credentials must be set via env MEDINET_USER / MEDINET_PASS, never commit."
+    "note": "Set MEDINET_USER / MEDINET_PASS in environment. Do not commit secrets."
+  },
+  "routing": {
+    "m4_birth_year_max": 1967,
+    "m3_menu": "Khám sức khỏe -> Người từ đủ 18-59 tuổi (M3)",
+    "m4_menu": "Khám sức khỏe -> Người cao tuổi (M4)",
+    "m3_loai_kham": "Khám định kỳ",
+    "m3_forbid": "Khám tuyển"
   },
   "import_rules": {
     "enabled": false,
-    "note": "Sẽ bổ sung sau khi bạn chốt yêu cầu import lên web."
+    "form": "Khám cận lâm sàng",
+    "urine_negative_map": { "Âm tính": "Negative" },
+    "count_suffix_hash": true,
+    "preview_excel_before_import": true,
+    "note": "See docs/drive-setup/RULE_IMPORT_MEDINET.md"
   }
 }

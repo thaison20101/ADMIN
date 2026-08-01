@@ -160,6 +160,16 @@ def resolve_inbox_dirs(cfg: dict) -> tuple[Path, Path, Path]:
     return inbox, processed, error
 
 
+def ensure_build_dirs(cfg: dict) -> Path:
+    build = Path(
+        cfg.get("drive", {}).get("build_root")
+        or r"G:\Drive của tôi\build for Supper Data"
+    )
+    for sub in ("logs", "excel_preview", "missing_or_updated", "cases_snapshot"):
+        (build / sub).mkdir(parents=True, exist_ok=True)
+    return build
+
+
 def check_admin_info(case: dict) -> tuple[bool | None, str]:
     """Hook: check Medinet whether administrative info exists.
 
@@ -311,11 +321,13 @@ def main() -> int:
     cfg = load_config()
     cases_path = Path(args.cases)
     inbox, processed, error = resolve_inbox_dirs(cfg)
+    build = ensure_build_dirs(cfg)
 
     print(f"Config: {cfg['_config_path']}")
     print(f"Inbox: {inbox}")
     print(f"Processed: {processed}")
     print(f"Error: {error}")
+    print(f"Build: {build}")
 
     rows = read_cases(cases_path)
     added = register_new_files(inbox, rows)
