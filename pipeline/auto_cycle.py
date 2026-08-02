@@ -27,6 +27,7 @@ from medinet_api import (  # noqa: E402
     get_cls,
     insert_cls,
     labs_to_form_payload,
+    load_cls_view,
     verify_cls_saved,
     web_cls_looks_incomplete,
 )
@@ -278,7 +279,7 @@ def run_auto_cycle(
             # List says already has CLS — during repair/force fall through so we
             # can still fill missing urine (Âm tính→Negative) / Urê / etc.
             existing_early, token_box["t"] = (
-                get_cls(token_box["t"], pid, reauth=reauth) if pid else (None, token_box["t"])
+                load_cls_view(token_box["t"], pid, reauth=reauth) if pid else (None, token_box["t"])
             )
             if not cls_has_lab_values(existing_early):
                 st = "READY_IMPORT"
@@ -301,7 +302,7 @@ def run_auto_cycle(
             stats["waiting_admin"] += 1
             continue
 
-        existing, token_box["t"] = get_cls(token_box["t"], pid, reauth=reauth)
+        existing, token_box["t"] = load_cls_view(token_box["t"], pid, reauth=reauth)
         has_cls = cls_has_lab_values(existing)
 
         # Build payload early so repair can detect incomplete urine/chemistry
@@ -395,19 +396,15 @@ def run_auto_cycle(
         row["import_attempts"] = str(attempts)
         msg = f"{msg}; {vdetail}"
 
-        # Re-check web after save: urine/chemistry from PDF must land
-        existing2, token_box["t"] = get_cls(token_box["t"], pid, reauth=reauth)
+        # Re-check web after save via Get+FormViewer (Get alone often omits Urobilinogen)
+        existing2, token_box["t"] = load_cls_view(token_box["t"], pid, reauth=reauth)
         # Ignore urine fields Medinet rejected during progressive retry
         dropped = []
         dm = re.search(r"dropped=([^:;]+)", msg or "")
         if dm:
             dropped = [x.strip() for x in dm.group(1).split(",") if x.strip()]
         check_payload = {k: v for k, v in payload.items() if k not in dropped}
-        still_missing = [
-            k
-            for k in cls_missing_lab_fields(existing2, check_payload)
-            if k != "SinhHoaMau_Ure"  # PDF thuong khong co Ure
-        ]
+        still_missing = cls_missing_lab_fields(existing2, check_payload)
         urine_ok = not cls_urine_incomplete(existing2, check_payload)
         partial_bad = ("SET-no-urine-text" in (msg or "")) or ("SET-urine-all-dropped" in (msg or ""))
 

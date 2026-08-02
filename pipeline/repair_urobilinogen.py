@@ -23,6 +23,7 @@ from medinet_api import (  # noqa: E402
     get_cls,
     insert_cls,
     labs_to_form_payload,
+    load_cls_view,
     verify_cls_saved,
 )
 from pdf_extract import extract_pdf  # noqa: E402
@@ -130,7 +131,7 @@ def main() -> int:
             safe_print(f"[{i}] NO_MATCH {data.get('ho_ten')} {pdf.name}")
             continue
 
-        row, token = get_cls(token, pid, reauth=reauth)
+        row, token = load_cls_view(token, pid, reauth=reauth)
         got = (row or {}).get("NuocTieu_Urobilinogen")
         # Still repair if web empty OR web has raw 0.2 (sai đơn vị)
         need = False
@@ -168,7 +169,7 @@ def main() -> int:
         ok, msg, _raw, token = insert_cls(token, payload, reauth=reauth)
         time.sleep(0.15)
         verified, vdetail, token = verify_cls_saved(token, pid, payload=payload, reauth=reauth)
-        row2, token = get_cls(token, pid, reauth=reauth)
+        row2, token = load_cls_view(token, pid, reauth=reauth)
         got2 = (row2 or {}).get("NuocTieu_Urobilinogen")
         if ok and got2 not in (None, ""):
             fixed += 1

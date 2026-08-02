@@ -22,6 +22,7 @@ from medinet_api import (  # noqa: E402
     authenticate,
     get_cls,
     labs_to_form_payload,
+    load_cls_view,
 )
 from pdf_extract import extract_pdf  # noqa: E402
 from phase_b_preview import build_root, fetch_unit_index, load_config, match_patient  # noqa: E402
@@ -110,19 +111,30 @@ def main() -> int:
             missing_rows.append(f"NO_TTHC\t{data.get('ho_ten')}\t{pdf.name}\tPDF={uro_val}")
             continue
 
-        row, token = get_cls(token, pid)
+        row, token = load_cls_view(token, pid)
         got = (row or {}).get("NuocTieu_Urobilinogen")
         payload = labs_to_form_payload(labs, phieukham_id=pid, gioi_tinh=data.get("gioi_tinh") or "")
         sent = payload.get("NuocTieu_Urobilinogen")
+        note = (labs.get("Urobilinogen") or {}).get("convert_note") or ""
 
         if got in (None, ""):
             web_missing += 1
             missing_rows.append(
-                f"WEB_MISSING\t{data.get('ho_ten')}\tpid={pid}\tPDF={uro_val}\tsent={sent}\t{pdf.name}"
+                f"WEB_MISSING\t{data.get('ho_ten')}\tpid={pid}\tPDF={uro_val}\tsent={sent}\t{note}\t{pdf.name}"
             )
-            safe_print(f"[{i}] THIEU web: {data.get('ho_ten')} pid={pid} PDF={uro_val}")
+            safe_print(f"[{i}] THIEU web: {data.get('ho_ten')} pid={pid} PDF={uro_val} sent={sent} {note}")
         else:
             web_ok += 1
+            try:
+                if float(str(got).replace(",", ".")) < 1.5 and float(str(sent).replace(",", ".")) >= 1.5:
+                    web_missing += 1
+                    web_ok -= 1
+                    missing_rows.append(
+                        f"WEB_WRONG_UNIT\t{data.get('ho_ten')}\tpid={pid}\tweb={got}\tsent={sent}\t{pdf.name}"
+                    )
+                    safe_print(f"[{i}] SAI DON VI web={got} can={sent} {data.get('ho_ten')} pid={pid}")
+            except Exception:
+                pass
 
     safe_print("")
     safe_print("========== TOM TAT UROBILINOGEN ==========")

@@ -312,11 +312,14 @@ def cls_missing_lab_fields(existing: dict | None, payload: dict) -> list[str]:
         return [
             k
             for k in payload
-            if k in NUMBER_FIELDS or k in URINE_TEXT_FIELDS or k == "NuocTieu_NiTrit"
+            if (k in NUMBER_FIELDS or k in URINE_TEXT_FIELDS or k == "NuocTieu_NiTrit")
+            and k != "SinhHoaMau_Ure"
         ]
     missing = []
     for k, sent in payload.items():
         if k not in NUMBER_FIELDS and k not in URINE_TEXT_FIELDS and k != "NuocTieu_NiTrit":
+            continue
+        if k == "SinhHoaMau_Ure":
             continue
         got = existing.get(k)
         if got in (None, ""):
@@ -342,48 +345,17 @@ def cls_urine_incomplete(existing: dict | None, payload: dict) -> bool:
 
 
 def web_cls_looks_incomplete(existing: dict | None, payload: dict | None = None) -> bool:
-    """Heuristic: blood present but urine panel still largely blank on web.
+    """True only when PDF payload fields are missing on web.
 
-    Prefer payload-based gaps (cls_missing_lab_fields). Do NOT treat missing
-    Urê as incomplete — Thuận Kiều PDFs often have no Urea line.
+    Do not guess from Get alone (Get often omits NuocTieu_Urobilinogen even when
+    the form has it). Urea is never required.
     """
     if not existing or not cls_has_lab_values(existing):
         return False
-
-    def _empty(key: str) -> bool:
-        return existing.get(key) in (None, "")
-
-    # If we know what PDF sent: only those fields count as gaps
-    if payload:
-        miss = cls_missing_lab_fields(existing, payload)
-        # Ignore Urea — usually absent from PDF / not required
-        miss = [k for k in miss if k != "SinhHoaMau_Ure"]
-        return bool(miss)
-
-    urine_markers = (
-        "NuocTieu_BC",
-        "NuocTieu_HC",
-        "NuocTieu_Protein",
-        "NuocTieu_Duong",
-        "NuocTieu_Cetonic",
-        "NuocTieu_Bilirubin",
-        "NuocTieu_Urobilinogen",
-        "NuocTieu_TiTrong",
-        "NuocTieu_pH",
-    )
-    empty_urine = sum(1 for k in urine_markers if _empty(k))
-    if empty_urine >= 3:
-        return True
-
-    # Half-filled urine: e.g. Negatives present but Urobilinogen blank
-    urine_filled = sum(1 for k in urine_markers if not _empty(k))
-    if urine_filled >= 2 and _empty("NuocTieu_Urobilinogen"):
-        return True
-
-    # Glucose blank while other chem present (Urea alone is OK / often N/A)
-    if _empty("SinhHoaMau_DuongMau") and not _empty("SinhHoaMau_Creatinin"):
-        return True
-    return False
+    if not payload:
+        return False
+    miss = cls_missing_lab_fields(existing, payload)
+    return bool(miss)
 
 
 def get_cls(token: str, phieukham_id: int | str, reauth=None) -> tuple[dict | None, str]:
@@ -397,6 +369,46 @@ def get_cls(token: str, phieukham_id: int | str, reauth=None) -> tuple[dict | No
     )
     rows = ((d or {}).get("result") or {}).get("data") or []
     return (rows[0] if rows else None), token
+
+
+def get_formviewer_cls(token: str, phieukham_id: int | str, reauth=None) -> tuple[dict | None, str]:
+    """Web form path — use together with Get for urine field presence."""
+    s, d, token = api(
+        token,
+        f"/api/services/app/FormViewer/FormViewerData?form_id={CLS_FORM_ID}"
+        f"&SessionSiteId={SITE_ID}&UrlPage=",
+        "POST",
+        to_fparams({"phieukhamId": phieukham_id}),
+        reauth=reauth,
+    )
+    fd = (((d or {}).get("result") or {}).get("data") or {}).get("formData") or []
+    return (fd[0] if fd else None), token
+
+
+def merge_cls_rows(*rows: dict | None) -> dict:
+    out: dict = {}
+    for row in rows:
+        if not row:
+            continue
+        for k, v in row.items():
+            if v in (None, ""):
+                continue
+            if out.get(k) in (None, ""):
+                out[k] = v
+    # Keep empty keys from first row for markers
+    if rows and rows[0]:
+        for k, v in rows[0].items():
+            out.setdefault(k, v)
+    return out
+
+
+def load_cls_view(token: str, phieukham_id: int | str, reauth=None) -> tuple[dict | None, str]:
+    """Merged Get + FormViewer row (best view of what the UI has)."""
+    row_g, token = get_cls(token, phieukham_id, reauth=reauth)
+    row_f, token = get_formviewer_cls(token, phieukham_id, reauth=reauth)
+    if not row_g and not row_f:
+        return None, token
+    return merge_cls_rows(row_g, row_f), token
 
 
 def cls_has_lab_values(row: dict | None) -> bool:
