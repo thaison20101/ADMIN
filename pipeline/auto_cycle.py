@@ -66,6 +66,23 @@ def _resolve_pdf(row: dict, inbox: Path, *extra_dirs: Path) -> Path | None:
     return None
 
 
+def _move_pdf(pdf: Path, dest_dir: Path, pid: str = "") -> Path | None:
+    """Move PDF into dest_dir; return new path or None."""
+    if not pdf or not pdf.exists():
+        return None
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / pdf.name
+        if dest.exists() and dest.resolve() != pdf.resolve():
+            dest = dest_dir / f"{pdf.stem}_{pid or 'x'}{pdf.suffix}"
+        if dest.resolve() == pdf.resolve():
+            return pdf
+        shutil.move(str(pdf), str(dest))
+        return dest
+    except Exception:
+        return None
+
+
 def run_auto_cycle(
     *,
     dry_run: bool = False,
@@ -89,8 +106,36 @@ def run_auto_cycle(
 
     rows = read_cases(cases_path)
     added = register_new_files(inbox, rows)
+    # Also pick up PDFs stuck in ERROR from older failed runs
+    added_err = register_new_files(error_dir, rows)
+    requeued_err = 0
+    for r in rows:
+        src = (r.get("source_file") or "").replace("\\", "/")
+        st = (r.get("status") or "").upper()
+        in_error = "/ERROR/" in f"/{src}/" or src.rstrip("/").endswith("/ERROR")
+        if added_err and (r.get("notes") or "") == "registered_from_inbox" and "ERROR" in src:
+            r["notes"] = "registered_from_error"
+            r["status"] = "READY_IMPORT"
+            r["import_attempts"] = "0"
+            requeued_err += 1
+        elif repair and st in {"ERROR_IMPORT", "ERROR", "PARSE_ERROR"}:
+            # Give failed / unreadable PDFs another pass each repair hour
+            r["status"] = "READY_IMPORT" if st != "PARSE_ERROR" else st
+            if st in {"ERROR_IMPORT", "ERROR"}:
+                r["import_attempts"] = "0"
+                r["notes"] = f"requeue_error:{r.get('notes') or ''}"[:200]
+                requeued_err += 1
+        elif repair and st in {"IMPORTED", "SKIP_ALREADY_CLS"} and in_error:
+            # Already done on web but PDF still sitting in ERROR — tidy up
+            pdf_path = Path(r.get("source_file") or "")
+            moved = _move_pdf(pdf_path, processed, pid=r.get("ma_phieu") or "")
+            if moved:
+                r["source_file"] = str(moved)
+                r["notes"] = f"moved_error_to_processed;{r.get('notes') or ''}"[:200]
+    if requeued_err:
+        safe_print(f"Re-queued / tidy from ERROR: {requeued_err}")
     safe_print(f"Inbox: {inbox}")
-    safe_print(f"New files registered: {added}")
+    safe_print(f"New files registered: {added} (inbox) + {added_err} (error)")
 
     max_per_run = int(cfg.get("import_rules", {}).get("max_imports_per_run", 80))
     if repair:
@@ -328,23 +373,21 @@ def run_auto_cycle(
             result_row.update({"import_status": "IMPORTED", "message": msg, "verified": "YES"})
             stats["imported"] += 1
             imported_n += 1
-            try:
-                under_inbox = inbox.resolve() in pdf.resolve().parents or pdf.parent.resolve() == inbox.resolve()
-            except Exception:
-                under_inbox = str(inbox) in str(pdf)
-            if pdf.exists() and under_inbox:
-                try:
-                    dest = processed / pdf.name
-                    if dest.exists():
-                        dest = processed / f"{pdf.stem}_{pid}{pdf.suffix}"
-                    shutil.move(str(pdf), str(dest))
-                    row["source_file"] = str(dest)
-                except Exception as e:
-                    row["notes"] = f"imported_but_move_failed:{e}"[:200]
+            # Always move to PROCESSED (including PDFs previously stuck in ERROR)
+            moved = _move_pdf(pdf, processed, pid=pid)
+            if moved:
+                row["source_file"] = str(moved)
+            elif pdf.exists():
+                row["notes"] = f"{row['notes']};move_to_processed_failed"[:200]
             safe_print(f"  IMPORTED {data.get('ho_ten')} pid={pid} fields={fields_sent}")
         else:
             max_attempts = int(cfg.get("tracking", {}).get("max_import_attempts", 5))
-            row["status"] = "ERROR_IMPORT" if attempts >= max_attempts else "READY_IMPORT"
+            # repair: keep retrying instead of parking forever in ERROR
+            if repair:
+                row["status"] = "READY_IMPORT"
+                row["import_attempts"] = "0"
+            else:
+                row["status"] = "ERROR_IMPORT" if attempts >= max_attempts else "READY_IMPORT"
             row["notes"] = f"import_fail:{msg}"[:200]
             result_row.update(
                 {
@@ -354,16 +397,11 @@ def run_auto_cycle(
                 }
             )
             stats["error_import"] += 1
-            # During repair keep PDF in place for next hourly retry
+            # Hard fail only (non-repair): park PDF in ERROR for visibility
             if (not repair) and row["status"] == "ERROR_IMPORT" and pdf.exists():
-                try:
-                    dest = error_dir / pdf.name
-                    if dest.exists():
-                        dest = error_dir / f"{pdf.stem}_{pid}{pdf.suffix}"
-                    shutil.move(str(pdf), str(dest))
-                    row["source_file"] = str(dest)
-                except Exception:
-                    pass
+                moved = _move_pdf(pdf, error_dir, pid=pid)
+                if moved:
+                    row["source_file"] = str(moved)
             safe_print(f"  ERROR {data.get('ho_ten')} pid={pid} msg={msg}")
 
         results.append(result_row)
