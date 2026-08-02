@@ -24,6 +24,7 @@ from medinet_api import (  # noqa: E402
     get_cls,
     insert_cls,
     labs_to_form_payload,
+    verify_cls_saved,
 )
 from pdf_extract import extract_pdf  # noqa: E402
 from phase_b_import import write_result_excel  # noqa: E402
@@ -147,7 +148,16 @@ def run_auto_cycle(
             stats["waiting_admin"] += 1
             continue
 
-        pid = str((rec or {}).get("phieukhamId") or (rec or {}).get("Id") or "")
+        # IMPORTANT: UI opens by phieukhamId — never use cdId as save key
+        pid = rec.get("phieukhamId") if rec else None
+        if pid in (None, ""):
+            pid = rec.get("Id") if rec else None
+        cdid = rec.get("cdId") if rec else None
+        # Guard: cdId must not be mistaken for phieukhamId
+        if rec and cdid not in (None, "") and pid not in (None, "") and int(pid) == int(cdid):
+            # extremely rare; keep phieukhamId field explicitly
+            pid = rec.get("phieukhamId") or pid
+        pid = str(pid or "")
         if rec:
             row["ma_phieu"] = rec.get("MaPhieu") or row.get("ma_phieu") or ""
             row["has_admin_info"] = "YES"
@@ -188,6 +198,8 @@ def run_auto_cycle(
             gioi_tinh=data.get("gioi_tinh") or "",
         )
         payload["LoaiKham"] = 5152
+        if cdid not in (None, ""):
+            payload["cdId"] = int(cdid)
         fields_sent = len([k for k in payload if k in LAB_TO_FORM.values()])
 
         result_row = {
@@ -197,6 +209,7 @@ def run_auto_cycle(
             "mau_kham": data.get("mau_kham"),
             "medinet_MaPhieu": row.get("ma_phieu"),
             "phieukhamId": pid,
+            "cdId": cdid or "",
             "fields_sent": fields_sent,
         }
 
@@ -209,13 +222,15 @@ def run_auto_cycle(
             continue
 
         ok, msg, _raw, token_box["t"] = insert_cls(token_box["t"], payload, reauth=reauth)
-        time.sleep(0.12)
-        after, token_box["t"] = get_cls(token_box["t"], pid, reauth=reauth)
-        verified = cls_has_lab_values(after)
+        time.sleep(0.15)
+        verified, vdetail, token_box["t"] = verify_cls_saved(
+            token_box["t"], pid, payload=payload, reauth=reauth
+        )
         attempts = int(row.get("import_attempts") or 0) + 1
         row["import_attempts"] = str(attempts)
+        msg = f"{msg}; {vdetail}"
 
-        if verified and fields_sent > 0:
+        if ok and verified and fields_sent > 0:
             row["status"] = "IMPORTED"
             row["imported_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             row["notes"] = msg or "imported"

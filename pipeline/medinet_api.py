@@ -308,6 +308,50 @@ def cls_has_lab_values(row: dict | None) -> bool:
     return any(row.get(k) not in (None, "") for k in markers)
 
 
+def verify_cls_saved(
+    token: str,
+    phieukham_id: int | str,
+    payload: dict | None = None,
+    reauth=None,
+) -> tuple[bool, str, str]:
+    """Confirm CLS is readable on the same phieukhamId the UI uses.
+
+    Returns (ok, detail, token).
+    """
+    row, token = get_cls(token, phieukham_id, reauth=reauth)
+    if not cls_has_lab_values(row):
+        return False, "Get(phieukhamId) empty", token
+
+    # Spot-check a value we sent (avoid false IMPORTED on wrong id)
+    if payload:
+        for key in ("CongThucMau_SLBC", "XNM_HuyetSacTo", "CongThucMau_SLHC"):
+            if key in payload and payload[key] not in (None, ""):
+                got = row.get(key)
+                if got in (None, ""):
+                    return False, f"missing {key} after save", token
+                try:
+                    if abs(float(got) - float(payload[key])) > 0.001:
+                        return False, f"mismatch {key}: sent={payload[key]} got={got}", token
+                except Exception:
+                    if str(got) != str(payload[key]):
+                        return False, f"mismatch {key}: sent={payload[key]} got={got}", token
+                break
+
+    # Also confirm FormViewer path (same as web form)
+    s, d, token = api(
+        token,
+        f"/api/services/app/FormViewer/FormViewerData?form_id={CLS_FORM_ID}"
+        f"&SessionSiteId={SITE_ID}&UrlPage=",
+        "POST",
+        to_fparams({"phieukhamId": phieukham_id}),
+        reauth=reauth,
+    )
+    fd = (((d or {}).get("result") or {}).get("data") or {}).get("formData") or []
+    if not fd or not cls_has_lab_values(fd[0]):
+        return False, "FormViewerData empty after save", token
+    return True, "verified Get+FormViewer", token
+
+
 def _set_cls(token: str, payload: dict, reauth=None):
     s, d, token = api(
         token,
