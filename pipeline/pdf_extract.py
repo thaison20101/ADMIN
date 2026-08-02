@@ -218,12 +218,22 @@ def normalize_for_web(labs: dict) -> dict:
         note = ""
         vnorm, unorm = val, unit
 
-        # Urine qualitative
-        if key.endswith("_NT") or key in ("Ketone", "Nitrite", "Mau_NT", "Bach_cau_NT", "Glucose_NT", "Protein_NT", "Bilirubin_NT"):
-            if re.search(r"âm\s*tính", str(val), re.I):
+        # Urine qualitative — web TextBox only accepts number or exact "Negative"
+        if key.endswith("_NT") or key in (
+            "Ketone",
+            "Nitrite",
+            "Urobilinogen",
+            "Mau_NT",
+            "Bach_cau_NT",
+            "Glucose_NT",
+            "Protein_NT",
+            "Bilirubin_NT",
+        ):
+            if re.search(r"âm\s*tính", str(val), re.I) or re.fullmatch(r"negative|neg", str(val), re.I):
                 vnorm, unorm, note = "Negative", "", "map Âm tính→Negative"
-            elif re.search(r"\(\s*\+\s*\)", str(val)):
-                vnorm, unorm, note = "( + )", unit, "giữ dương tính dạng web"
+            elif re.search(r"\(\s*\+\s*\)", str(val)) or re.search(r"dương\s*tính|positive", str(val), re.I):
+                # Do not send "( + )" — Medinet rejects it. Leave blank for import skip.
+                vnorm, unorm, note = "", unit, "dương tính qualitative — bỏ qua (web chỉ nhận số/Negative)"
             out[key] = {
                 "value_raw": val,
                 "unit_raw": unit,

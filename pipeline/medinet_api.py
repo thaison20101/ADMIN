@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -161,6 +162,46 @@ def map_nitrit(val) -> int | None:
     return None
 
 
+# Medinet urine TextBox fields: only number or exact "Negative"
+URINE_TEXT_FIELDS = {
+    "NuocTieu_TiTrong",
+    "NuocTieu_pH",
+    "NuocTieu_BC",
+    "NuocTieu_HC",
+    "NuocTieu_Protein",
+    "NuocTieu_Duong",
+    "NuocTieu_Cetonic",
+    "NuocTieu_Bilirubin",
+    "NuocTieu_Urobilinogen",
+    "NuocTieu_Khac",
+}
+
+
+def sanitize_urine_text(val) -> str | float | None:
+    """Return value allowed by Medinet urine TextBox, else None (skip field)."""
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s:
+        return None
+    sl = s.lower()
+    # negative variants → exact Negative
+    if (
+        sl == "negative"
+        or "âm tính" in sl
+        or "am tinh" in sl
+        or sl in {"neg", "-", "âm", "am"}
+    ):
+        return "Negative"
+    # qualitative positive without concentration → skip (web rejects "( + )")
+    if re.search(r"\(\s*\+\s*\)", s) or sl in {"positive", "pos", "+", "dương tính", "duong tinh"}:
+        return None
+    num = _to_number(s)
+    if num is not None:
+        return num
+    return None
+
+
 def labs_to_form_payload(labs: dict, *, phieukham_id: int | str, gioi_tinh: str = "") -> dict:
     """Build formData for Khám định kỳ CLS. Never maps to DHDL_ (Khám tuyển) fields."""
     payload = {
@@ -187,6 +228,11 @@ def labs_to_form_payload(labs: dict, *, phieukham_id: int | str, gioi_tinh: str 
             num = _to_number(val)
             if num is not None:
                 payload[form_key] = num
+            continue
+        if form_key in URINE_TEXT_FIELDS:
+            cleaned = sanitize_urine_text(val)
+            if cleaned is not None:
+                payload[form_key] = cleaned
             continue
         payload[form_key] = str(val)
     return payload
