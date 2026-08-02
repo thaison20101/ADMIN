@@ -19,7 +19,7 @@ if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "P@ssw0rd" }
 
 Write-Host ""
 Write-Host "############################################################"
-Write-Host "#  RASOAT + REPAIR + IMPORT TOAN BO                       #"
+Write-Host "#  RASOAT + REPAIR + IMPORT + TU DONG QUET MOI 1 GIO     #"
 Write-Host "############################################################"
 Write-Host ""
 
@@ -56,19 +56,29 @@ for ($round = 1; $round -le $maxRounds; $round++) {
   if ($queued -le 0) { break }
 }
 
-Write-Host "==== RASOAT LAI sau repair/import ===="
+Write-Host "==== 6/6 RASOAT LAI + BAT TU DONG QUET MOI 1 GIO ===="
 & python ".\pipeline\rasoat_toan_bo.py"
 $codeFinal = $LASTEXITCODE
 
+Write-Host "Cai / cap nhat Task Scheduler PKDK_Hourly_Sync (tu dong quet moi gio)..."
+& powershell -ExecutionPolicy Bypass -File ".\pipeline\install_hourly_task.ps1"
+$codeTask = $LASTEXITCODE
+if ($codeTask -ne 0) {
+  Write-Host "WARN: chua cai duoc task (can Run as administrator). Import/repair o tren van da chay."
+  Write-Host "Mo PowerShell Admin roi chay: .\pipeline\install_hourly_task.ps1"
+}
+
 Write-Host ""
 Write-Host "========== XONG =========="
+Write-Host "Da: rasoat + repair uro + import TTHC + bat quet tu dong moi 1 gio."
 Write-Host "Xem list:"
 Write-Host "  build for Supper Data\excel_preview\rasoat_thieu_urobilinogen.txt"
 Write-Host "  build for Supper Data\excel_preview\rasoat_tthc_chua_import.txt"
-Write-Host ("Exit audit={0} uro={1} import={2} final={3}" -f $codeAudit, $codeUro, $codeImp, $codeFinal)
-Write-Host "Muc tieu: Web THIEU Uro ~0 va Chua import CLS giam dan."
+Write-Host "Task: Get-ScheduledTask -TaskName PKDK_Hourly_Sync"
+Write-Host ("Exit audit={0} uro={1} import={2} final={3} task={4}" -f $codeAudit, $codeUro, $codeImp, $codeFinal, $codeTask)
 Write-Host "=========================="
 
+if ($codeTask -ne 0) { exit $codeTask }
 if ($codeFinal -ne 0) { exit $codeFinal }
 if ($codeUro -ne 0) { exit $codeUro }
 exit 0
