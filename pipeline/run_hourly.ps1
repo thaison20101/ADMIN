@@ -1,5 +1,5 @@
 # Windows hourly runner for Drive pipeline
-# Install once: .\pipeline\install_hourly_task.ps1
+# Installed by: .\pipeline\install_hourly_task.ps1  or  .\pipeline\CHAY_MOT_LAN.ps1
 
 $ErrorActionPreference = "Continue"
 $Repo = Split-Path -Parent $PSScriptRoot
@@ -15,6 +15,8 @@ try {
 if (-not (Test-Path ".\pipeline\config.local.json")) {
   Copy-Item ".\pipeline\config.example.json" ".\pipeline\config.local.json" -Force
 }
+
+& python ".\pipeline\ensure_config.py" | Out-Null
 
 $buildRootFile = Join-Path $env:TEMP "pkdk_build_root.txt"
 & python ".\pipeline\resolve_build_root.py" --out "$buildRootFile" | Out-Null
@@ -42,12 +44,13 @@ if ($logDirOk) {
   $log = Join-Path $LocalLogDir ("hourly-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
 }
 
-$env:MEDINET_USER = if ($env:MEDINET_USER) { $env:MEDINET_USER } else { "pkdkthuankieu" }
-$env:MEDINET_PASS = if ($env:MEDINET_PASS) { $env:MEDINET_PASS } else { "P@ssw0rd" }
+if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdkthuankieu" }
+if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "P@ssw0rd" }
 
 Write-Host "BuildRoot: $BuildRoot"
-Write-Host "Running hourly_sync.py (auto register + import) ..."
-$out = & python ".\pipeline\hourly_sync.py" 2>&1
+Write-Host "Running hourly_sync.py --repair (import moi + sua thieu) ..."
+# --repair: PDF moi + ghi de form thieu nuoc tieu/Ure moi gio
+$out = & python ".\pipeline\hourly_sync.py" --repair 2>&1
 $code = $LASTEXITCODE
 $out | ForEach-Object { Write-Host $_ }
 try { $out | Out-File -FilePath $log -Encoding utf8 } catch {
@@ -59,7 +62,7 @@ try { $out | Out-File -FilePath $log -Encoding utf8 } catch {
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $snapDir = Join-Path $BuildRoot "cases_snapshot"
 if (Ensure-Dir $snapDir) {
-  Copy-Item ".\tracking\cases.csv" (Join-Path $snapDir "cases-$stamp.csv") -Force
+  Copy-Item ".\tracking\cases.csv" (Join-Path $snapDir "cases-$stamp.csv") -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "Log: $log"

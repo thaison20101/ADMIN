@@ -39,7 +39,9 @@ def main() -> int:
     rules = cfg.setdefault("import_rules", {})
     rules["enabled"] = True
     rules["auto_hourly"] = True
-    rules["max_imports_per_run"] = int(rules.get("max_imports_per_run") or 200)
+    # Enough headroom for hourly repair sweeps of incomplete CLS
+    cur = int(rules.get("max_imports_per_run") or 0)
+    rules["max_imports_per_run"] = max(cur, 200)
 
     CFG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     print("config OK", drive.get("local_sync_root"), "date_to=today")

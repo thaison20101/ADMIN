@@ -1,5 +1,5 @@
 # ============================================================
-# CHAY 1 LAN — pull code + repair import + bat hourly
+# CHAY TOAN BO 1 LAN + BAT LICH MOI 1 GIO
 #
 #   cd C:\Users\thais\ADMIN
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_MOT_LAN.ps1
@@ -34,9 +34,8 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "==== 3/5 pip deps ===="
 & python -m pip install -q -r ".\pipeline\requirements.txt"
 
-Write-Host "==== 4/5 REPAIR + IMPORT (co the mat nhieu phut) ===="
-Write-Host "Se ghi de cac case SKIP_ALREADY_CLS / IMPORTED bi THIEU (nuoc tieu, Ure, ...)"
-Write-Host "Am tinh PDF -> Negative tren web"
+Write-Host "==== 4/5 REPAIR + IMPORT TOAN BO (co the mat nhieu phut) ===="
+Write-Host "Import PDF moi + ghi de form thieu (nuoc tieu Am tinh->Negative, Ure, ...)"
 $out = & python ".\pipeline\hourly_sync.py" --repair 2>&1
 $code = $LASTEXITCODE
 $out | ForEach-Object { Write-Host $_ }
@@ -47,16 +46,17 @@ $log = Join-Path $logDir ("chay_mot_lan-" + (Get-Date -Format "yyyyMMdd-HHmmss")
 try { $out | Out-File -FilePath $log -Encoding utf8 } catch {}
 Write-Host "Repair exit: $code  log: $log"
 
-Write-Host "==== 5/5 cai Task Scheduler hourly ===="
+Write-Host "==== 5/5 BAT TASK MOI 1 GIO + CHAY NGAY ===="
 & powershell -ExecutionPolicy Bypass -File ".\pipeline\install_hourly_task.ps1"
 
 Write-Host ""
 Write-Host "========== XONG =========="
-Write-Host "1) Mo Excel moi nhat trong build for Supper Data\excel_preview\"
-Write-Host "2) Cot message khong con SET-no-urine-text; nuoc tieu = Negative"
-Write-Host "3) Tren web: Ctrl+F5 form Kham can lam sang"
-Write-Host "4) Sau nay: tha PDF vao INBOX_CLS + de laptop BAT"
-Write-Host "Task: PKDK_Hourly_Sync"
+Write-Host "Da chay repair 1 lan + cai PKDK_Hourly_Sync (moi 1 gio)."
+Write-Host "Laptop can BAT + dang nhap Windows de Task Scheduler chay."
+Write-Host "PDF moi: tha vao INBOX_CLS (Google Drive sync)."
+Write-Host "Excel: build for Supper Data\excel_preview\CLS_auto_import_*.xlsx"
+Write-Host "Kiem tra task:"
+Write-Host "  Get-ScheduledTask -TaskName PKDK_Hourly_Sync"
 Write-Host "=========================="
 
 if ($code -ne 0) { exit $code }

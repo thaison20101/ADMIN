@@ -122,12 +122,22 @@ def run_auto_cycle(
         if status == "PARSE_ERROR" and not repair:
             stats["skipped_parse"] += 1
             continue
-        if status == "IMPORTED" and not repair:
-            stats["skipped_imported"] += 1
-            continue
-        if status == "SKIP_ALREADY_CLS" and not repair:
-            stats["skipped_already"] += 1
-            continue
+        # Normal hourly: re-check SKIP/IMPORTED only when notes hint incomplete.
+        # Full --repair re-checks all of them.
+        if status in {"IMPORTED", "SKIP_ALREADY_CLS"} and not repair:
+            notes_peek = str(row.get("notes") or "")
+            if not any(
+                x in notes_peek
+                for x in (
+                    "incomplete",
+                    "SET-no-urine",
+                    "SET-urine-all",
+                    "import_fail",
+                    "queued_max",
+                )
+            ):
+                stats["skipped_imported" if status == "IMPORTED" else "skipped_already"] += 1
+                continue
         if status not in PENDING | {"IMPORTED", "SKIP_ALREADY_CLS", "PARSE_ERROR"}:
             continue
 
@@ -224,7 +234,8 @@ def run_auto_cycle(
             or (has_cls and bool(missing_on_web))
             or (has_cls and cls_urine_incomplete(existing, payload))
         )
-        force_this = force or (repair and needs_urine_fix)
+        # Hourly + repair: always overwrite when web CLS is incomplete vs PDF
+        force_this = force or needs_urine_fix
 
         if has_cls and not force_this:
             # Web already has complete-enough values — do not overwrite
@@ -236,12 +247,14 @@ def run_auto_cycle(
                 row["notes"] = "already_has_cls_get"
                 stats["skip_already_cls"] += 1
             continue
-        if repair and (not has_cls or needs_urine_fix):
+        if not has_cls or needs_urine_fix:
             why = "empty-on-web" if not has_cls else f"incomplete:{','.join(missing_on_web[:8]) or 'heuristic'}"
-            safe_print(f"  REPAIR {why} {row.get('ho_ten')} pid={pid}")
-            stats["repair_empty" if not has_cls else "repair_incomplete"] += 1
+            if repair or needs_urine_fix:
+                safe_print(f"  REPAIR {why} {row.get('ho_ten')} pid={pid}")
+                stats["repair_empty" if not has_cls else "repair_incomplete"] += 1
             row["status"] = "READY_IMPORT"
-            row["import_attempts"] = "0"
+            if needs_urine_fix:
+                row["import_attempts"] = "0"
 
         if imported_n >= max_per_run:
             row["status"] = "READY_IMPORT"
