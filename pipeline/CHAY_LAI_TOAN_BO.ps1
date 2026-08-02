@@ -1,8 +1,8 @@
 # ============================================================
-# QUET LAI TOAN BO: ERROR + case thieu truong (Urobilinogen, Ure, ...)
-# Import bo sung, roi chuyen PDF thanh cong sang PROCESSED.
+# QUET LAI TOAN BO (nhieu vong cho het hang doi)
 #
 #   cd C:\Users\thais\ADMIN
+#   git pull origin cursor/drive-hourly-pipeline-df0f
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_LAI_TOAN_BO.ps1
 # ============================================================
 
@@ -23,31 +23,58 @@ Write-Host "==== 1/4 git pull ===="
 git pull origin cursor/drive-hourly-pipeline-df0f
 if ($LASTEXITCODE -ne 0) { Write-Host "WARN: git pull failed - tiep tuc" }
 
+if (-not (Test-Path ".\pipeline\CHAY_LAI_TOAN_BO.ps1")) {
+  Write-Host "ERROR: van chua co file script. Kiem tra nhanh:"
+  Write-Host "  git branch --show-current"
+  Write-Host "  git checkout cursor/drive-hourly-pipeline-df0f"
+  Write-Host "  git pull origin cursor/drive-hourly-pipeline-df0f"
+  exit 1
+}
+
 Write-Host "==== 2/4 config + pip ===="
 & python ".\pipeline\ensure_config.py"
 & python -m pip install -q -r ".\pipeline\requirements.txt"
 
-Write-Host "==== 3/4 REPAIR TOAN BO (ERROR + thieu Urobilinogen/Ure/nuoc tieu) ===="
-Write-Host "Co the mat nhieu phut (~290 PDF trong ERROR + case thieu truong)..."
-$out = & python ".\pipeline\hourly_sync.py" --repair 2>&1
-$code = $LASTEXITCODE
-$out | ForEach-Object { Write-Host $_ }
-
+Write-Host "==== 3/4 REPAIR NHIEU VONG (toi da 8) ===="
+Write-Host "Moi vong toi da ~800 case. Neu con queued se chay vong tiep."
 $logDir = ".\pipeline\work\logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-$log = Join-Path $logDir ("chay_lai_toan_bo-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
-try { $out | Out-File -FilePath $log -Encoding utf8 } catch {}
-Write-Host "Exit: $code  log: $log"
+$code = 0
+$maxRounds = 8
+
+for ($i = 1; $i -le $maxRounds; $i++) {
+  Write-Host ""
+  Write-Host "----- VONG $i / $maxRounds -----"
+  $out = & python ".\pipeline\hourly_sync.py" --repair 2>&1
+  $code = $LASTEXITCODE
+  $out | ForEach-Object { Write-Host $_ }
+  $log = Join-Path $logDir ("chay_lai_toan_bo-r$i-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
+  try { $out | Out-File -FilePath $log -Encoding utf8 } catch {}
+  Write-Host "Vong $i exit=$code log=$log"
+
+  $text = ($out | Out-String)
+  $queued = 0
+  if ($text -match "'queued':\s*(\d+)") { $queued = [int]$Matches[1] }
+  $imported = 0
+  if ($text -match "'imported':\s*(\d+)") { $imported = [int]$Matches[1] }
+  Write-Host "Vong $i: imported=$imported queued=$queued"
+
+  if ($queued -le 0 -and $imported -le 0) {
+    Write-Host "Khong con hang doi / khong import them — dung."
+    break
+  }
+  if ($queued -le 0) {
+    Write-Host "Hang doi het — dung."
+    break
+  }
+}
 
 Write-Host "==== 4/4 dam bao task moi 1 gio ===="
 & powershell -ExecutionPolicy Bypass -File ".\pipeline\install_hourly_task.ps1"
 
 Write-Host ""
 Write-Host "========== XONG =========="
-Write-Host "Kiem tra BN QUACH XUAN HUONG (914619): Ctrl+F5 — Urobilinogen = 3.38"
-Write-Host "PDF OK se chuyen ERROR -> PROCESSED"
-Write-Host "Dem PROCESSED:"
-Write-Host '  (Get-ChildItem "G:\Drive cua toi\PKDK_Thuankieu_Pipeline\PROCESSED" -Filter *.pdf -File).Count'
+Write-Host "Kiem tra BN 914619 QUACH XUAN HUONG: Ctrl+F5 — Urobilinogen=3.38"
+Write-Host "PDF OK: ERROR -> PROCESSED"
 Write-Host "=========================="
-
 if ($code -ne 0) { exit $code }
