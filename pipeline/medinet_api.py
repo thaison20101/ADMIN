@@ -341,17 +341,24 @@ def cls_urine_incomplete(existing: dict | None, payload: dict) -> bool:
     return bool(miss)
 
 
-def web_cls_looks_incomplete(existing: dict | None) -> bool:
-    """Heuristic: blood present but typical urine/chem fields still blank on web.
+def web_cls_looks_incomplete(existing: dict | None, payload: dict | None = None) -> bool:
+    """Heuristic: blood present but urine panel still largely blank on web.
 
-    Catches false SKIP_ALREADY_CLS / partial imports (e.g. Nitrit filled but
-    Bạch cầu/Hồng cầu/Protein empty; Glucose filled but Urê empty).
+    Prefer payload-based gaps (cls_missing_lab_fields). Do NOT treat missing
+    Urê as incomplete — Thuận Kiều PDFs often have no Urea line.
     """
     if not existing or not cls_has_lab_values(existing):
         return False
 
     def _empty(key: str) -> bool:
         return existing.get(key) in (None, "")
+
+    # If we know what PDF sent: only those fields count as gaps
+    if payload:
+        miss = cls_missing_lab_fields(existing, payload)
+        # Ignore Urea — usually absent from PDF / not required
+        miss = [k for k in miss if k != "SinhHoaMau_Ure"]
+        return bool(miss)
 
     urine_markers = (
         "NuocTieu_BC",
@@ -368,19 +375,12 @@ def web_cls_looks_incomplete(existing: dict | None) -> bool:
     if empty_urine >= 3:
         return True
 
-    # Urine panel half-filled: e.g. Negative fields OK but Urobilinogen blank
+    # Half-filled urine: e.g. Negatives present but Urobilinogen blank
     urine_filled = sum(1 for k in urine_markers if not _empty(k))
-    if urine_filled >= 2 and (
-        _empty("NuocTieu_Urobilinogen")
-        or _empty("NuocTieu_BC")
-        or _empty("NuocTieu_HC")
-        or _empty("NuocTieu_Protein")
-    ):
+    if urine_filled >= 2 and _empty("NuocTieu_Urobilinogen"):
         return True
 
-    # Chemistry half-filled
-    if _empty("SinhHoaMau_Ure") and not _empty("SinhHoaMau_DuongMau"):
-        return True
+    # Glucose blank while other chem present (Urea alone is OK / often N/A)
     if _empty("SinhHoaMau_DuongMau") and not _empty("SinhHoaMau_Creatinin"):
         return True
     return False

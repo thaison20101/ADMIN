@@ -350,13 +350,18 @@ def main() -> int:
             if pdf.exists():
                 labs = extract_pdf(pdf).get("labs") or labs
 
-        # Guard: already has CLS — but still overwrite if incomplete (thiếu nước tiểu/Urê)
+        # Guard: already has CLS — overwrite if incomplete vs PDF (Urobilinogen, etc.)
+        # Urea: often absent on PDF — ignore as required field
         existing, token_box["t"] = get_cls(token_box["t"], pid, reauth=reauth)
         payload = labs_to_form_payload(labs, phieukham_id=pid, gioi_tinh=row.get("gioi_tinh") or "")
         payload["LoaiKham"] = 5152
         fields_sent = len([k for k in payload if k in LAB_TO_FORM.values()])
-        missing = cls_missing_lab_fields(existing, payload) if existing else []
-        incomplete = web_cls_looks_incomplete(existing) or bool(missing)
+        missing = [
+            k
+            for k in (cls_missing_lab_fields(existing, payload) if existing else [])
+            if k != "SinhHoaMau_Ure"
+        ]
+        incomplete = web_cls_looks_incomplete(existing, payload) or bool(missing)
         if cls_has_lab_values(existing) and not args.force and not incomplete:
             row.update(
                 {

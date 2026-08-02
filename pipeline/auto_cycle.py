@@ -275,8 +275,10 @@ def run_auto_cycle(
             payload["cdId"] = int(cdid)
         fields_sent = len([k for k in payload if k in LAB_TO_FORM.values()])
         missing_on_web = cls_missing_lab_fields(existing, payload) if has_cls else []
+        # Urea often absent on Thuận Kiều PDF — never block / force-repair for it alone
+        missing_on_web = [k for k in missing_on_web if k != "SinhHoaMau_Ure"]
         notes_prev = str(row.get("notes") or "")
-        looks_incomplete = has_cls and web_cls_looks_incomplete(existing)
+        looks_incomplete = has_cls and web_cls_looks_incomplete(existing, payload)
         needs_urine_fix = (
             "SET-no-urine-text" in notes_prev
             or "SET-urine-all-dropped" in notes_prev
@@ -352,13 +354,17 @@ def run_auto_cycle(
         if dm:
             dropped = [x.strip() for x in dm.group(1).split(",") if x.strip()]
         check_payload = {k: v for k, v in payload.items() if k not in dropped}
-        still_missing = cls_missing_lab_fields(existing2, check_payload)
+        still_missing = [
+            k
+            for k in cls_missing_lab_fields(existing2, check_payload)
+            if k != "SinhHoaMau_Ure"  # PDF thuong khong co Ure
+        ]
         urine_ok = not cls_urine_incomplete(existing2, check_payload)
         partial_bad = ("SET-no-urine-text" in (msg or "")) or ("SET-urine-all-dropped" in (msg or ""))
 
         if ok and verified and fields_sent > 0 and urine_ok and not partial_bad:
             if still_missing:
-                # Blood verified but some chem/urine still empty — keep retrying
+                # Blood verified but some chem/urine from PDF still empty — keep retrying
                 row["status"] = "READY_IMPORT"
                 row["notes"] = f"incomplete_after_save:{','.join(still_missing[:10])};{msg}"[:200]
                 result_row.update(
