@@ -50,11 +50,17 @@ URINE_SPECS = [
     ("Bach_cau_NT", r"Bạch\s*cầu"),
 ]
 
+# Âm tính / Am tinh / Negative / (+) / bare number
+_VAL_TOKEN = (
+    r"(?P<val>\(\s*\+\s*\)|Âm\s*t[íi]nh|Am\s*tinh|Positive|Negative|"
+    r"[<>]?\s*\d+(?:[.,]\d+)?)"
+)
 VALUE_RE = re.compile(
-    r"^(?P<val>\(\s*\+\s*\)|Âm\s*tính|Positive|Negative|[<>]?\s*\d+(?:[.,]\d+)?)\s*"
+    rf"^{_VAL_TOKEN}\s*"
     r"(?:\([^)]*\))?\s*(?P<unit>[A-Za-z%μµ^0-9/.\-]*)",
     re.I,
 )
+_AM_TINH_RE = re.compile(r"âm\s*t[íi]nh|am\s*tinh", re.I)
 
 
 def _norm_num(s: str) -> str:
@@ -143,18 +149,36 @@ def _parse_lab_line(line: str, name_pat: str) -> tuple[str, str] | None:
     rest = m.group(1).strip()
     # Prefer number / Am tinh / (+)
     vm = re.match(
-        r"^(?P<val>\(\s*\+\s*\)|Âm\s*tính|[<>]?\d+(?:[.,]\d+)?)\s*(?:\([^)]*\))?\s*(?P<unit>.*)$",
+        rf"^{_VAL_TOKEN}\s*(?:\([^)]*\))?\s*(?P<unit>.*)$",
         rest,
         re.I,
     )
     if not vm:
-        return None
-    val = vm.group("val")
-    val = re.sub(r"\s+", " ", val).strip()
+        # value may appear before unit words stuck together
+        vm2 = re.search(
+            r"(?P<val>\(\s*\+\s*\)|Âm\s*t[íi]nh|Am\s*tinh|Negative|[<>]?\d+(?:[.,]\d+)?)",
+            rest,
+            re.I,
+        )
+        if not vm2:
+            return None
+        val = re.sub(r"\s+", " ", vm2.group("val")).strip()
+        unit = ""
+    else:
+        val = re.sub(r"\s+", " ", vm.group("val")).strip()
+        unit = (vm.group("unit") or "").strip().split()[0] if (vm.group("unit") or "").strip() else ""
     if re.fullmatch(r"[<>]?\d+(?:[.,]\d+)?", val):
         val = _norm_num(val.lstrip("<>")) if not val.startswith(("<", ">")) else val[0] + _norm_num(val[1:])
-    unit = (vm.group("unit") or "").strip().split()[0] if (vm.group("unit") or "").strip() else ""
     return val, unit
+
+
+def _find_lab_in_text(section: str, pat: str) -> tuple[str, str] | None:
+    for line in section.splitlines():
+        if re.search(pat, line, re.I):
+            got = _parse_lab_line(line, pat)
+            if got:
+                return got
+    return None
 
 
 def parse_labs(text: str) -> dict:
@@ -165,36 +189,29 @@ def parse_labs(text: str) -> dict:
     for key, pat in LAB_LINE_SPECS:
         if key in ("Glucose", "Urea", "Creatinine", "AST", "ALT"):
             continue
-        for line in huyet.splitlines():
-            if re.search(pat, line, re.I):
-                got = _parse_lab_line(line, pat)
-                if got:
-                    labs[key] = {"value_raw": got[0], "unit_raw": got[1]}
-                break
+        got = _find_lab_in_text(huyet, pat)
+        if got:
+            labs[key] = {"value_raw": got[0], "unit_raw": got[1]}
 
-    # Chemistry from sinhhoa
+    # Chemistry — prefer sinhhoa; fall back to full body (minus urine) if missing
+    chem_body = sinhhoa if sinhhoa.strip() else huyet
+    chem_fallback = huyet + "\n" + sinhhoa
     for key, pat in [
-        ("Glucose", r"\bGlucose\b"),
-        ("Urea", r"\bUrea\b"),
-        ("Creatinine", r"\bCreatinine\b"),
+        ("Glucose", r"(?:\bGlucose\b|Đường\s*(?:huyết|máu)|Duong\s*(?:huyet|mau))"),
+        ("Urea", r"(?:\bUrea\b|Urê|Ure\b)"),
+        ("Creatinine", r"(?:\bCreatinine\b|Creatinin)"),
         ("AST", r"AST\s*\(?\s*SGOT\s*\)?"),
         ("ALT", r"ALT\s*\(?\s*SGPT\s*\)?"),
     ]:
-        for line in sinhhoa.splitlines():
-            if re.search(pat, line, re.I):
-                got = _parse_lab_line(line, pat)
-                if got:
-                    labs[key] = {"value_raw": got[0], "unit_raw": got[1]}
-                break
+        got = _find_lab_in_text(chem_body, pat) or _find_lab_in_text(chem_fallback, pat)
+        if got:
+            labs[key] = {"value_raw": got[0], "unit_raw": got[1]}
 
     # Urine
     for key, pat in URINE_SPECS:
-        for line in urine.splitlines():
-            if re.search(pat, line, re.I):
-                got = _parse_lab_line(line, pat)
-                if got:
-                    labs[key] = {"value_raw": got[0], "unit_raw": got[1]}
-                break
+        got = _find_lab_in_text(urine, pat)
+        if got:
+            labs[key] = {"value_raw": got[0], "unit_raw": got[1]}
     return labs
 
 
@@ -228,12 +245,20 @@ def normalize_for_web(labs: dict) -> dict:
             "Glucose_NT",
             "Protein_NT",
             "Bilirubin_NT",
+            "Ti_trong",
+            "pH_NT",
         ):
-            if re.search(r"âm\s*tính", str(val), re.I) or re.fullmatch(r"negative|neg", str(val), re.I):
+            if _AM_TINH_RE.search(str(val)) or re.fullmatch(r"negative|neg", str(val), re.I):
+                # PDF 'Âm tính' == web exact 'Negative'
                 vnorm, unorm, note = "Negative", "", "map Âm tính→Negative"
-            elif re.search(r"\(\s*\+\s*\)", str(val)) or re.search(r"dương\s*tính|positive", str(val), re.I):
+            elif re.search(r"\(\s*\+\s*\)", str(val)) or re.search(
+                r"d[uư][ơo]ng\s*t[íi]nh|positive", str(val), re.I
+            ):
                 # Do not send "( + )" — Medinet rejects it. Leave blank for import skip.
                 vnorm, unorm, note = "", unit, "dương tính qualitative — bỏ qua (web chỉ nhận số/Negative)"
+            else:
+                # numeric urine (pH, tỉ trọng, concentrations)
+                vnorm, unorm, note = val, unit, ""
             out[key] = {
                 "value_raw": val,
                 "unit_raw": unit,

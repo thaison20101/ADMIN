@@ -216,8 +216,29 @@ def sanitize_urine_text(val) -> str | float | None:
     return None
 
 
+def _lab_candidates(item) -> list:
+    """Ordered candidates for a lab value (web first, then raw)."""
+    if isinstance(item, dict):
+        out = []
+        for k in ("value_web", "value_raw"):
+            if k in item and item.get(k) not in (None, ""):
+                out.append(item.get(k))
+        # If value_web was explicitly empty but raw has Âm tính / number,
+        # still try raw (sanitize will drop illegal (+) positives).
+        if not out and item.get("value_raw") not in (None, ""):
+            out.append(item.get("value_raw"))
+        return out
+    if item in (None, ""):
+        return []
+    return [item]
+
+
 def labs_to_form_payload(labs: dict, *, phieukham_id: int | str, gioi_tinh: str = "") -> dict:
-    """Build formData for Khám định kỳ CLS. Never maps to DHDL_ (Khám tuyển) fields."""
+    """Build formData for Khám định kỳ CLS. Never maps to DHDL_ (Khám tuyển) fields.
+
+    Urine TextBox: PDF 'Âm tính' / 'Am tinh' → exact string 'Negative'.
+    Nitrit RadioGroup: int id 5120/5119 (never the string Negative).
+    """
     payload = {
         "LoaiKham": LOAI_KHAM_DINH_KY,
         "phieukhamId": int(phieukham_id),
@@ -225,61 +246,99 @@ def labs_to_form_payload(labs: dict, *, phieukham_id: int | str, gioi_tinh: str 
     }
     for lab_key, form_key in LAB_TO_FORM.items():
         item = labs.get(lab_key) or {}
-        if isinstance(item, dict):
-            # Prefer value_web when present (even if ""). Do NOT fall back to
-            # value_raw for urine — empty web means "skip", raw may be Âm tính/(+).
-            if "value_web" in item:
-                val = item.get("value_web")
-                if (val is None or val == "") and form_key not in URINE_TEXT_FIELDS and form_key != "NuocTieu_NiTrit":
-                    val = item.get("value_raw")
-            else:
-                val = item.get("value_raw")
-        else:
-            val = item
-        if val is None or val == "":
-            continue
+        candidates = _lab_candidates(item)
+
         if form_key == "NuocTieu_NiTrit":
-            # Set-store needs int id; "Negative" string fails convert-to-int
-            nit = map_nitrit(val)
+            nit = None
+            for c in candidates:
+                nit = map_nitrit(c)
+                if nit is not None:
+                    break
             if nit is None and isinstance(item, dict):
                 nit = map_nitrit(item.get("value_raw"))
             if nit is not None:
                 payload[form_key] = int(nit)
             continue
+
+        if form_key in URINE_TEXT_FIELDS:
+            cleaned = None
+            for c in candidates:
+                cleaned = sanitize_urine_text(c)
+                if cleaned is not None:
+                    break
+            # Hard fallback: raw Âm tính even when web was blanked
+            if cleaned is None and isinstance(item, dict):
+                cleaned = sanitize_urine_text(item.get("value_raw"))
+            if cleaned == "Negative" or isinstance(cleaned, (int, float)):
+                payload[form_key] = cleaned
+            continue
+
+        if not candidates:
+            continue
+        val = candidates[0]
+
         if form_key in NUMBER_FIELDS:
             num = _to_number(val)
+            if num is None and isinstance(item, dict):
+                num = _to_number(item.get("value_raw"))
             if num is not None:
                 payload[form_key] = num
             continue
-        if form_key in URINE_TEXT_FIELDS:
-            cleaned = sanitize_urine_text(val)
-            if cleaned is None and isinstance(item, dict):
-                # last chance: raw if web was weird, still sanitized
-                cleaned = sanitize_urine_text(item.get("value_raw"))
-            if cleaned is not None:
-                # final hard gate
-                if cleaned == "Negative" or isinstance(cleaned, (int, float)):
-                    payload[form_key] = cleaned
-            continue
+
         # unknown non-urine — only send if numeric
         num = _to_number(val)
         if num is not None:
             payload[form_key] = num
 
-    # Absolute scrub: never ship illegal urine text
+    # Absolute scrub: never ship illegal urine text (only number or "Negative")
     for k in list(payload.keys()):
         if k in URINE_TEXT_FIELDS:
             cleaned = sanitize_urine_text(payload[k])
-            if cleaned is None:
-                del payload[k]
-            else:
+            if cleaned == "Negative" or isinstance(cleaned, (int, float)):
                 payload[k] = cleaned
+            else:
+                del payload[k]
         elif k == "NuocTieu_NiTrit":
             try:
                 payload[k] = int(payload[k])
             except Exception:
                 del payload[k]
     return payload
+
+
+def cls_missing_lab_fields(existing: dict | None, payload: dict) -> list[str]:
+    """Lab fields present in payload but empty on the web Get/FormViewer row."""
+    if not existing:
+        return [
+            k
+            for k in payload
+            if k in NUMBER_FIELDS or k in URINE_TEXT_FIELDS or k == "NuocTieu_NiTrit"
+        ]
+    missing = []
+    for k, sent in payload.items():
+        if k not in NUMBER_FIELDS and k not in URINE_TEXT_FIELDS and k != "NuocTieu_NiTrit":
+            continue
+        got = existing.get(k)
+        if got in (None, ""):
+            missing.append(k)
+            continue
+        if k in URINE_TEXT_FIELDS and sent == "Negative":
+            gl = re.sub(r"\s+", " ", str(got).strip().lower())
+            if gl not in {"negative", "neg"} and not re.search(
+                r"âm\s*t[íi]nh|am\s*tinh", gl
+            ):
+                # web has unexpected non-negative text while we sent Negative
+                missing.append(k)
+    return missing
+
+
+def cls_urine_incomplete(existing: dict | None, payload: dict) -> bool:
+    """True when payload has urine values that are still empty on web."""
+    urine_keys = [k for k in payload if k in URINE_TEXT_FIELDS or k == "NuocTieu_NiTrit"]
+    if not urine_keys:
+        return False
+    miss = cls_missing_lab_fields(existing, {k: payload[k] for k in urine_keys})
+    return bool(miss)
 
 
 def get_cls(token: str, phieukham_id: int | str, reauth=None) -> tuple[dict | None, str]:
@@ -373,35 +432,98 @@ def _set_cls(token: str, payload: dict, reauth=None):
     return ok, msg or f"http={s}", res, token
 
 
+def _is_urine_format_error(msg: str) -> bool:
+    m = (msg or "").lower()
+    return (
+        "negative" in m
+        or "định dạng" in m
+        or "dinh dang" in m
+        or "nuoctieu" in m
+        or "nước tiểu" in m
+        or "nuoc tieu" in m
+    )
+
+
 def insert_cls(token: str, payload: dict, reauth=None) -> tuple[bool, str, dict, str]:
     """Save CLS via store Set (reliable). Returns (ok, message, raw_result, token).
 
-    Prefer KSKDK_Phieu_CanLamSang_Set with phieukhamId. On urine-format errors,
-    retry once with urine text fields stripped (keep blood + Nitrit id).
+    Prefer KSKDK_Phieu_CanLamSang_Set with phieukhamId.
+
+    On urine-format errors: keep blood + Nitrit, and retry urine TextBox fields
+    one-by-one so Âm tính→Negative values are still saved. Never treat
+    "strip all urine" as a full success (that left web missing nước tiểu).
     """
     if "phieukhamId" not in payload:
         return False, "missing phieukhamId", {}, token
 
-    ok, msg, res, token = _set_cls(token, payload, reauth=reauth)
+    # Ensure urine text is only number or exact "Negative" before first Set
+    clean = dict(payload)
+    for k in list(clean.keys()):
+        if k in URINE_TEXT_FIELDS:
+            cleaned = sanitize_urine_text(clean[k])
+            if cleaned == "Negative" or isinstance(cleaned, (int, float)):
+                clean[k] = cleaned
+            else:
+                del clean[k]
+        elif k == "NuocTieu_NiTrit":
+            try:
+                clean[k] = int(clean[k])
+            except Exception:
+                del clean[k]
+
+    ok, msg, res, token = _set_cls(token, clean, reauth=reauth)
     if ok:
         return True, msg or "SET ok", res, token
 
-    # Retry without risky urine text fields if format error
-    if "Negative" in msg or "định dạng" in msg.lower() or "dinh dang" in msg.lower():
-        trimmed = {
-            k: v
-            for k, v in payload.items()
-            if k not in URINE_TEXT_FIELDS
-        }
-        # keep Nitrit only if int
-        if "NuocTieu_NiTrit" in payload:
-            try:
-                trimmed["NuocTieu_NiTrit"] = int(payload["NuocTieu_NiTrit"])
-            except Exception:
-                pass
-        ok2, msg2, res2, token = _set_cls(token, trimmed, reauth=reauth)
-        if ok2:
-            return True, f"SET-no-urine-text:{msg2}", res2, token
-        return False, f"SET:{msg}; SET-retry:{msg2}", {"set": res, "retry": res2}, token
+    if not _is_urine_format_error(msg):
+        return False, f"SET:{msg}", res, token
 
-    return False, f"SET:{msg}", res, token
+    # Base: blood + chemistry + Nitrit (no urine text)
+    base = {k: v for k, v in clean.items() if k not in URINE_TEXT_FIELDS}
+    if "NuocTieu_NiTrit" in clean:
+        try:
+            base["NuocTieu_NiTrit"] = int(clean["NuocTieu_NiTrit"])
+        except Exception:
+            base.pop("NuocTieu_NiTrit", None)
+
+    urine_items = [(k, clean[k]) for k in URINE_TEXT_FIELDS if k in clean]
+    kept_urine: dict = {}
+    last_msg = msg
+    last_res = res
+
+    # Prefer Negative fields first (most common PDF value), then numbers
+    urine_items.sort(key=lambda kv: (0 if kv[1] == "Negative" else 1, kv[0]))
+
+    for uk, uv in urine_items:
+        trial = dict(base)
+        trial.update(kept_urine)
+        trial[uk] = uv
+        ok_t, msg_t, res_t, token = _set_cls(token, trial, reauth=reauth)
+        last_msg, last_res = msg_t, res_t
+        if ok_t:
+            kept_urine[uk] = uv
+        # else: field rejected — leave it out, keep trying others
+
+    if kept_urine:
+        # Final save with all accepted urine fields (base already saved piecemeal)
+        final = dict(base)
+        final.update(kept_urine)
+        ok_f, msg_f, res_f, token = _set_cls(token, final, reauth=reauth)
+        if ok_f:
+            dropped = [k for k, _ in urine_items if k not in kept_urine]
+            note = f"SET-urine-partial:kept={len(kept_urine)}"
+            if dropped:
+                note += f";dropped={','.join(dropped)}"
+            return True, f"{note}:{msg_f}", res_f, token
+        return True, f"SET-urine-partial-base:{last_msg}", last_res, token
+
+    # Could not keep any urine text — save blood only, but FAIL so repair re-runs
+    ok2, msg2, res2, token = _set_cls(token, base, reauth=reauth)
+    if ok2:
+        return (
+            False,
+            f"SET-urine-all-dropped:{msg}; blood_saved:{msg2}",
+            {"set": res, "blood": res2},
+            token,
+        )
+    return False, f"SET:{msg}; SET-retry:{msg2}", {"set": res, "retry": res2}, token

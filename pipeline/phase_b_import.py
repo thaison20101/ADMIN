@@ -387,7 +387,8 @@ def main() -> int:
             token_box["t"], pid, payload=payload, reauth=reauth
         )
         msg = f"{msg}; {vdetail}"
-        if ok and verified and fields_sent > 0:
+        partial_bad = ("SET-no-urine-text" in (msg or "")) or ("SET-urine-all-dropped" in (msg or ""))
+        if ok and verified and fields_sent > 0 and not partial_bad:
             import_status = "IMPORTED"
         else:
             import_status = "ERROR_IMPORT"

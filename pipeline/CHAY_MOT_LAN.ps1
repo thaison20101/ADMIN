@@ -50,7 +50,8 @@ Write-Host "==== 3/5 pip deps ===="
 python -m pip install -q -r .\pipeline\requirements.txt
 
 Write-Host "==== 4/5 REPAIR + IMPORT (co the mat nhieu phut) ===="
-Write-Host "Se: quet INBOX/PROCESSED, sua IMPORTED ao, import case web dang trong"
+Write-Host "Se: quet INBOX/PROCESSED, sua IMPORTED thieu nuoc tieu (Am tinh->Negative),"
+Write-Host "    thieu Duong mau/Ure, import lai 1 lan"
 $out = & python ".\pipeline\hourly_sync.py" --repair 2>&1
 $code = $LASTEXITCODE
 $out | ForEach-Object { Write-Host $_ }
@@ -66,8 +67,8 @@ powershell -ExecutionPolicy Bypass -File ".\pipeline\install_hourly_task.ps1"
 Write-Host ""
 Write-Host "========== XONG =========="
 Write-Host "1) Mo Excel moi nhat: build for Supper Data\excel_preview\CLS_auto_import_*.xlsx"
-Write-Host "2) Cot import_status can thay IMPORTED nhieu, ERROR_IMPORT giam"
-Write-Host "3) Tren web: mo BN -> Ctrl+F5 form Khám cận lâm sàng"
-Write-Host "4) Sau nay chi can: thả PDF vao INBOX_CLS + de laptop BAT"
+Write-Host "2) Cot message KHONG con SET-no-urine-text; nuoc tieu = Negative"
+Write-Host "3) Tren web (vd 921928 NGUYEN THI NGAM): Ctrl+F5 — kiem tra nuoc tieu + Duong mau/Ure"
+Write-Host "4) Sau nay chi can: tha PDF vao INBOX_CLS + de laptop BAT"
 Write-Host "Task: PKDK_Hourly_Sync (moi 1 gio)"
 Write-Host "=========================="
