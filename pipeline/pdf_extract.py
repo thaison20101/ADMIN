@@ -249,10 +249,48 @@ def normalize_for_web(labs: dict) -> dict:
         vnorm, unorm = val, unit
 
         # Urine qualitative — web TextBox only accepts number or exact "Negative"
+        if key == "Urobilinogen":
+            if _AM_TINH_RE.search(str(val)) or re.fullmatch(r"negative|neg", str(val), re.I):
+                vnorm, unorm, note = "Negative", "", "map Âm tính→Negative"
+            elif re.search(r"\(\s*\+\s*\)", str(val)) or re.search(
+                r"d[uư][ơo]ng\s*t[íi]nh|positive", str(val), re.I
+            ):
+                vnorm, unorm, note = "", unit, "dương tính qualitative — bỏ qua"
+            else:
+                try:
+                    num = float(_norm_num(re.sub(r"^[<>]", "", str(val))))
+                except Exception:
+                    num = None
+                if num is None:
+                    vnorm, unorm, note = val, unit, "urobilinogen non-numeric"
+                else:
+                    u = unit.replace("μ", "u").replace("µ", "u").lower()
+                    # Web field đơn vị µmol/L. PDF đôi khi ghi mg/dL (vd 0.2 → 3.38).
+                    if "mg" in u or "ehrlich" in u:
+                        num = num * 16.93
+                        note = "Urobilinogen mg/dL×16.93→µmol/L"
+                    elif ("umol" in u or "µmol" in u) or "mmol" in u:
+                        note = "Urobilinogen giữ µmol/L"
+                    elif 0 < num < 1.0:
+                        # Giá trị nhỏ không ghi đơn vị: thường là mg/dL trên máy TK
+                        num = num * 16.93
+                        note = "Urobilinogen heuristic <1 → coi mg/dL×16.93→µmol/L"
+                    else:
+                        note = "Urobilinogen số → µmol/L"
+                    vnorm = f"{round(num, 2):g}"
+                    unorm = "µmol/L"
+            out[key] = {
+                "value_raw": val,
+                "unit_raw": unit,
+                "value_web": vnorm,
+                "unit_web": unorm,
+                "convert_note": note,
+            }
+            continue
+
         if key.endswith("_NT") or key in (
             "Ketone",
             "Nitrite",
-            "Urobilinogen",
             "Mau_NT",
             "Bach_cau_NT",
             "Glucose_NT",
