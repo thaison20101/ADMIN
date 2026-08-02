@@ -31,14 +31,13 @@ G:\Drive của tôi\build for Supper Data\
   cases_snapshot\
 ```
 
-Cài / kiểm tra task:
+**Chạy 1 lần duy nhất (khuyến nghị)** — kéo code + sửa IMPORTED ảo + import + bật hourly:
 ```powershell
 cd C:\Users\thais\ADMIN
-git pull origin cursor/drive-hourly-pipeline-df0f
-powershell -ExecutionPolicy Bypass -File .\pipeline\install_hourly_task.ps1
-# chạy thử ngay:
-powershell -ExecutionPolicy Bypass -File .\pipeline\run_hourly.ps1
+powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_MOT_LAN.ps1
 ```
+
+Sau đó chỉ cần thả PDF vào `INBOX_CLS` và để laptop bật.
 
 Trong `pipeline\config.local.json`:
 - `drive.local_sync_root` = `G:/Drive của tôi/PKDK_Thuankieu_Pipeline`

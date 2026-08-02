@@ -186,6 +186,11 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="Parse/match only, do not write Medinet")
     ap.add_argument("--limit", type=int, default=0, help="Max imports this run (0=config default)")
     ap.add_argument("--force", action="store_true", help="Overwrite CLS if already present")
+    ap.add_argument(
+        "--repair",
+        action="store_true",
+        help="Repair false IMPORTED / ERROR_IMPORT (re-import if web empty)",
+    )
     ap.add_argument("--register-only", action="store_true", help="Only register inbox files, no import")
     args = ap.parse_args()
 
@@ -207,7 +212,12 @@ def main() -> int:
     # Full auto cycle (register + parse + import)
     from auto_cycle import run_auto_cycle
 
-    summary = run_auto_cycle(dry_run=args.dry_run, limit=args.limit, force=args.force)
+    summary = run_auto_cycle(
+        dry_run=args.dry_run,
+        limit=args.limit,
+        force=args.force,
+        repair=args.repair,
+    )
     safe_print(f"Done: {summary}")
     # Non-zero if hard import errors dominated? keep 0 for scheduler stability
     return 0

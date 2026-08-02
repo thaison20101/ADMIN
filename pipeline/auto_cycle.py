@@ -46,15 +46,20 @@ def _today_dmy() -> str:
     return date.today().strftime("%d/%m/%Y")
 
 
-def _resolve_pdf(row: dict, inbox: Path) -> Path | None:
+def _resolve_pdf(row: dict, inbox: Path, *extra_dirs: Path) -> Path | None:
     src = Path(row.get("source_file") or "")
     if src.exists():
         return src
     name = src.name or row.get("file_name") or ""
     if not name:
         return None
-    hits = list(inbox.rglob(name))
-    return hits[0] if hits else None
+    for base in (inbox, *extra_dirs):
+        if not base or not Path(base).exists():
+            continue
+        hits = list(Path(base).rglob(name))
+        if hits:
+            return hits[0]
+    return None
 
 
 def run_auto_cycle(
@@ -62,6 +67,7 @@ def run_auto_cycle(
     dry_run: bool = False,
     limit: int = 0,
     force: bool = False,
+    repair: bool = False,
     sleep_s: float = 0.25,
 ) -> dict:
     """Process pending inbox cases. Returns stats dict."""
@@ -83,6 +89,8 @@ def run_auto_cycle(
     safe_print(f"New files registered: {added}")
 
     max_per_run = int(cfg.get("import_rules", {}).get("max_imports_per_run", 80))
+    if repair:
+        max_per_run = max(max_per_run, 500)
     if limit:
         max_per_run = min(max_per_run, limit)
 
@@ -107,15 +115,19 @@ def run_auto_cycle(
 
     for row in rows:
         status = (row.get("status") or "").upper()
-        if status in {"IMPORTED"}:
+        if status == "PARSE_ERROR" and not repair:
+            stats["skipped_parse"] += 1
+            continue
+        if status == "IMPORTED" and not repair:
             stats["skipped_imported"] += 1
             continue
-        if status not in PENDING and status != "SKIP_ALREADY_CLS":
-            # still allow recheck unknown
-            if status not in {"NEW_LAB", "WAITING_ADMIN", "READY_IMPORT", "ERROR", "ERROR_IMPORT"}:
-                continue
+        if status == "SKIP_ALREADY_CLS" and not repair:
+            stats["skipped_already"] += 1
+            continue
+        if status not in PENDING | {"IMPORTED", "SKIP_ALREADY_CLS", "PARSE_ERROR"}:
+            continue
 
-        pdf = _resolve_pdf(row, inbox)
+        pdf = _resolve_pdf(row, inbox, processed, error_dir)
         if not pdf or not pdf.exists():
             row["notes"] = "source_pdf_missing"
             stats["missing_pdf"] += 1
@@ -180,11 +192,22 @@ def run_auto_cycle(
             continue
 
         existing, token_box["t"] = get_cls(token_box["t"], pid, reauth=reauth)
-        if cls_has_lab_values(existing) and not force:
-            row["status"] = "SKIP_ALREADY_CLS"
-            row["notes"] = "already_has_cls_get"
-            stats["skip_already_cls"] += 1
+        has_cls = cls_has_lab_values(existing)
+        if has_cls and not force:
+            # Web already has values on this phieukhamId — do not overwrite
+            if status == "IMPORTED":
+                row["status"] = "IMPORTED"
+                stats["repair_ok_already" if repair else "skipped_imported"] += 1
+            else:
+                row["status"] = "SKIP_ALREADY_CLS"
+                row["notes"] = "already_has_cls_get"
+                stats["skip_already_cls"] += 1
             continue
+        if repair and status in {"IMPORTED", "SKIP_ALREADY_CLS"} and not has_cls:
+            safe_print(f"  REPAIR empty-on-web {row.get('ho_ten')} pid={pid}")
+            stats["repair_empty"] += 1
+            row["status"] = "READY_IMPORT"
+            row["import_attempts"] = "0"
 
         if imported_n >= max_per_run:
             row["status"] = "READY_IMPORT"
@@ -263,7 +286,8 @@ def run_auto_cycle(
                 }
             )
             stats["error_import"] += 1
-            if row["status"] == "ERROR_IMPORT" and pdf.exists():
+            # During repair keep PDF in place for next hourly retry
+            if (not repair) and row["status"] == "ERROR_IMPORT" and pdf.exists():
                 try:
                     dest = error_dir / pdf.name
                     if dest.exists():
@@ -307,8 +331,18 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--force", action="store_true")
+    ap.add_argument(
+        "--repair",
+        action="store_true",
+        help="Re-check IMPORTED/ERROR/SKIP; re-import if web form empty",
+    )
     args = ap.parse_args()
-    run_auto_cycle(dry_run=args.dry_run, limit=args.limit, force=args.force)
+    run_auto_cycle(
+        dry_run=args.dry_run,
+        limit=args.limit,
+        force=args.force,
+        repair=args.repair,
+    )
     return 0
 
 
