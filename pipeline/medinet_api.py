@@ -178,27 +178,41 @@ URINE_TEXT_FIELDS = {
 
 
 def sanitize_urine_text(val) -> str | float | None:
-    """Return value allowed by Medinet urine TextBox, else None (skip field)."""
+    """Return value allowed by Medinet urine TextBox, else None (skip field).
+
+    Medinet rejects anything except a number or the exact string Negative
+    (e.g. Âm tính, Neg, ( + ) all fail).
+    """
     if val is None:
         return None
     s = str(val).strip()
     if not s:
         return None
+    # normalize unicode / whitespace
+    s = re.sub(r"\s+", " ", s)
     sl = s.lower()
     # negative variants → exact Negative
-    if (
-        sl == "negative"
-        or "âm tính" in sl
-        or "am tinh" in sl
-        or sl in {"neg", "-", "âm", "am"}
-    ):
+    if re.search(r"âm\s*t[íi]nh|am\s*tinh", sl) or sl in {
+        "negative",
+        "neg",
+        "-",
+        "âm",
+        "am",
+    }:
         return "Negative"
-    # qualitative positive without concentration → skip (web rejects "( + )")
-    if re.search(r"\(\s*\+\s*\)", s) or sl in {"positive", "pos", "+", "dương tính", "duong tinh"}:
+    # qualitative positive without concentration → skip
+    if re.search(r"\(\s*\+\s*\)", s) or re.search(r"d[uư][ơo]ng\s*t[íi]nh|positive|^pos$|^\+$", sl):
         return None
+    # bare number (optionally with <> )
     num = _to_number(s)
     if num is not None:
         return num
+    # number stuck with unit e.g. "1.020 " / "6 pH" — take leading number only
+    m = re.match(r"^[<>]?\s*(\d+(?:[.,]\d+)?)", s)
+    if m:
+        num = _to_number(m.group(1))
+        if num is not None:
+            return num
     return None
 
 
@@ -212,17 +226,25 @@ def labs_to_form_payload(labs: dict, *, phieukham_id: int | str, gioi_tinh: str 
     for lab_key, form_key in LAB_TO_FORM.items():
         item = labs.get(lab_key) or {}
         if isinstance(item, dict):
-            val = item.get("value_web")
-            if val is None or val == "":
+            # Prefer value_web when present (even if ""). Do NOT fall back to
+            # value_raw for urine — empty web means "skip", raw may be Âm tính/(+).
+            if "value_web" in item:
+                val = item.get("value_web")
+                if (val is None or val == "") and form_key not in URINE_TEXT_FIELDS and form_key != "NuocTieu_NiTrit":
+                    val = item.get("value_raw")
+            else:
                 val = item.get("value_raw")
         else:
             val = item
         if val is None or val == "":
             continue
         if form_key == "NuocTieu_NiTrit":
+            # Set-store needs int id; "Negative" string fails convert-to-int
             nit = map_nitrit(val)
+            if nit is None and isinstance(item, dict):
+                nit = map_nitrit(item.get("value_raw"))
             if nit is not None:
-                payload[form_key] = nit
+                payload[form_key] = int(nit)
             continue
         if form_key in NUMBER_FIELDS:
             num = _to_number(val)
@@ -231,10 +253,32 @@ def labs_to_form_payload(labs: dict, *, phieukham_id: int | str, gioi_tinh: str 
             continue
         if form_key in URINE_TEXT_FIELDS:
             cleaned = sanitize_urine_text(val)
+            if cleaned is None and isinstance(item, dict):
+                # last chance: raw if web was weird, still sanitized
+                cleaned = sanitize_urine_text(item.get("value_raw"))
             if cleaned is not None:
-                payload[form_key] = cleaned
+                # final hard gate
+                if cleaned == "Negative" or isinstance(cleaned, (int, float)):
+                    payload[form_key] = cleaned
             continue
-        payload[form_key] = str(val)
+        # unknown non-urine — only send if numeric
+        num = _to_number(val)
+        if num is not None:
+            payload[form_key] = num
+
+    # Absolute scrub: never ship illegal urine text
+    for k in list(payload.keys()):
+        if k in URINE_TEXT_FIELDS:
+            cleaned = sanitize_urine_text(payload[k])
+            if cleaned is None:
+                del payload[k]
+            else:
+                payload[k] = cleaned
+        elif k == "NuocTieu_NiTrit":
+            try:
+                payload[k] = int(payload[k])
+            except Exception:
+                del payload[k]
     return payload
 
 
@@ -264,17 +308,7 @@ def cls_has_lab_values(row: dict | None) -> bool:
     return any(row.get(k) not in (None, "") for k in markers)
 
 
-def insert_cls(token: str, payload: dict, reauth=None) -> tuple[bool, str, dict, str]:
-    """Save CLS via store Set (reliable). Returns (ok, message, raw_result, token).
-
-    Prefer KSKDK_Phieu_CanLamSang_Set with phieukhamId. FormToDatabaseInsert is
-    fallback only — VersionType=3 often omits insert id even when data is saved.
-    Caller should still verify with get_cls.
-    """
-    if "phieukhamId" not in payload:
-        return False, "missing phieukhamId", {}, token
-
-    # Primary: direct store Set
+def _set_cls(token: str, payload: dict, reauth=None):
     s, d, token = api(
         token,
         f"/api/services/app/DRViewer/ExecuteStoreWithParam_ByDatasource"
@@ -287,42 +321,43 @@ def insert_cls(token: str, payload: dict, reauth=None) -> tuple[bool, str, dict,
     ok = bool(res.get("isSucceeded"))
     msg = str(res.get("message") or "")
     data = res.get("data")
-    # Some Set responses return Thành công with ErrorMessage inside data
     if ok and isinstance(data, list) and data:
         err = data[0].get("ErrorMessage") if isinstance(data[0], dict) else None
         if err:
             ok = False
             msg = str(err)
+    return ok, msg or f"http={s}", res, token
+
+
+def insert_cls(token: str, payload: dict, reauth=None) -> tuple[bool, str, dict, str]:
+    """Save CLS via store Set (reliable). Returns (ok, message, raw_result, token).
+
+    Prefer KSKDK_Phieu_CanLamSang_Set with phieukhamId. On urine-format errors,
+    retry once with urine text fields stripped (keep blood + Nitrit id).
+    """
+    if "phieukhamId" not in payload:
+        return False, "missing phieukhamId", {}, token
+
+    ok, msg, res, token = _set_cls(token, payload, reauth=reauth)
     if ok:
         return True, msg or "SET ok", res, token
 
-    # Fallback: FormViewer insert
-    urlpage = (
-        "/app/main/dynamicform/viewer/KSKDK_Phieu_CanLamSang"
-        f"?phieukhamId={payload.get('phieukhamId')}"
-    )
-    q = urllib.parse.urlencode(
-        {
-            "form_id": CLS_FORM_ID,
-            "UrlPage": urlpage,
-            "ispopup": "true",
-            "istab": "true",
+    # Retry without risky urine text fields if format error
+    if "Negative" in msg or "định dạng" in msg.lower() or "dinh dang" in msg.lower():
+        trimmed = {
+            k: v
+            for k, v in payload.items()
+            if k not in URINE_TEXT_FIELDS
         }
-    )
-    s2, d2, token = api(
-        token,
-        f"/api/services/app/FormViewer/FormToDatabaseInsert?{q}",
-        "POST",
-        payload,
-        reauth=reauth,
-    )
-    res2 = (d2 or {}).get("result") or {}
-    ok2 = bool(res2.get("isSucceeded"))
-    code2 = str(res2.get("code") or "")
-    msg2 = str(res2.get("message") or "")
-    if (not ok2) and code2 == "VersionType-3-Non-Insert-Id":
-        ok2 = True
-        msg2 = f"soft-ok:{code2}:{msg2}"
-    if ok2:
-        return True, f"INSERT-fallback:{msg2}", res2, token
-    return False, f"SET:{msg or s}; INSERT:{msg2 or s2}", {"set": res, "insert": res2}, token
+        # keep Nitrit only if int
+        if "NuocTieu_NiTrit" in payload:
+            try:
+                trimmed["NuocTieu_NiTrit"] = int(payload["NuocTieu_NiTrit"])
+            except Exception:
+                pass
+        ok2, msg2, res2, token = _set_cls(token, trimmed, reauth=reauth)
+        if ok2:
+            return True, f"SET-no-urine-text:{msg2}", res2, token
+        return False, f"SET:{msg}; SET-retry:{msg2}", {"set": res, "retry": res2}, token
+
+    return False, f"SET:{msg}", res, token
