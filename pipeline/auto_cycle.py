@@ -112,34 +112,35 @@ def run_auto_cycle(
     for r in rows:
         src = (r.get("source_file") or "").replace("\\", "/")
         st = (r.get("status") or "").upper()
-        in_error = "/ERROR/" in f"/{src}/" or src.rstrip("/").endswith("/ERROR")
-        if added_err and (r.get("notes") or "") == "registered_from_inbox" and "ERROR" in src:
+        in_error = ("/ERROR/" in f"/{src}/") or src.upper().endswith("\\ERROR") or "/ERROR" in src.upper()
+        if added_err and (r.get("notes") or "") == "registered_from_inbox" and "ERROR" in src.upper():
             r["notes"] = "registered_from_error"
             r["status"] = "READY_IMPORT"
             r["import_attempts"] = "0"
             requeued_err += 1
-        elif repair and st in {"ERROR_IMPORT", "ERROR", "PARSE_ERROR"}:
-            # Give failed / unreadable PDFs another pass each repair hour
-            r["status"] = "READY_IMPORT" if st != "PARSE_ERROR" else st
-            if st in {"ERROR_IMPORT", "ERROR"}:
-                r["import_attempts"] = "0"
-                r["notes"] = f"requeue_error:{r.get('notes') or ''}"[:200]
-                requeued_err += 1
-        elif repair and st in {"IMPORTED", "SKIP_ALREADY_CLS"} and in_error:
-            # Already done on web but PDF still sitting in ERROR — tidy up
-            pdf_path = Path(r.get("source_file") or "")
-            moved = _move_pdf(pdf_path, processed, pid=r.get("ma_phieu") or "")
-            if moved:
-                r["source_file"] = str(moved)
-                r["notes"] = f"moved_error_to_processed;{r.get('notes') or ''}"[:200]
+        elif repair and in_error:
+            # PDF still in ERROR → always re-import (fill missing Urobilinogen/Ure/etc.)
+            # Do NOT move to PROCESSED until import verifies complete.
+            r["status"] = "READY_IMPORT"
+            r["import_attempts"] = "0"
+            r["notes"] = f"requeue_error_folder:{st}:{r.get('notes') or ''}"[:200]
+            requeued_err += 1
+        elif repair and st in {"ERROR_IMPORT", "ERROR"}:
+            r["status"] = "READY_IMPORT"
+            r["import_attempts"] = "0"
+            r["notes"] = f"requeue_error:{r.get('notes') or ''}"[:200]
+            requeued_err += 1
+        elif repair and st == "PARSE_ERROR":
+            r["notes"] = f"requeue_parse:{r.get('notes') or ''}"[:200]
     if requeued_err:
-        safe_print(f"Re-queued / tidy from ERROR: {requeued_err}")
+        safe_print(f"Re-queued from ERROR / failed status: {requeued_err}")
     safe_print(f"Inbox: {inbox}")
     safe_print(f"New files registered: {added} (inbox) + {added_err} (error)")
 
     max_per_run = int(cfg.get("import_rules", {}).get("max_imports_per_run", 80))
     if repair:
-        max_per_run = max(max_per_run, 500)
+        # ERROR folder alone can hold ~300 PDFs; allow a full sweep
+        max_per_run = max(max_per_run, 800)
     if limit:
         max_per_run = min(max_per_run, limit)
 

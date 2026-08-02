@@ -360,9 +360,22 @@ def web_cls_looks_incomplete(existing: dict | None) -> bool:
         "NuocTieu_Duong",
         "NuocTieu_Cetonic",
         "NuocTieu_Bilirubin",
+        "NuocTieu_Urobilinogen",
+        "NuocTieu_TiTrong",
+        "NuocTieu_pH",
     )
     empty_urine = sum(1 for k in urine_markers if _empty(k))
     if empty_urine >= 3:
+        return True
+
+    # Urine panel half-filled: e.g. Negative fields OK but Urobilinogen blank
+    urine_filled = sum(1 for k in urine_markers if not _empty(k))
+    if urine_filled >= 2 and (
+        _empty("NuocTieu_Urobilinogen")
+        or _empty("NuocTieu_BC")
+        or _empty("NuocTieu_HC")
+        or _empty("NuocTieu_Protein")
+    ):
         return True
 
     # Chemistry half-filled

@@ -212,6 +212,19 @@ def parse_labs(text: str) -> dict:
         got = _find_lab_in_text(urine, pat)
         if got:
             labs[key] = {"value_raw": got[0], "unit_raw": got[1]}
+
+    # Fallbacks when section split misses a line (common for Urobilinogen / Urea)
+    full_for_urine = urine if urine.strip() else text
+    if "Urobilinogen" not in labs:
+        got = _find_lab_in_text(full_for_urine, r"Urobilinogen") or _find_lab_in_text(
+            text, r"Urobilinogen"
+        )
+        if got:
+            labs["Urobilinogen"] = {"value_raw": got[0], "unit_raw": got[1]}
+    if "Urea" not in labs:
+        got = _find_lab_in_text(text, r"(?:\bUrea\b|\bBUN\b|Urê|Ure(?:a)?\b)")
+        if got:
+            labs["Urea"] = {"value_raw": got[0], "unit_raw": got[1]}
     return labs
 
 
