@@ -247,6 +247,11 @@ def run_auto_cycle(
             else:
                 row["status"] = "SKIP_ALREADY_CLS"
                 row["notes"] = "already_has_cls"
+                row["has_admin_info"] = "YES"
+                # Done on web — do not leave PDF forever in INBOX
+                moved = _move_pdf(pdf, processed, pid=pid)
+                if moved:
+                    row["source_file"] = str(moved)
                 stats["skip_already_cls"] += 1
                 continue
 
@@ -280,7 +285,6 @@ def run_auto_cycle(
             or (has_cls and bool(missing_on_web))
             or (has_cls and cls_urine_incomplete(existing, payload))
         )
-        # Hourly + repair: always overwrite when web CLS is incomplete vs PDF
         force_this = force or needs_urine_fix
 
         if has_cls and not force_this:
@@ -292,6 +296,10 @@ def run_auto_cycle(
                 row["status"] = "SKIP_ALREADY_CLS"
                 row["notes"] = "already_has_cls_get"
                 stats["skip_already_cls"] += 1
+            # Tidy: move out of INBOX/ERROR once CLS is complete on web
+            moved = _move_pdf(pdf, processed, pid=pid)
+            if moved:
+                row["source_file"] = str(moved)
             continue
         if not has_cls or needs_urine_fix:
             why = "empty-on-web" if not has_cls else f"incomplete:{','.join(missing_on_web[:8]) or 'heuristic'}"
