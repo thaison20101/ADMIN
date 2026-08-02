@@ -35,6 +35,7 @@ from medinet_api import (  # noqa: E402
     get_cls,
     insert_cls,
     labs_to_form_payload,
+    verify_cls_saved,
 )
 from pdf_extract import extract_pdf  # noqa: E402
 from phase_b_preview import (  # noqa: E402
@@ -382,15 +383,11 @@ def main() -> int:
 
         ok, msg, _raw, token_box["t"] = insert_cls(token_box["t"], payload, reauth=reauth)
         time.sleep(0.15)
-        after, token_box["t"] = get_cls(token_box["t"], pid, reauth=reauth)
-        verified = cls_has_lab_values(after)
-        # Prefer verification over soft insert flag
-        if verified and fields_sent > 0:
-            # spot-check one marker if we sent WBC/HGB
-            import_status = "IMPORTED"
-            if not ok:
-                msg = f"verified-after-soft-insert:{msg}"
-        elif ok and verified:
+        verified, vdetail, token_box["t"] = verify_cls_saved(
+            token_box["t"], pid, payload=payload, reauth=reauth
+        )
+        msg = f"{msg}; {vdetail}"
+        if ok and verified and fields_sent > 0:
             import_status = "IMPORTED"
         else:
             import_status = "ERROR_IMPORT"
