@@ -42,29 +42,30 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $code = 0
 $maxRounds = 8
 
-for ($i = 1; $i -le $maxRounds; $i++) {
+for ($round = 1; $round -le $maxRounds; $round++) {
   Write-Host ""
-  Write-Host "----- VONG $i / $maxRounds -----"
+  Write-Host ("----- VONG {0} / {1} -----" -f $round, $maxRounds)
   $out = & python ".\pipeline\hourly_sync.py" --repair 2>&1
   $code = $LASTEXITCODE
   $out | ForEach-Object { Write-Host $_ }
-  $log = Join-Path $logDir ("chay_lai_toan_bo-r$i-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
+  $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+  $log = Join-Path $logDir ("chay_lai_toan_bo-r{0}-{1}.log" -f $round, $stamp)
   try { $out | Out-File -FilePath $log -Encoding utf8 } catch {}
-  Write-Host "Vong $i exit=$code log=$log"
+  Write-Host ("Vong {0} exit={1} log={2}" -f $round, $code, $log)
 
   $text = ($out | Out-String)
   $queued = 0
-  if ($text -match "'queued':\s*(\d+)") { $queued = [int]$Matches[1] }
   $imported = 0
+  if ($text -match "'queued':\s*(\d+)") { $queued = [int]$Matches[1] }
   if ($text -match "'imported':\s*(\d+)") { $imported = [int]$Matches[1] }
-  Write-Host "Vong $i: imported=$imported queued=$queued"
+  Write-Host ("Vong {0}: imported={1} queued={2}" -f $round, $imported, $queued)
 
-  if ($queued -le 0 -and $imported -le 0) {
-    Write-Host "Khong con hang doi / khong import them — dung."
+  if (($queued -le 0) -and ($imported -le 0)) {
+    Write-Host "Khong con hang doi / khong import them - dung."
     break
   }
   if ($queued -le 0) {
-    Write-Host "Hang doi het — dung."
+    Write-Host "Hang doi het - dung."
     break
   }
 }
@@ -74,7 +75,7 @@ Write-Host "==== 4/4 dam bao task moi 1 gio ===="
 
 Write-Host ""
 Write-Host "========== XONG =========="
-Write-Host "Kiem tra BN 914619 QUACH XUAN HUONG: Ctrl+F5 — Urobilinogen=3.38"
+Write-Host "Kiem tra BN 914619 QUACH XUAN HUONG: Ctrl+F5 - Urobilinogen=3.38"
 Write-Host "PDF OK: ERROR -> PROCESSED"
 Write-Host "=========================="
 if ($code -ne 0) { exit $code }
