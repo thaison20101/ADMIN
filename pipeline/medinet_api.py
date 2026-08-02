@@ -501,6 +501,35 @@ def _is_urine_format_error(msg: str) -> bool:
     )
 
 
+def _uro_value_variants(val) -> list:
+    """Medinet often rejects float urobilinogen; try comma/string forms."""
+    out = []
+    if val is None or val == "":
+        return out
+    if val == "Negative":
+        return ["Negative"]
+    try:
+        num = float(str(val).replace(",", "."))
+    except Exception:
+        return [str(val)]
+    # Prefer Vietnamese decimal comma (web placeholder uses dấu phẩy)
+    out.append(str(round(num, 2)).replace(".", ","))
+    out.append(f"{round(num, 2):g}".replace(".", ","))
+    out.append(str(round(num, 2)))
+    out.append(round(num, 2))
+    out.append(num)
+    # dedupe preserve order
+    seen = set()
+    uniq = []
+    for v in out:
+        key = (type(v).__name__, str(v))
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(v)
+    return uniq
+
+
 def insert_cls(token: str, payload: dict, reauth=None) -> tuple[bool, str, dict, str]:
     """Save CLS via store Set (reliable). Returns (ok, message, raw_result, token).
 
@@ -515,11 +544,17 @@ def insert_cls(token: str, payload: dict, reauth=None) -> tuple[bool, str, dict,
 
     # Ensure urine text is only number or exact "Negative" before first Set
     clean = dict(payload)
+    wanted_uro = None
     for k in list(clean.keys()):
         if k in URINE_TEXT_FIELDS:
             cleaned = sanitize_urine_text(clean[k])
             if cleaned == "Negative" or isinstance(cleaned, (int, float)):
-                clean[k] = cleaned
+                if k == "NuocTieu_Urobilinogen" and isinstance(cleaned, (int, float)):
+                    wanted_uro = cleaned
+                    # First attempt: comma decimal string (web VN format)
+                    clean[k] = str(round(float(cleaned), 2)).replace(".", ",")
+                else:
+                    clean[k] = cleaned
             else:
                 del clean[k]
         elif k == "NuocTieu_NiTrit":
@@ -552,26 +587,60 @@ def insert_cls(token: str, payload: dict, reauth=None) -> tuple[bool, str, dict,
     urine_items.sort(key=lambda kv: (0 if kv[1] == "Negative" else 1, kv[0]))
 
     for uk, uv in urine_items:
-        trial = dict(base)
-        trial.update(kept_urine)
-        trial[uk] = uv
-        ok_t, msg_t, res_t, token = _set_cls(token, trial, reauth=reauth)
-        last_msg, last_res = msg_t, res_t
-        if ok_t:
-            kept_urine[uk] = uv
-        # else: field rejected — leave it out, keep trying others
+        if uk == "NuocTieu_Urobilinogen":
+            variants = _uro_value_variants(wanted_uro if wanted_uro is not None else uv)
+        else:
+            variants = [uv]
+        accepted = None
+        for variant in variants:
+            trial = dict(base)
+            trial.update(kept_urine)
+            trial[uk] = variant
+            ok_t, msg_t, res_t, token = _set_cls(token, trial, reauth=reauth)
+            last_msg, last_res = msg_t, res_t
+            if ok_t:
+                accepted = variant
+                break
+        if accepted is not None:
+            kept_urine[uk] = accepted
+
+    # If urobilinogen still missing, try Set with ONLY id + uro (minimal payload)
+    if wanted_uro is not None and "NuocTieu_Urobilinogen" not in kept_urine:
+        for variant in _uro_value_variants(wanted_uro):
+            solo = {
+                "LoaiKham": base.get("LoaiKham", LOAI_KHAM_DINH_KY),
+                "phieukhamId": base["phieukhamId"],
+                "NuocTieu_Urobilinogen": variant,
+            }
+            if "IsNamGioi" in base:
+                solo["IsNamGioi"] = base["IsNamGioi"]
+            if "cdId" in base:
+                solo["cdId"] = base["cdId"]
+            # Keep other accepted urine too if any
+            solo.update(kept_urine)
+            ok_u, msg_u, res_u, token = _set_cls(token, solo, reauth=reauth)
+            last_msg, last_res = msg_u, res_u
+            if ok_u:
+                kept_urine["NuocTieu_Urobilinogen"] = variant
+                break
 
     if kept_urine:
-        # Final save with all accepted urine fields (base already saved piecemeal)
         final = dict(base)
         final.update(kept_urine)
         ok_f, msg_f, res_f, token = _set_cls(token, final, reauth=reauth)
+        dropped = [k for k, _ in urine_items if k not in kept_urine]
+        if wanted_uro is not None and "NuocTieu_Urobilinogen" not in kept_urine:
+            dropped = list(set(dropped + ["NuocTieu_Urobilinogen"]))
+        note = f"SET-urine-partial:kept={len(kept_urine)}"
+        if dropped:
+            note += f";dropped={','.join(dropped)}"
         if ok_f:
-            dropped = [k for k, _ in urine_items if k not in kept_urine]
-            note = f"SET-urine-partial:kept={len(kept_urine)}"
-            if dropped:
-                note += f";dropped={','.join(dropped)}"
+            # If PDF had urobilinogen but it was dropped, mark NOT full success
+            if wanted_uro is not None and "NuocTieu_Urobilinogen" not in kept_urine:
+                return False, f"{note}:URO_DROPPED:{msg_f}", res_f, token
             return True, f"{note}:{msg_f}", res_f, token
+        if wanted_uro is not None and "NuocTieu_Urobilinogen" not in kept_urine:
+            return False, f"SET-urine-partial-base:URO_DROPPED:{last_msg}", last_res, token
         return True, f"SET-urine-partial-base:{last_msg}", last_res, token
 
     # Could not keep any urine text — save blood only, but FAIL so repair re-runs
