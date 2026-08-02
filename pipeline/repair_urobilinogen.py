@@ -62,6 +62,14 @@ def _find_pdf(name: str, roots: list[Path]) -> Path | None:
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "--all",
+        action="store_true",
+        help="Scan PROCESSED/ERROR/INBOX even if missing list exists",
+    )
+    args = ap.parse_args()
+
     cfg = load_config()
     sync = Path(cfg.get("drive", {}).get("local_sync_root") or "")
     processed = sync / cfg["drive"].get("processed_folder", "PROCESSED")
@@ -71,11 +79,12 @@ def main() -> int:
 
     build = build_root(cfg)
     missing_txt = build / "excel_preview" / "urobilinogen_missing.txt"
-    targets = _load_targets_from_missing_txt(missing_txt)
-    safe_print(f"Missing list: {missing_txt} ({len(targets)} rows)")
+    targets = [] if args.all else _load_targets_from_missing_txt(missing_txt)
+    safe_print("========== BAT DAU REPAIR UROBILINOGEN ==========")
+    safe_print(f"Missing list: {missing_txt} ({len(targets)} rows) all={args.all}")
 
     pdfs: list[tuple[Path, str | None]] = []
-    if targets:
+    if targets and not args.all:
         for pid, name in targets:
             p = _find_pdf(name, roots)
             if p:
@@ -83,11 +92,12 @@ def main() -> int:
             else:
                 safe_print(f"PDF not found: {name}")
     else:
-        safe_print("No missing list — scan all PROCESSED/ERROR/INBOX")
+        safe_print("Scan ALL PDFs in PROCESSED/ERROR/INBOX for missing/wrong-unit uro")
         for d in roots:
             if d.exists():
                 for p in sorted(d.rglob("*.pdf")):
                     pdfs.append((p, None))
+    safe_print(f"PDF to check: {len(pdfs)}")
 
     user = os.environ.get("MEDINET_USER", "pkdkthuankieu")
     password = os.environ.get("MEDINET_PASS", "P@ssw0rd")
