@@ -265,16 +265,17 @@ def normalize_for_web(labs: dict) -> dict:
                     vnorm, unorm, note = val, unit, "urobilinogen non-numeric"
                 else:
                     u = unit.replace("μ", "u").replace("µ", "u").lower()
-                    # Web field đơn vị µmol/L. PDF đôi khi ghi mg/dL (vd 0.2 → 3.38).
+                    # Web: µmol/L (khoảng tham chiếu ~1.69–16.9).
+                    # PDF Thuận Kiều hay ghi 0.2 (mg/dL) → 0.2×16.93 ≈ 3.39 µmol/L.
                     if "mg" in u or "ehrlich" in u:
                         num = num * 16.93
                         note = "Urobilinogen mg/dL×16.93→µmol/L"
-                    elif ("umol" in u or "µmol" in u) or "mmol" in u:
-                        note = "Urobilinogen giữ µmol/L"
-                    elif 0 < num < 1.0:
-                        # Giá trị nhỏ không ghi đơn vị: thường là mg/dL trên máy TK
+                    elif 0 < num < 1.5:
+                        # Kể cả khi OCR gắn nhầm đơn vị µmol/L: 0.2 không nằm range µmol
                         num = num * 16.93
-                        note = "Urobilinogen heuristic <1 → coi mg/dL×16.93→µmol/L"
+                        note = "Urobilinogen <1.5 → coi mg/dL×16.93→µmol/L"
+                    elif ("umol" in u) or ("mmol" in u):
+                        note = "Urobilinogen giữ µmol/L"
                     else:
                         note = "Urobilinogen số → µmol/L"
                     vnorm = f"{round(num, 2):g}"
