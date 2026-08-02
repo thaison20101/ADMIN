@@ -35,7 +35,8 @@ Write-Host "==== 3/5 pip deps ===="
 & python -m pip install -q -r ".\pipeline\requirements.txt"
 
 Write-Host "==== 4/5 REPAIR + IMPORT (co the mat nhieu phut) ===="
-Write-Host "Se: quet INBOX/PROCESSED, sua case thieu nuoc tieu (Am tinh -> Negative)"
+Write-Host "Se ghi de cac case SKIP_ALREADY_CLS / IMPORTED bi THIEU (nuoc tieu, Ure, ...)"
+Write-Host "Am tinh PDF -> Negative tren web"
 $out = & python ".\pipeline\hourly_sync.py" --repair 2>&1
 $code = $LASTEXITCODE
 $out | ForEach-Object { Write-Host $_ }

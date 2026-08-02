@@ -197,8 +197,8 @@ def parse_labs(text: str) -> dict:
     chem_body = sinhhoa if sinhhoa.strip() else huyet
     chem_fallback = huyet + "\n" + sinhhoa
     for key, pat in [
-        ("Glucose", r"(?:\bGlucose\b|Đường\s*(?:huyết|máu)|Duong\s*(?:huyet|mau))"),
-        ("Urea", r"(?:\bUrea\b|Urê|Ure\b)"),
+        ("Glucose", r"(?:\bGlucose\b|Đường\s*(?:huyết|máu)|Duong\s*(?:huyet|mau)|Blood\s*sugar)"),
+        ("Urea", r"(?:\bUrea\b|\bBUN\b|Urê|Ure(?:a)?\b)"),
         ("Creatinine", r"(?:\bCreatinine\b|Creatinin)"),
         ("AST", r"AST\s*\(?\s*SGOT\s*\)?"),
         ("ALT", r"ALT\s*\(?\s*SGPT\s*\)?"),

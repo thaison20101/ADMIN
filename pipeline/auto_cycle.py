@@ -28,6 +28,7 @@ from medinet_api import (  # noqa: E402
     insert_cls,
     labs_to_form_payload,
     verify_cls_saved,
+    web_cls_looks_incomplete,
 )
 from pdf_extract import extract_pdf  # noqa: E402
 from phase_b_import import write_result_excel  # noqa: E402
@@ -178,15 +179,20 @@ def run_auto_cycle(
             row["has_admin_info"] = "YES"
 
         if st == "SKIP_ALREADY_CLS":
-            # Double-check via Get — list quality filter can lag
-            existing, token_box["t"] = get_cls(token_box["t"], pid, reauth=reauth) if pid else (None, token_box["t"])
-            if cls_has_lab_values(existing) and not force:
+            # List says already has CLS — during repair/force fall through so we
+            # can still fill missing urine (Âm tính→Negative) / Urê / etc.
+            existing_early, token_box["t"] = (
+                get_cls(token_box["t"], pid, reauth=reauth) if pid else (None, token_box["t"])
+            )
+            if not cls_has_lab_values(existing_early):
+                st = "READY_IMPORT"
+            elif force or repair:
+                st = "READY_IMPORT"  # re-evaluate incompleteness below
+            else:
                 row["status"] = "SKIP_ALREADY_CLS"
                 row["notes"] = "already_has_cls"
                 stats["skip_already_cls"] += 1
                 continue
-            # list said has CLS but Get empty → treat as ready
-            st = "READY_IMPORT"
 
         if not pid:
             row["status"] = "WAITING_ADMIN"
@@ -209,17 +215,14 @@ def run_auto_cycle(
         fields_sent = len([k for k in payload if k in LAB_TO_FORM.values()])
         missing_on_web = cls_missing_lab_fields(existing, payload) if has_cls else []
         notes_prev = str(row.get("notes") or "")
+        looks_incomplete = has_cls and web_cls_looks_incomplete(existing)
         needs_urine_fix = (
             "SET-no-urine-text" in notes_prev
             or "SET-urine-all-dropped" in notes_prev
+            or "incomplete_after_save" in notes_prev
+            or looks_incomplete
+            or (has_cls and bool(missing_on_web))
             or (has_cls and cls_urine_incomplete(existing, payload))
-            or (
-                has_cls
-                and any(
-                    k.startswith("SinhHoaMau_") and k in missing_on_web
-                    for k in payload
-                )
-            )
         )
         force_this = force or (repair and needs_urine_fix)
 
@@ -233,8 +236,8 @@ def run_auto_cycle(
                 row["notes"] = "already_has_cls_get"
                 stats["skip_already_cls"] += 1
             continue
-        if repair and status in {"IMPORTED", "SKIP_ALREADY_CLS"} and (not has_cls or needs_urine_fix):
-            why = "empty-on-web" if not has_cls else f"incomplete:{','.join(missing_on_web[:8])}"
+        if repair and (not has_cls or needs_urine_fix):
+            why = "empty-on-web" if not has_cls else f"incomplete:{','.join(missing_on_web[:8]) or 'heuristic'}"
             safe_print(f"  REPAIR {why} {row.get('ho_ten')} pid={pid}")
             stats["repair_empty" if not has_cls else "repair_incomplete"] += 1
             row["status"] = "READY_IMPORT"

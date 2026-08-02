@@ -32,6 +32,8 @@ from medinet_api import (  # noqa: E402
     LAB_TO_FORM,
     authenticate,
     cls_has_lab_values,
+    cls_missing_lab_fields,
+    web_cls_looks_incomplete,
     get_cls,
     insert_cls,
     labs_to_form_payload,
@@ -348,25 +350,29 @@ def main() -> int:
             if pdf.exists():
                 labs = extract_pdf(pdf).get("labs") or labs
 
-        # Guard: already has CLS
+        # Guard: already has CLS — but still overwrite if incomplete (thiếu nước tiểu/Urê)
         existing, token_box["t"] = get_cls(token_box["t"], pid, reauth=reauth)
-        if cls_has_lab_values(existing) and not args.force:
+        payload = labs_to_form_payload(labs, phieukham_id=pid, gioi_tinh=row.get("gioi_tinh") or "")
+        payload["LoaiKham"] = 5152
+        fields_sent = len([k for k in payload if k in LAB_TO_FORM.values()])
+        missing = cls_missing_lab_fields(existing, payload) if existing else []
+        incomplete = web_cls_looks_incomplete(existing) or bool(missing)
+        if cls_has_lab_values(existing) and not args.force and not incomplete:
             row.update(
                 {
                     "phieukhamId": pid,
                     "import_status": "SKIP_ALREADY_CLS",
-                    "message": "Web đã có CLS — bỏ qua (dùng --force để ghi đè)",
+                    "message": "Web đã có CLS đủ — bỏ qua (dùng --force để ghi đè)",
                     "verified": "YES",
                     "fields_sent": 0,
                 }
             )
             results.append(row)
             continue
-
-        payload = labs_to_form_payload(labs, phieukham_id=pid, gioi_tinh=row.get("gioi_tinh") or "")
-        # Enforce định kỳ only
-        payload["LoaiKham"] = 5152
-        fields_sent = len([k for k in payload if k in LAB_TO_FORM.values()])
+        if incomplete and cls_has_lab_values(existing):
+            safe_print(
+                f"  OVERWRITE incomplete {row.get('ho_ten')} missing={missing[:8] or 'heuristic'}"
+            )
 
         if args.dry_run:
             row.update(

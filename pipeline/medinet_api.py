@@ -341,6 +341,38 @@ def cls_urine_incomplete(existing: dict | None, payload: dict) -> bool:
     return bool(miss)
 
 
+def web_cls_looks_incomplete(existing: dict | None) -> bool:
+    """Heuristic: blood present but typical urine/chem fields still blank on web.
+
+    Catches false SKIP_ALREADY_CLS / partial imports (e.g. Nitrit filled but
+    Bạch cầu/Hồng cầu/Protein empty; Glucose filled but Urê empty).
+    """
+    if not existing or not cls_has_lab_values(existing):
+        return False
+
+    def _empty(key: str) -> bool:
+        return existing.get(key) in (None, "")
+
+    urine_markers = (
+        "NuocTieu_BC",
+        "NuocTieu_HC",
+        "NuocTieu_Protein",
+        "NuocTieu_Duong",
+        "NuocTieu_Cetonic",
+        "NuocTieu_Bilirubin",
+    )
+    empty_urine = sum(1 for k in urine_markers if _empty(k))
+    if empty_urine >= 3:
+        return True
+
+    # Chemistry half-filled
+    if _empty("SinhHoaMau_Ure") and not _empty("SinhHoaMau_DuongMau"):
+        return True
+    if _empty("SinhHoaMau_DuongMau") and not _empty("SinhHoaMau_Creatinin"):
+        return True
+    return False
+
+
 def get_cls(token: str, phieukham_id: int | str, reauth=None) -> tuple[dict | None, str]:
     s, d, token = api(
         token,
