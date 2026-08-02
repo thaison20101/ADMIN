@@ -378,6 +378,13 @@ def run_auto_cycle(
             moved = _move_pdf(pdf, processed, pid=pid)
             if moved:
                 row["source_file"] = str(moved)
+                # Remove same-name leftovers still in ERROR
+                try:
+                    for dup in error_dir.glob(pdf.name):
+                        if dup.resolve() != Path(moved).resolve():
+                            dup.unlink(missing_ok=True)
+                except Exception:
+                    pass
             elif pdf.exists():
                 row["notes"] = f"{row['notes']};move_to_processed_failed"[:200]
             safe_print(f"  IMPORTED {data.get('ho_ten')} pid={pid} fields={fields_sent}")
