@@ -318,15 +318,27 @@ def run_auto_cycle(
         missing_on_web = cls_missing_lab_fields(existing, payload) if has_cls else []
         # Urea often absent on Thuận Kiều PDF — never block / force-repair for it alone
         missing_on_web = [k for k in missing_on_web if k != "SinhHoaMau_Ure"]
+        # Hourly: defer Urobilinogen-only gaps to CHAY_REPAIR_URO.ps1
+        # (otherwise hundreds of REPAIR incomplete burn all import slots)
+        if not repair and missing_on_web == ["NuocTieu_Urobilinogen"]:
+            stats["defer_urobilinogen"] += 1
+            missing_on_web = []
         notes_prev = str(row.get("notes") or "")
         looks_incomplete = has_cls and web_cls_looks_incomplete(existing, payload)
+        if not repair and looks_incomplete:
+            # same defer if the only payload gap is urobilinogen
+            miss2 = cls_missing_lab_fields(existing, payload)
+            miss2 = [k for k in miss2 if k not in {"SinhHoaMau_Ure", "NuocTieu_Urobilinogen"}]
+            if not miss2 and "NuocTieu_Urobilinogen" in (cls_missing_lab_fields(existing, payload) or []):
+                looks_incomplete = False
+                stats["defer_urobilinogen"] += 1
         needs_urine_fix = (
             "SET-no-urine-text" in notes_prev
             or "SET-urine-all-dropped" in notes_prev
             or "incomplete_after_save" in notes_prev
             or looks_incomplete
             or (has_cls and bool(missing_on_web))
-            or (has_cls and cls_urine_incomplete(existing, payload))
+            or (has_cls and cls_urine_incomplete(existing, payload) and repair)
         )
         force_this = force or needs_urine_fix
 
