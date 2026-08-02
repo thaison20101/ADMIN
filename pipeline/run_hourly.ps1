@@ -48,9 +48,10 @@ if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdkthuankieu" }
 if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "P@ssw0rd" }
 
 Write-Host "BuildRoot: $BuildRoot"
-Write-Host "Running hourly_sync.py --repair (import moi + sua thieu) ..."
-# --repair: PDF moi + ghi de form thieu nuoc tieu/Ure moi gio
-$out = & python ".\pipeline\hourly_sync.py" --repair 2>&1
+Write-Host "Running hourly_sync.py (UU TIEN INBOX / PDF moi co TTHC) ..."
+# Khong --repair full: tranh ton slot vao hang nghin case incomplete
+# Van tu bo sung thieu neu notes goi y incomplete (gioi han so luong)
+$out = & python ".\pipeline\hourly_sync.py" 2>&1
 $code = $LASTEXITCODE
 $out | ForEach-Object { Write-Host $_ }
 try { $out | Out-File -FilePath $log -Encoding utf8 } catch {

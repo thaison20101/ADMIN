@@ -184,7 +184,14 @@ def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
         ("M3", "KSKDK_DanhSach_KSK_M13", "NgayTao"),
         ("M4", "KSKDK_DanhSach_KSK_NguoiCaoTuoi_Report", "KSKDK_NgayKham"),
     ]
-    index = {"by_phone": {}, "by_name_year": {}, "by_maphieu": {}, "no_cls_ids": set(), "all_ids": set()}
+    index = {
+        "by_phone": {},
+        "by_name_year": {},
+        "by_maphieu": {},
+        "by_pid": {},
+        "no_cls_ids": set(),
+        "all_ids": set(),
+    }
 
     def get_report(code):
         s, d = api(token, f"/api/services/app/DRReport/GetIdByCode?Code={code}&SessionSiteId=130")
@@ -245,6 +252,8 @@ def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
                     index["by_name_year"].setdefault(f"{name}|{year}", []).append(rec)
                 if mp:
                     index["by_maphieu"][mp] = rec
+                if pid not in (None, ""):
+                    index["by_pid"][str(pid)] = rec
 
             # no CLS
             s, d = api(
@@ -273,7 +282,8 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
     phone = re.sub(r"\D", "", str(row.get("sdt") or ""))
     name = (row.get("ho_ten") or "").strip().upper()
     year = str(row.get("nam_sinh") or "")
-    sid = str(row.get("sid") or "")
+    sid = str(row.get("sid") or row.get("ma_phieu") or "")
+    fname = str(row.get("file_name") or row.get("source_file") or "")
 
     candidates = []
     if phone and phone in index["by_phone"]:
@@ -281,7 +291,29 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
     key = f"{name}|{year}"
     if key in index["by_name_year"]:
         candidates.extend(index["by_name_year"][key])
-    # SID sometimes aligns with internal codes in MaPhieu suffix — soft match by name only already done
+
+    # Filename / SID often carries MaPhieu or phieukhamId (…_914619_914619.pdf)
+    for mp in filter(None, [sid, row.get("ma_phieu")]):
+        mp = str(mp).strip()
+        if mp and mp in index["by_maphieu"]:
+            candidates.append(index["by_maphieu"][mp])
+        if mp and mp in index.get("by_pid", {}):
+            candidates.append(index["by_pid"][mp])
+    stem = Path(fname).stem if fname else ""
+    for m in re.finditer(r"(?<!\d)(\d{6,7})(?!\d)", stem):
+        token = m.group(1)
+        if token in index["by_maphieu"]:
+            candidates.append(index["by_maphieu"][token])
+        if token in index.get("by_pid", {}):
+            candidates.append(index["by_pid"][token])
+
+    # Accent-insensitive name|year fallback (only if nothing matched yet)
+    if not candidates and year and name:
+        fold = _fold_name(name)
+        for k, recs in index["by_name_year"].items():
+            kn, ky = (k.split("|", 1) + [""])[:2]
+            if ky == year and _fold_name(kn) == fold:
+                candidates.extend(recs)
 
     # dedupe
     seen = set()
@@ -304,6 +336,15 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
     if pid not in index["no_cls_ids"]:
         return "SKIP_ALREADY_CLS", rec
     return "READY_IMPORT", rec
+
+
+def _fold_name(s: str) -> str:
+    """Uppercase + strip Vietnamese accents for soft name match."""
+    import unicodedata
+
+    s = unicodedata.normalize("NFD", (s or "").upper())
+    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+    return re.sub(r"\s+", " ", s).strip()
 
 
 def write_preview_excel(rows: list[dict], path: Path) -> None:

@@ -83,6 +83,27 @@ def _move_pdf(pdf: Path, dest_dir: Path, pid: str = "") -> Path | None:
         return None
 
 
+def _row_priority(row: dict) -> int:
+    """Lower = import sooner. Prefer fresh INBOX over mass incomplete-repair."""
+    st = (row.get("status") or "").upper()
+    src = (row.get("source_file") or "").replace("\\", "/").upper()
+    in_inbox = "INBOX" in src
+    in_error = "/ERROR" in src or src.endswith("/ERROR")
+    if st in {"NEW_LAB", "READY_IMPORT"} and in_inbox:
+        return 0
+    if st in {"ERROR_IMPORT", "ERROR"} and in_inbox:
+        return 1
+    if st in {"NEW_LAB", "READY_IMPORT", "ERROR_IMPORT", "ERROR"} and in_error:
+        return 2
+    if st in {"NEW_LAB", "READY_IMPORT", "ERROR_IMPORT", "ERROR"}:
+        return 3
+    if st == "WAITING_ADMIN":
+        return 4
+    if st in {"IMPORTED", "SKIP_ALREADY_CLS"}:
+        return 5
+    return 6
+
+
 def run_auto_cycle(
     *,
     dry_run: bool = False,
@@ -139,10 +160,14 @@ def run_auto_cycle(
 
     max_per_run = int(cfg.get("import_rules", {}).get("max_imports_per_run", 80))
     if repair:
-        # ERROR folder alone can hold ~300 PDFs; allow a full sweep
         max_per_run = max(max_per_run, 800)
+    else:
+        # Hourly: push throughput for NEW inbox imports
+        max_per_run = max(max_per_run, 300)
     if limit:
         max_per_run = min(max_per_run, limit)
+    # Reserve most slots for new/empty imports; only a few incomplete overwrites
+    max_incomplete = int(cfg.get("import_rules", {}).get("max_incomplete_per_run", 80 if repair else 40))
 
     user = os.environ.get("MEDINET_USER", "pkdkthuankieu")
     password = os.environ.get("MEDINET_PASS", "P@ssw0rd")
@@ -162,8 +187,16 @@ def run_auto_cycle(
     stats = Counter()
     results = []
     imported_n = 0
+    incomplete_n = 0
 
-    for row in rows:
+    # Process INBOX / READY first, then WAITING_ADMIN, then incomplete repair last
+    row_order = sorted(range(len(rows)), key=lambda i: (_row_priority(rows[i]), i))
+    safe_print(
+        f"Priority queue: inbox/ready first; max_import={max_per_run} max_incomplete={max_incomplete}"
+    )
+
+    for ri in row_order:
+        row = rows[ri]
         status = (row.get("status") or "").upper()
         if status == "PARSE_ERROR" and not repair:
             stats["skipped_parse"] += 1
@@ -187,11 +220,14 @@ def run_auto_cycle(
         if status not in PENDING | {"IMPORTED", "SKIP_ALREADY_CLS", "PARSE_ERROR"}:
             continue
 
+        # Attach file_name for match_patient filename id hints
         pdf = _resolve_pdf(row, inbox, processed, error_dir)
         if not pdf or not pdf.exists():
             row["notes"] = "source_pdf_missing"
             stats["missing_pdf"] += 1
             continue
+        row["file_name"] = pdf.name
+        row["source_file"] = str(pdf)
 
         try:
             data = extract_pdf(pdf)
@@ -210,6 +246,10 @@ def run_auto_cycle(
 
         row["ho_ten"] = data.get("ho_ten") or row.get("ho_ten") or ""
         row["mau_kham"] = data.get("mau_kham") or row.get("mau_kham") or ""
+        data["file_name"] = pdf.name
+        data["source_file"] = str(pdf)
+        if row.get("ma_phieu"):
+            data["ma_phieu"] = row.get("ma_phieu")
         st, rec = match_patient(data, index)
         row["last_checked_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -311,6 +351,15 @@ def run_auto_cycle(
             row["status"] = "READY_IMPORT"
             if needs_urine_fix:
                 row["import_attempts"] = "0"
+
+        # Cap incomplete overwrites so NEW inbox imports still get slots
+        if has_cls and needs_urine_fix:
+            if incomplete_n >= max_incomplete:
+                row["status"] = "READY_IMPORT"
+                row["notes"] = "queued_incomplete_cap"
+                stats["queued_incomplete"] += 1
+                continue
+            incomplete_n += 1
 
         if imported_n >= max_per_run:
             row["status"] = "READY_IMPORT"
