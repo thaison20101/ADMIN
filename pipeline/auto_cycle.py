@@ -161,14 +161,16 @@ def run_auto_cycle(
 
     max_per_run = int(cfg.get("import_rules", {}).get("max_imports_per_run", 80))
     if repair:
-        max_per_run = max(max_per_run, 800)
+        max_per_run = max(max_per_run, 1000)
     else:
         # Hourly: push throughput for NEW inbox imports
         max_per_run = max(max_per_run, 300)
     if limit:
         max_per_run = min(max_per_run, limit)
     # Reserve most slots for new/empty imports; only a few incomplete overwrites
-    max_incomplete = int(cfg.get("import_rules", {}).get("max_incomplete_per_run", 80 if repair else 40))
+    max_incomplete = int(cfg.get("import_rules", {}).get("max_incomplete_per_run", 200 if repair else 40))
+    if repair:
+        max_incomplete = max(max_incomplete, 500)
 
     user = os.environ.get("MEDINET_USER", "pkdkthuankieu")
     password = os.environ.get("MEDINET_PASS", "P@ssw0rd")
