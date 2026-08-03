@@ -322,6 +322,11 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
         mp = m.group(0).upper()
         if mp in index["by_maphieu"]:
             candidates.append(index["by_maphieu"][mp])
+    # Our ERROR rename suffix: ..._481583.pdf → trust as phieukhamId
+    for m in re.finditer(r"_(\d{5,7})(?:_|\.|$)", stem):
+        token = m.group(1)
+        if token in index.get("by_pid", {}):
+            candidates.append(index["by_pid"][token])
     # Only treat long digit tokens as pid when name/year also agrees (avoid lab SID 465264)
     digit_hits = []
     for m in re.finditer(r"(?<!\d)(\d{6,7})(?!\d)", stem):
