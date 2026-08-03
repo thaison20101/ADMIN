@@ -284,36 +284,79 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
     year = str(row.get("nam_sinh") or "")
     sid = str(row.get("sid") or row.get("ma_phieu") or "")
     fname = str(row.get("file_name") or row.get("source_file") or "")
+    stem = Path(fname).stem if fname else ""
+
+    # Filename pattern: 250726-465264 - VAN THI THU HUONG - 1963 - F
+    # Lab SID (465264) is NOT Medinet phieukhamId / MaPhieu — do not trust alone.
+    fn_name, fn_year = "", ""
+    m_fn = re.search(
+        r"^\d{6}-\d+\s*-\s*(.+?)\s*-\s*(19\d{2}|20\d{2})\s*-\s*[MF]\b",
+        stem,
+        re.I,
+    )
+    if m_fn:
+        fn_name = m_fn.group(1).strip().upper()
+        fn_year = m_fn.group(2)
+        if not name:
+            name = fn_name
+        if not year:
+            year = fn_year
 
     candidates = []
     if phone and phone in index["by_phone"]:
         candidates.extend(index["by_phone"][phone])
-    key = f"{name}|{year}"
-    if key in index["by_name_year"]:
-        candidates.extend(index["by_name_year"][key])
+    for nm in filter(None, [name, fn_name]):
+        for yr in filter(None, [year, fn_year]):
+            key = f"{nm}|{yr}"
+            if key in index["by_name_year"]:
+                candidates.extend(index["by_name_year"][key])
 
-    # Filename / SID often carries MaPhieu or phieukhamId (…_914619_914619.pdf)
+    # Explicit MaPhieu / phieukhamId only (full codes like KSKDKP260715648 or …_746119_)
     for mp in filter(None, [sid, row.get("ma_phieu")]):
         mp = str(mp).strip()
         if mp and mp in index["by_maphieu"]:
             candidates.append(index["by_maphieu"][mp])
         if mp and mp in index.get("by_pid", {}):
             candidates.append(index["by_pid"][mp])
-    stem = Path(fname).stem if fname else ""
+    for m in re.finditer(r"KSKDKP\d+", stem, re.I):
+        mp = m.group(0).upper()
+        if mp in index["by_maphieu"]:
+            candidates.append(index["by_maphieu"][mp])
+    # Only treat long digit tokens as pid when name/year also agrees (avoid lab SID 465264)
+    digit_hits = []
     for m in re.finditer(r"(?<!\d)(\d{6,7})(?!\d)", stem):
         token = m.group(1)
-        if token in index["by_maphieu"]:
-            candidates.append(index["by_maphieu"][token])
+        # Skip DDMMYY date prefix (250726) and typical lab seq after it
+        if re.match(r"^\d{6}-\d+", stem) and token == stem.split("-", 1)[0][:6]:
+            continue
         if token in index.get("by_pid", {}):
-            candidates.append(index["by_pid"][token])
+            digit_hits.append(index["by_pid"][token])
+        if token in index["by_maphieu"]:
+            digit_hits.append(index["by_maphieu"][token])
 
-    # Accent-insensitive name|year fallback (only if nothing matched yet)
-    if not candidates and year and name:
-        fold = _fold_name(name)
-        for k, recs in index["by_name_year"].items():
-            kn, ky = (k.split("|", 1) + [""])[:2]
-            if ky == year and _fold_name(kn) == fold:
-                candidates.extend(recs)
+    # Accent-insensitive name|year (always collect — stronger than stray lab SID)
+    name_hits = []
+    for nm in filter(None, [name, fn_name]):
+        fold = _fold_name(nm)
+        for yr in filter(None, [year, fn_year]):
+            for k, recs in index["by_name_year"].items():
+                kn, ky = (k.split("|", 1) + [""])[:2]
+                if ky == yr and _fold_name(kn) == fold:
+                    name_hits.extend(recs)
+    candidates.extend(name_hits)
+
+    # Use digit/pid hits only if they agree with name fold, or no name candidates yet
+    if digit_hits:
+        if name_hits or candidates:
+            fold_target = _fold_name(name or fn_name)
+            yr_target = year or fn_year
+            for rec in digit_hits:
+                rn = _fold_name(str(rec.get("HoTen") or ""))
+                ns = str(rec.get("NgaySinh") or "")[:4]
+                if fold_target and rn == fold_target and (not yr_target or ns == yr_target):
+                    candidates.append(rec)
+        else:
+            candidates.extend(digit_hits)
 
     # dedupe
     seen = set()
@@ -328,9 +371,33 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
     if not uniq:
         return "WAITING_ADMIN", None
 
-    # Prefer matching mau
+    # Prefer name+year agreement, then matching mau (M3/M4)
+    fold_target = _fold_name(name or fn_name)
+    yr_target = year or fn_year
+
+    def _score(c: dict) -> tuple:
+        rn = _fold_name(str(c.get("HoTen") or ""))
+        ns = str(c.get("NgaySinh") or "")[:4]
+        name_ok = 1 if fold_target and rn == fold_target else 0
+        year_ok = 1 if yr_target and ns == yr_target else 0
+        mau = row.get("mau_kham")
+        mau_ok = 1 if mau and c.get("_mau") == mau else 0
+        return (name_ok + year_ok, mau_ok)
+
+    uniq.sort(key=_score, reverse=True)
+    # If best has no name agreement but we had a name, keep waiting (avoid wrong person)
+    if fold_target and _score(uniq[0])[0] == 0 and (name_hits or phone):
+        # phone-only wrong year possible — still allow phone match with same name fold later
+        phone_ok = [c for c in uniq if fold_target and _fold_name(str(c.get("HoTen") or "")) == fold_target]
+        if phone_ok:
+            uniq = phone_ok
+        elif not phone:
+            return "WAITING_ADMIN", None
+
     mau = row.get("mau_kham")
     preferred = [c for c in uniq if c.get("_mau") == mau] or uniq
+    # Re-rank preferred by score
+    preferred.sort(key=_score, reverse=True)
     rec = preferred[0]
     pid = rec.get("phieukhamId") or rec.get("Id")
     if pid not in index["no_cls_ids"]:

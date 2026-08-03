@@ -202,11 +202,23 @@ def run_auto_cycle(
         if status == "PARSE_ERROR" and not repair:
             stats["skipped_parse"] += 1
             continue
-        # Normal hourly: re-check SKIP/IMPORTED only when notes hint incomplete.
-        # Full --repair re-checks all of them.
+        # Attach file early so we can tidy PDFs still sitting in INBOX/ERROR
+        pdf = _resolve_pdf(row, inbox, processed, error_dir)
+        if not pdf or not pdf.exists():
+            if status in PENDING | {"IMPORTED", "SKIP_ALREADY_CLS"}:
+                row["notes"] = "source_pdf_missing"
+                stats["missing_pdf"] += 1
+            continue
+        row["file_name"] = pdf.name
+        row["source_file"] = str(pdf)
+        src_u = str(pdf).replace("\\", "/").upper()
+        stuck_in_work = ("/INBOX" in src_u) or ("/ERROR" in src_u)
+
+        # Normal hourly: skip re-import for done cases — BUT if PDF still in
+        # INBOX/ERROR, fall through to move (or fill incomplete fields).
         if status in {"IMPORTED", "SKIP_ALREADY_CLS"} and not repair:
             notes_peek = str(row.get("notes") or "")
-            if not any(
+            needs_recheck = any(
                 x in notes_peek
                 for x in (
                     "incomplete",
@@ -215,20 +227,15 @@ def run_auto_cycle(
                     "import_fail",
                     "queued_max",
                 )
-            ):
+            )
+            if not needs_recheck and not stuck_in_work:
                 stats["skipped_imported" if status == "IMPORTED" else "skipped_already"] += 1
                 continue
+            if not needs_recheck and stuck_in_work:
+                # Fall through: match again → move to PROCESSED or repair gaps
+                row["notes"] = f"tidy_stuck_inbox:{status}"[:200]
         if status not in PENDING | {"IMPORTED", "SKIP_ALREADY_CLS", "PARSE_ERROR"}:
             continue
-
-        # Attach file_name for match_patient filename id hints
-        pdf = _resolve_pdf(row, inbox, processed, error_dir)
-        if not pdf or not pdf.exists():
-            row["notes"] = "source_pdf_missing"
-            stats["missing_pdf"] += 1
-            continue
-        row["file_name"] = pdf.name
-        row["source_file"] = str(pdf)
 
         try:
             data = extract_pdf(pdf)
@@ -278,12 +285,13 @@ def run_auto_cycle(
         if st == "SKIP_ALREADY_CLS":
             # List says already has CLS — during repair/force fall through so we
             # can still fill missing urine (Âm tính→Negative) / Urê / etc.
+            # Also when PDF still stuck in INBOX/ERROR: re-check gaps then move.
             existing_early, token_box["t"] = (
                 load_cls_view(token_box["t"], pid, reauth=reauth) if pid else (None, token_box["t"])
             )
             if not cls_has_lab_values(existing_early):
                 st = "READY_IMPORT"
-            elif force or repair:
+            elif force or repair or stuck_in_work:
                 st = "READY_IMPORT"  # re-evaluate incompleteness below
             else:
                 row["status"] = "SKIP_ALREADY_CLS"
