@@ -20,7 +20,7 @@
     "login_path": "/account/login",
     "date_from": "01/07/2026",
     "date_to": "",
-    "note": "date_to empty = today. Set MEDINET_USER / MEDINET_PASS in environment. Do not commit secrets."
+    "note": "date_from fixed 01/07/2026. date_to empty = hôm nay (tự tăng mỗi ngày). Set MEDINET_USER / MEDINET_PASS in environment. Do not commit secrets."
   },
   "routing": {
     "m4_birth_year_max": 1967,

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Hourly pipeline: Drive INBOX_CLS → match Medinet → auto-import CLS.
+"""Hourly pipeline: Drive INBOX_CLS + ERROR → match Medinet → auto-import CLS.
 
 Flow each hour (laptop on + Task Scheduler + Google Drive sync):
-1) Scan local Drive-synced INBOX_CLS for new PDFs
-2) Register new cases in tracking/cases.csv
-3) Parse PDF, match TTHC (M3/M4), skip if already has CLS
-4) Import READY cases into Khám cận lâm sàng (định kỳ only)
-5) Move IMPORTED → PROCESSED, hard failures → ERROR
-6) Write result Excel + cases snapshot under build_root
+1) ALWAYS re-scan local Drive INBOX_CLS and ERROR PDFs
+2) Re-match TTHC (M3/M4) by name + nam_sinh (required) / phone / CCCD
+3) Date index: 01/07/2026 → today (rolling)
+4) If TTHC found → import CLS → move PROCESSED
+5) If no TTHC yet → keep in INBOX (ERROR waiting → move back to INBOX)
+6) Write result Excel + heartbeat under build_root
 """
 
 from __future__ import annotations

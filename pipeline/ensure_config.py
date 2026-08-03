@@ -33,19 +33,27 @@ def main() -> int:
     drive.setdefault("error_folder", "ERROR")
 
     med = cfg.setdefault("medinet", {})
-    med["date_from"] = med.get("date_from") or "01/07/2026"
-    med["date_to"] = ""  # empty = today in auto_cycle
+    # Always: 01/07/2026 -> today (rolling; empty date_to = hôm nay)
+    med["date_from"] = "01/07/2026"
+    med["date_to"] = ""  # empty = today in auto_cycle / rasoat / repair
 
     rules = cfg.setdefault("import_rules", {})
     rules["enabled"] = True
     rules["auto_hourly"] = True
     # Enough headroom for hourly NEW inbox imports
     cur = int(rules.get("max_imports_per_run") or 0)
-    rules["max_imports_per_run"] = max(cur, 300)
-    rules["max_incomplete_per_run"] = int(rules.get("max_incomplete_per_run") or 40)
+    rules["max_imports_per_run"] = max(cur, 500)
+    rules["max_incomplete_per_run"] = max(int(rules.get("max_incomplete_per_run") or 0), 80)
 
     CFG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-    print("config OK", drive.get("local_sync_root"), "date_to=today")
+    from datetime import date
+
+    print(
+        "config OK",
+        drive.get("local_sync_root"),
+        "date_from=01/07/2026",
+        f"date_to=today({date.today().strftime('%d/%m/%Y')})",
+    )
     return 0
 
 

@@ -311,9 +311,13 @@ def main() -> int:
         token_box["t"] = authenticate(user, password)
         return token_box["t"]
 
-    date_from = cfg.get("medinet", {}).get("date_from", "01/07/2026")
-    date_to = cfg.get("medinet", {}).get("date_to", "31/07/2026")
-    safe_print("Indexing Medinet lists for phieukhamId resolve...")
+    date_from = cfg.get("medinet", {}).get("date_from") or "01/07/2026"
+    date_to = (cfg.get("medinet", {}).get("date_to") or "").strip()
+    if not date_to:
+        from datetime import date as _date
+
+        date_to = _date.today().strftime("%d/%m/%Y")
+    safe_print(f"Indexing Medinet lists {date_from} -> {date_to} ...")
     index = fetch_unit_index(token_box["t"], date_from, date_to)
     # refresh token after long index
     token_box["t"] = authenticate(user, password)

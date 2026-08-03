@@ -264,10 +264,10 @@ def run_auto_cycle(
         token_box["t"] = authenticate(user, password)
         return token_box["t"]
 
-    date_from = cfg.get("medinet", {}).get("date_from", "01/07/2026")
-    date_to = cfg.get("medinet", {}).get("date_to") or _today_dmy()
-    # If configured end date is in the past relative to "rolling", extend to today
-    safe_print(f"Indexing Medinet {date_from} -> {date_to} ...")
+    date_from = cfg.get("medinet", {}).get("date_from") or "01/07/2026"
+    # date_to empty / missing / stale → always hôm nay (rolling)
+    date_to = (cfg.get("medinet", {}).get("date_to") or "").strip() or _today_dmy()
+    safe_print(f"Indexing Medinet NgayKham {date_from} -> {date_to} (rolling today) ...")
     index = fetch_unit_index(token_box["t"], date_from, date_to)
     token_box["t"] = authenticate(user, password)
 
@@ -286,13 +286,11 @@ def run_auto_cycle(
     for ri in row_order:
         row = rows[ri]
         status = (row.get("status") or "").upper()
-        if status == "PARSE_ERROR" and not repair:
-            stats["skipped_parse"] += 1
-            continue
-        # Attach file early so we can tidy PDFs still sitting in INBOX/ERROR
+
+        # Attach file early — hourly ALWAYS re-checks PDFs in INBOX/ERROR
         pdf = _resolve_pdf(row, inbox, processed, error_dir)
         if not pdf or not pdf.exists():
-            if status in PENDING | {"IMPORTED", "SKIP_ALREADY_CLS"}:
+            if status in PENDING | {"IMPORTED", "SKIP_ALREADY_CLS", "PARSE_ERROR"}:
                 row["notes"] = "source_pdf_missing"
                 stats["missing_pdf"] += 1
             continue
@@ -301,9 +299,13 @@ def run_auto_cycle(
         src_u = str(pdf).replace("\\", "/").upper()
         stuck_in_work = ("/INBOX" in src_u) or ("/ERROR" in src_u)
 
-        # Normal hourly: skip re-import for done cases — BUT if PDF still in
-        # INBOX/ERROR, fall through to move (or fill incomplete fields).
-        if status in {"IMPORTED", "SKIP_ALREADY_CLS"} and not repair:
+        if status == "PARSE_ERROR" and not repair and not stuck_in_work:
+            stats["skipped_parse"] += 1
+            continue
+
+        # Hourly rule: mọi PDF trong INBOX/ERROR luôn được kiểm tra lại TTHC.
+        # Chỉ skip IMPORTED/SKIP khi file đã nằm PROCESSED.
+        if status in {"IMPORTED", "SKIP_ALREADY_CLS"} and not repair and not stuck_in_work:
             notes_peek = str(row.get("notes") or "")
             needs_recheck = any(
                 x in notes_peek
@@ -313,14 +315,12 @@ def run_auto_cycle(
                     "SET-urine-all",
                     "import_fail",
                     "queued_max",
+                    "disk_",
                 )
             )
-            if not needs_recheck and not stuck_in_work:
+            if not needs_recheck:
                 stats["skipped_imported" if status == "IMPORTED" else "skipped_already"] += 1
                 continue
-            if not needs_recheck and stuck_in_work:
-                # Fall through: match again → move to PROCESSED or repair gaps
-                row["notes"] = f"tidy_stuck_inbox:{status}"[:200]
         if status not in PENDING | {"IMPORTED", "SKIP_ALREADY_CLS", "PARSE_ERROR"}:
             continue
 
@@ -357,6 +357,13 @@ def run_auto_cycle(
                 f"NO_TTHC\t{row.get('ho_ten') or data.get('ho_ten')}\t"
                 f"year={data.get('nam_sinh')}\tphone={data.get('sdt')}\t{pdf.name}"
             )
+            # Chưa có TTHC → luôn giữ / đưa về INBOX (không để trong ERROR)
+            if "/ERROR" in src_u:
+                moved = _move_pdf(pdf, inbox)
+                if moved:
+                    row["source_file"] = str(moved)
+                    row["file_name"] = moved.name
+                    stats["error_to_inbox_waiting"] += 1
             continue
 
         # IMPORTANT: UI opens by phieukhamId — never use cdId as save key

@@ -329,10 +329,15 @@ def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
 
 
 def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
-    """Return (status, medinet_row)."""
+    """Return (status, medinet_row).
+
+    Name matches MUST agree on nam_sinh (year) — e.g. two NGUYỄN THỊ CHO
+    (1950 vs 1953) must not be confused. CCCD / MaPhieu / phieukhamId are
+    strong keys and may override when unique.
+    """
     phone = re.sub(r"\D", "", str(row.get("sdt") or ""))
     name = (row.get("ho_ten") or "").strip().upper()
-    year = str(row.get("nam_sinh") or "")
+    year = str(row.get("nam_sinh") or "").strip()
     sid = str(row.get("sid") or row.get("ma_phieu") or "")
     cccd = re.sub(r"\D", "", str(row.get("cccd") or ""))
     fname = str(row.get("file_name") or row.get("source_file") or "")
@@ -355,37 +360,60 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
         fn_year = m_fn.group(2)
         if not name:
             name = fn_name
-        if not year:
+        # Prefer filename year when present (stable on INBOX names)
+        if fn_year:
+            year = fn_year
+        elif not year:
             year = fn_year
 
-    candidates = []
-    if cccd and cccd in index.get("by_cccd", {}):
-        candidates.append(index["by_cccd"][cccd])
-    if phone and phone in index["by_phone"]:
-        candidates.extend(index["by_phone"][phone])
-    for nm in filter(None, [name, fn_name]):
-        for yr in filter(None, [year, fn_year]):
-            key = f"{nm}|{yr}"
-            if key in index["by_name_year"]:
-                candidates.extend(index["by_name_year"][key])
-            fk = f"{_fold_name(nm)}|{yr}"
-            if fk in index.get("by_fold_year", {}):
-                candidates.extend(index["by_fold_year"][fk])
+    yr_target = year or fn_year
 
+    def _rec_year(rec: dict) -> str:
+        return str(rec.get("NgaySinh") or "")[:4]
+
+    def _year_ok(rec: dict) -> bool:
+        if not yr_target:
+            return False
+        return _rec_year(rec) == yr_target
+
+    strong = []  # CCCD / MaPhieu / explicit pid — still verify year when we have one
+    if cccd and cccd in index.get("by_cccd", {}):
+        strong.append(index["by_cccd"][cccd])
     for mp in filter(None, [sid, row.get("ma_phieu")]):
         mp = str(mp).strip()
         if mp and mp in index["by_maphieu"]:
-            candidates.append(index["by_maphieu"][mp])
+            strong.append(index["by_maphieu"][mp])
         if mp and mp in index.get("by_pid", {}):
-            candidates.append(index["by_pid"][mp])
+            strong.append(index["by_pid"][mp])
     for m in re.finditer(r"KSKDKP\d+", stem, re.I):
         mp = m.group(0).upper()
         if mp in index["by_maphieu"]:
-            candidates.append(index["by_maphieu"][mp])
+            strong.append(index["by_maphieu"][mp])
     for m in re.finditer(r"_(\d{5,7})(?:_|\.|$)", stem):
         token = m.group(1)
         if token in index.get("by_pid", {}):
-            candidates.append(index["by_pid"][token])
+            strong.append(index["by_pid"][token])
+
+    candidates = []
+    # Phone: only keep same birth year when year known (avoid wrong twin-name)
+    if phone and phone in index["by_phone"]:
+        for rec in index["by_phone"][phone]:
+            if not yr_target or _year_ok(rec):
+                candidates.append(rec)
+
+    # Name+year only (required year — never name-only across 1950 vs 1953)
+    if yr_target:
+        for nm in filter(None, [name, fn_name]):
+            key = f"{nm}|{yr_target}"
+            if key in index["by_name_year"]:
+                candidates.extend(index["by_name_year"][key])
+            fk = f"{_fold_name(nm)}|{yr_target}"
+            if fk in index.get("by_fold_year", {}):
+                candidates.extend(index["by_fold_year"][fk])
+            for k, recs in index.get("by_fold_year", {}).items():
+                kn, ky = (k.split("|", 1) + [""])[:2]
+                if ky == yr_target and _names_soft_match(nm, kn):
+                    candidates.extend(recs)
 
     digit_hits = []
     for m in re.finditer(r"(?<!\d)(\d{6,7})(?!\d)", stem):
@@ -397,37 +425,23 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
         if token in index["by_maphieu"]:
             digit_hits.append(index["by_maphieu"][token])
 
-    name_hits = []
-    for nm in filter(None, [name, fn_name]):
-        for yr in filter(None, [year, fn_year]):
-            fk = f"{_fold_name(nm)}|{yr}"
-            if fk in index.get("by_fold_year", {}):
-                name_hits.extend(index["by_fold_year"][fk])
-            for k, recs in index.get("by_fold_year", {}).items():
-                kn, ky = (k.split("|", 1) + [""])[:2]
-                if ky == yr and _names_soft_match(nm, kn):
-                    name_hits.extend(recs)
-    candidates.extend(name_hits)
+    fold_target = name or fn_name
+    for rec in digit_hits:
+        if yr_target and not _year_ok(rec):
+            continue
+        if fold_target and not _names_soft_match(fold_target, str(rec.get("HoTen") or "")):
+            continue
+        candidates.append(rec)
 
-    if digit_hits:
-        fold_target = name or fn_name
-        yr_target = year or fn_year
-        if name_hits or candidates:
-            for rec in digit_hits:
-                rn = str(rec.get("HoTen") or "")
-                ns = str(rec.get("NgaySinh") or "")[:4]
-                if fold_target and _names_soft_match(fold_target, rn) and (not yr_target or ns == yr_target):
-                    candidates.append(rec)
-        else:
-            candidates.extend(digit_hits)
-
-    if not candidates and (name or fn_name) and (year or fn_year):
-        nm = name or fn_name
-        yr = year or fn_year
-        for k, recs in index.get("by_fold_year", {}).items():
-            kn, ky = (k.split("|", 1) + [""])[:2]
-            if ky == yr and _names_soft_match(nm, kn):
-                candidates.extend(recs)
+    # Strong keys: prefer year agreement; if year known and conflicts → drop
+    for rec in strong:
+        if yr_target and not _year_ok(rec):
+            # Unique id with conflicting year: still trust id (CCCD/MaPhieu/pid)
+            # only when name also soft-matches or no name available
+            rn = str(rec.get("HoTen") or "")
+            if fold_target and rn and not _names_soft_match(fold_target, rn):
+                continue
+        candidates.append(rec)
 
     seen = set()
     uniq = []
@@ -441,28 +455,47 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
     if not uniq:
         return "WAITING_ADMIN", None
 
-    fold_target = name or fn_name
-    yr_target = year or fn_year
+    # HARD FILTER: when PDF/filename has nam_sinh, only same-year candidates
+    if yr_target:
+        same_year = [c for c in uniq if _year_ok(c)]
+        if same_year:
+            uniq = same_year
+        else:
+            # No year agreement → do not guess among same-name different years
+            return "WAITING_ADMIN", None
 
     def _score(c: dict) -> tuple:
         rn = str(c.get("HoTen") or "")
-        ns = str(c.get("NgaySinh") or "")[:4]
+        ns = _rec_year(c)
         name_ok = 2 if fold_target and _fold_name(fold_target) == _fold_name(rn) else (
             1 if fold_target and _names_soft_match(fold_target, rn) else 0
         )
-        year_ok = 1 if yr_target and ns == yr_target else 0
+        year_ok = 2 if yr_target and ns == yr_target else 0
         phone_ok = 1 if phone and re.sub(r"\D", "", str(c.get("SDT") or "")) == phone else 0
         mau = row.get("mau_kham")
         mau_ok = 1 if mau and c.get("_mau") == mau else 0
-        return (name_ok + year_ok + phone_ok, mau_ok)
+        return (year_ok + name_ok + phone_ok, mau_ok)
 
     uniq.sort(key=_score, reverse=True)
-    if fold_target and _score(uniq[0])[0] == 0:
-        soft = [c for c in uniq if _names_soft_match(fold_target, str(c.get("HoTen") or ""))]
-        if soft:
-            uniq = soft
-        elif not phone and not cccd:
+    # Require name soft-match when we have a name (after year filter)
+    if fold_target:
+        named = [c for c in uniq if _names_soft_match(fold_target, str(c.get("HoTen") or ""))]
+        if named:
+            uniq = named
+        elif not cccd and not any(
+            str(row.get("ma_phieu") or "") and str(row.get("ma_phieu")) in index.get("by_maphieu", {})
+            for _ in [0]
+        ):
+            # keep strong pid-only hits already year-filtered
+            pass
+
+    if len(uniq) > 1:
+        # Still ambiguous after year+name — need phone/cccd; else wait
+        top = _score(uniq[0])
+        tied = [c for c in uniq if _score(c) == top]
+        if len(tied) > 1 and not phone and not cccd:
             return "WAITING_ADMIN", None
+        uniq = tied
 
     mau = row.get("mau_kham")
     preferred = [c for c in uniq if c.get("_mau") == mau] or uniq
@@ -649,8 +682,12 @@ def main() -> int:
         password = os.environ.get("MEDINET_PASS", "P@ssw0rd")
         safe_print("Auth Medinet + index July lists...", flush=True)
         token = authenticate(user, password)
-        date_from = cfg.get("medinet", {}).get("date_from", "01/07/2026")
-        date_to = cfg.get("medinet", {}).get("date_to", "31/07/2026")
+        date_from = cfg.get("medinet", {}).get("date_from") or "01/07/2026"
+        date_to = (cfg.get("medinet", {}).get("date_to") or "").strip()
+        if not date_to:
+            from datetime import date as _date
+
+            date_to = _date.today().strftime("%d/%m/%Y")
         index = fetch_unit_index(token, date_from, date_to)
         for row in rows:
             if row.get("status_medinet") == "PARSE_ERROR":
