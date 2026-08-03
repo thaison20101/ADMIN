@@ -178,6 +178,32 @@ def api(token: str, path: str, method: str = "GET", body=None):
     return 0, {"error": str(last)}
 
 
+
+def _fold_name(s: str) -> str:
+    """Uppercase + strip Vietnamese accents for soft name match."""
+    import unicodedata
+
+    s = unicodedata.normalize("NFD", (s or "").upper())
+    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _names_soft_match(a: str, b: str) -> bool:
+    """True when folded names are equal or clearly the same person."""
+    fa, fb = _fold_name(a), _fold_name(b)
+    if not fa or not fb:
+        return False
+    if fa == fb:
+        return True
+    ta, tb = fa.split(), fb.split()
+    if sorted(ta) == sorted(tb):
+        return True
+    if ta[0] == tb[0] and ta[-1] == tb[-1] and min(len(ta), len(tb)) >= 2:
+        return True
+    sa, sb = set(ta), set(tb)
+    return sa <= sb or sb <= sa
+
+
 def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
     """Build lookup by normalized name+phone and SID-ish MaPhieu for M3/M4."""
     reports = [
@@ -187,6 +213,8 @@ def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
     index = {
         "by_phone": {},
         "by_name_year": {},
+        "by_fold_year": {},
+        "by_cccd": {},
         "by_maphieu": {},
         "by_pid": {},
         "no_cls_ids": set(),
@@ -198,7 +226,6 @@ def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
         items = ((d or {}).get("result") or {}).get("data") or []
         return items[0] if items else None
 
-    # day split within month range for reliability
     from datetime import date, timedelta
 
     def parse_d(s):
@@ -206,11 +233,29 @@ def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
         return date(int(yy), int(mm), int(dd))
 
     d0, d1 = parse_d(date_from), parse_d(date_to)
+    # Widen start: M3 list filters NgayTao — phiếu tạo trước khoảng khám vẫn cần index
+    d0 = d0 - timedelta(days=60)
     days = []
     cur = d0
     while cur <= d1:
         days.append(cur)
         cur += timedelta(days=1)
+    safe_print(f"  Index day span {d0.strftime('%d/%m/%Y')} -> {d1.strftime('%d/%m/%Y')} ({len(days)} days)")
+
+    def _cccd_of(r: dict) -> str:
+        for k in (
+            "SoDinhDanh",
+            "CCCD",
+            "CMND",
+            "SoCMND",
+            "MaDinhDanh",
+            "DinhDanhCaNhan",
+            "SoDinhDanhCaNhan",
+        ):
+            v = re.sub(r"\D", "", str(r.get(k) or ""))
+            if len(v) >= 9:
+                return v
+        return ""
 
     for mau, code, date_field in reports:
         rep = get_report(code)
@@ -221,7 +266,6 @@ def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
         safe_print(f"Indexing {mau} ({code}) ...", flush=True)
         for day in days:
             dr = f"{day.strftime('%d/%m/%Y')} - {day.strftime('%d/%m/%Y')}"
-            # all
             s, d = api(
                 token,
                 f"/api/services/app/DRViewer/ExecuteStoreWithParam_ByDatasource?dataSourceId={ds}&store={store}",
@@ -250,12 +294,15 @@ def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
                     index["by_phone"].setdefault(phone, []).append(rec)
                 if name and year:
                     index["by_name_year"].setdefault(f"{name}|{year}", []).append(rec)
+                    index["by_fold_year"].setdefault(f"{_fold_name(name)}|{year}", []).append(rec)
+                cccd = _cccd_of(r)
+                if cccd:
+                    index["by_cccd"][cccd] = rec
                 if mp:
                     index["by_maphieu"][mp] = rec
                 if pid not in (None, ""):
                     index["by_pid"][str(pid)] = rec
 
-            # no CLS
             s, d = api(
                 token,
                 f"/api/services/app/DRViewer/ExecuteStoreWithParam_ByDatasource?dataSourceId={ds}&store={store}",
@@ -273,7 +320,11 @@ def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
             )
             for r in ((d or {}).get("result") or {}).get("data") or []:
                 index["no_cls_ids"].add(r.get("phieukhamId") or r.get("Id"))
-        safe_print(f"  {mau} indexed phones={len(index['by_phone'])} names={len(index['by_name_year'])}", flush=True)
+        safe_print(
+            f"  {mau} indexed phones={len(index['by_phone'])} names={len(index['by_name_year'])} "
+            f"fold={len(index['by_fold_year'])} cccd={len(index['by_cccd'])}",
+            flush=True,
+        )
     return index
 
 
@@ -283,17 +334,22 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
     name = (row.get("ho_ten") or "").strip().upper()
     year = str(row.get("nam_sinh") or "")
     sid = str(row.get("sid") or row.get("ma_phieu") or "")
+    cccd = re.sub(r"\D", "", str(row.get("cccd") or ""))
     fname = str(row.get("file_name") or row.get("source_file") or "")
     stem = Path(fname).stem if fname else ""
 
-    # Filename pattern: 250726-465264 - VAN THI THU HUONG - 1963 - F
-    # Lab SID (465264) is NOT Medinet phieukhamId / MaPhieu — do not trust alone.
     fn_name, fn_year = "", ""
     m_fn = re.search(
-        r"^\d{6}-\d+\s*-\s*(.+?)\s*-\s*(19\d{2}|20\d{2})\s*-\s*[MF]\b",
+        r"^\d{6}-\d+\s*-\s*(.+?)\s*-\s*(19\d{2}|20\d{2})\s*-\s*[MF](?:_|\.|$)",
         stem,
         re.I,
     )
+    if not m_fn:
+        m_fn = re.search(
+            r"^\d{6}-\d+\s*-\s*(.+?)\s*-\s*(19\d{2}|20\d{2})\s*-\s*[MF]\b",
+            stem,
+            re.I,
+        )
     if m_fn:
         fn_name = m_fn.group(1).strip().upper()
         fn_year = m_fn.group(2)
@@ -303,6 +359,8 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
             year = fn_year
 
     candidates = []
+    if cccd and cccd in index.get("by_cccd", {}):
+        candidates.append(index["by_cccd"][cccd])
     if phone and phone in index["by_phone"]:
         candidates.extend(index["by_phone"][phone])
     for nm in filter(None, [name, fn_name]):
@@ -310,8 +368,10 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
             key = f"{nm}|{yr}"
             if key in index["by_name_year"]:
                 candidates.extend(index["by_name_year"][key])
+            fk = f"{_fold_name(nm)}|{yr}"
+            if fk in index.get("by_fold_year", {}):
+                candidates.extend(index["by_fold_year"][fk])
 
-    # Explicit MaPhieu / phieukhamId only (full codes like KSKDKP260715648 or …_746119_)
     for mp in filter(None, [sid, row.get("ma_phieu")]):
         mp = str(mp).strip()
         if mp and mp in index["by_maphieu"]:
@@ -322,16 +382,14 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
         mp = m.group(0).upper()
         if mp in index["by_maphieu"]:
             candidates.append(index["by_maphieu"][mp])
-    # Our ERROR rename suffix: ..._481583.pdf → trust as phieukhamId
     for m in re.finditer(r"_(\d{5,7})(?:_|\.|$)", stem):
         token = m.group(1)
         if token in index.get("by_pid", {}):
             candidates.append(index["by_pid"][token])
-    # Only treat long digit tokens as pid when name/year also agrees (avoid lab SID 465264)
+
     digit_hits = []
     for m in re.finditer(r"(?<!\d)(\d{6,7})(?!\d)", stem):
         token = m.group(1)
-        # Skip DDMMYY date prefix (250726) and typical lab seq after it
         if re.match(r"^\d{6}-\d+", stem) and token == stem.split("-", 1)[0][:6]:
             continue
         if token in index.get("by_pid", {}):
@@ -339,31 +397,38 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
         if token in index["by_maphieu"]:
             digit_hits.append(index["by_maphieu"][token])
 
-    # Accent-insensitive name|year (always collect — stronger than stray lab SID)
     name_hits = []
     for nm in filter(None, [name, fn_name]):
-        fold = _fold_name(nm)
         for yr in filter(None, [year, fn_year]):
-            for k, recs in index["by_name_year"].items():
+            fk = f"{_fold_name(nm)}|{yr}"
+            if fk in index.get("by_fold_year", {}):
+                name_hits.extend(index["by_fold_year"][fk])
+            for k, recs in index.get("by_fold_year", {}).items():
                 kn, ky = (k.split("|", 1) + [""])[:2]
-                if ky == yr and _fold_name(kn) == fold:
+                if ky == yr and _names_soft_match(nm, kn):
                     name_hits.extend(recs)
     candidates.extend(name_hits)
 
-    # Use digit/pid hits only if they agree with name fold, or no name candidates yet
     if digit_hits:
+        fold_target = name or fn_name
+        yr_target = year or fn_year
         if name_hits or candidates:
-            fold_target = _fold_name(name or fn_name)
-            yr_target = year or fn_year
             for rec in digit_hits:
-                rn = _fold_name(str(rec.get("HoTen") or ""))
+                rn = str(rec.get("HoTen") or "")
                 ns = str(rec.get("NgaySinh") or "")[:4]
-                if fold_target and rn == fold_target and (not yr_target or ns == yr_target):
+                if fold_target and _names_soft_match(fold_target, rn) and (not yr_target or ns == yr_target):
                     candidates.append(rec)
         else:
             candidates.extend(digit_hits)
 
-    # dedupe
+    if not candidates and (name or fn_name) and (year or fn_year):
+        nm = name or fn_name
+        yr = year or fn_year
+        for k, recs in index.get("by_fold_year", {}).items():
+            kn, ky = (k.split("|", 1) + [""])[:2]
+            if ky == yr and _names_soft_match(nm, kn):
+                candidates.extend(recs)
+
     seen = set()
     uniq = []
     for c in candidates:
@@ -376,47 +441,37 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
     if not uniq:
         return "WAITING_ADMIN", None
 
-    # Prefer name+year agreement, then matching mau (M3/M4)
-    fold_target = _fold_name(name or fn_name)
+    fold_target = name or fn_name
     yr_target = year or fn_year
 
     def _score(c: dict) -> tuple:
-        rn = _fold_name(str(c.get("HoTen") or ""))
+        rn = str(c.get("HoTen") or "")
         ns = str(c.get("NgaySinh") or "")[:4]
-        name_ok = 1 if fold_target and rn == fold_target else 0
+        name_ok = 2 if fold_target and _fold_name(fold_target) == _fold_name(rn) else (
+            1 if fold_target and _names_soft_match(fold_target, rn) else 0
+        )
         year_ok = 1 if yr_target and ns == yr_target else 0
+        phone_ok = 1 if phone and re.sub(r"\D", "", str(c.get("SDT") or "")) == phone else 0
         mau = row.get("mau_kham")
         mau_ok = 1 if mau and c.get("_mau") == mau else 0
-        return (name_ok + year_ok, mau_ok)
+        return (name_ok + year_ok + phone_ok, mau_ok)
 
     uniq.sort(key=_score, reverse=True)
-    # If best has no name agreement but we had a name, keep waiting (avoid wrong person)
-    if fold_target and _score(uniq[0])[0] == 0 and (name_hits or phone):
-        # phone-only wrong year possible — still allow phone match with same name fold later
-        phone_ok = [c for c in uniq if fold_target and _fold_name(str(c.get("HoTen") or "")) == fold_target]
-        if phone_ok:
-            uniq = phone_ok
-        elif not phone:
+    if fold_target and _score(uniq[0])[0] == 0:
+        soft = [c for c in uniq if _names_soft_match(fold_target, str(c.get("HoTen") or ""))]
+        if soft:
+            uniq = soft
+        elif not phone and not cccd:
             return "WAITING_ADMIN", None
 
     mau = row.get("mau_kham")
     preferred = [c for c in uniq if c.get("_mau") == mau] or uniq
-    # Re-rank preferred by score
     preferred.sort(key=_score, reverse=True)
     rec = preferred[0]
     pid = rec.get("phieukhamId") or rec.get("Id")
     if pid not in index["no_cls_ids"]:
         return "SKIP_ALREADY_CLS", rec
     return "READY_IMPORT", rec
-
-
-def _fold_name(s: str) -> str:
-    """Uppercase + strip Vietnamese accents for soft name match."""
-    import unicodedata
-
-    s = unicodedata.normalize("NFD", (s or "").upper())
-    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
-    return re.sub(r"\s+", " ", s).strip()
 
 
 def write_preview_excel(rows: list[dict], path: Path) -> None:

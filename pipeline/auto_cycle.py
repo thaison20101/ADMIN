@@ -130,6 +130,86 @@ def run_auto_cycle(
     added = register_new_files(inbox, rows)
     # Also pick up PDFs stuck in ERROR from older failed runs
     added_err = register_new_files(error_dir, rows)
+
+    # CRITICAL: every PDF physically in INBOX/ERROR must be re-queued each run.
+    # Tracking often says WAITING_ADMIN / SKIP / IMPORTED while file still sits
+    # in INBOX → hourly then reports "0 patients" and keeps missing them.
+    by_name = {}
+    by_hash = {r.get("file_hash"): r for r in rows if r.get("file_hash")}
+
+    def _base_name(name: str) -> str:
+        return re.sub(r"_\d{5,7}(?=\.pdf$)", "", name, flags=re.I).lower()
+
+    for r in rows:
+        for cand in (
+            Path(r.get("source_file") or "").name,
+            r.get("file_name") or "",
+        ):
+            if not cand:
+                continue
+            by_name.setdefault(cand.lower(), r)
+            by_name.setdefault(_base_name(cand), r)
+
+    requeued_disk = 0
+    orphan_registered = 0
+    for base, tag in ((inbox, "inbox"), (error_dir, "error")):
+        if not base.exists():
+            continue
+        for pdf in base.rglob("*.pdf"):
+            key = pdf.name.lower()
+            r = by_name.get(key) or by_name.get(_base_name(pdf.name))
+            if r is None:
+                # Hash may already exist under another path — retarget that row
+                try:
+                    from hourly_sync import sha256_file
+
+                    digest = sha256_file(pdf)
+                except Exception:
+                    digest = ""
+                r = by_hash.get(digest) if digest else None
+                if r is None:
+                    hints = {}
+                    try:
+                        from hourly_sync import parse_filename_hints
+
+                        hints = parse_filename_hints(pdf.name)
+                    except Exception:
+                        pass
+                    r = {
+                        "case_key": hints.get("ma_phieu") or (digest[:16] if digest else pdf.stem[:16]),
+                        "source_file": str(pdf),
+                        "file_hash": digest,
+                        "ho_ten": hints.get("ho_ten", ""),
+                        "cccd": "",
+                        "ngay_kham": hints.get("ngay_kham", ""),
+                        "mau_kham": hints.get("mau_kham", ""),
+                        "ma_phieu": hints.get("ma_phieu", ""),
+                        "has_lab_file": "YES",
+                        "has_admin_info": "",
+                        "status": "READY_IMPORT",
+                        "import_attempts": "0",
+                        "last_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "imported_at": "",
+                        "notes": f"orphan_{tag}_registered",
+                    }
+                    rows.append(r)
+                    if digest:
+                        by_hash[digest] = r
+                    orphan_registered += 1
+                by_name[key] = r
+            old = (r.get("status") or "").upper()
+            r["source_file"] = str(pdf)
+            r["file_name"] = pdf.name
+            if old != "READY_IMPORT" or f"disk_{tag}_requeue" not in str(r.get("notes") or ""):
+                r["status"] = "READY_IMPORT"
+                r["import_attempts"] = "0"
+                r["notes"] = f"disk_{tag}_requeue:{old}"[:200]
+                requeued_disk += 1
+    if orphan_registered:
+        safe_print(f"Registered orphan PDFs on disk: {orphan_registered}")
+    if requeued_disk:
+        safe_print(f"Re-queued from disk INBOX/ERROR: {requeued_disk}")
+
     requeued_err = 0
     for r in rows:
         src = (r.get("source_file") or "").replace("\\", "/")
@@ -156,7 +236,11 @@ def run_auto_cycle(
             r["notes"] = f"requeue_parse:{r.get('notes') or ''}"[:200]
     if requeued_err:
         safe_print(f"Re-queued from ERROR / failed status: {requeued_err}")
-    safe_print(f"Inbox: {inbox}")
+
+    inbox_pdf_n = len(list(inbox.rglob("*.pdf"))) if inbox.exists() else 0
+    error_pdf_n = len(list(error_dir.rglob("*.pdf"))) if error_dir.exists() else 0
+    safe_print(f"Inbox: {inbox} (pdfs_on_disk={inbox_pdf_n})")
+    safe_print(f"Error: {error_dir} (pdfs_on_disk={error_pdf_n})")
     safe_print(f"New files registered: {added} (inbox) + {added_err} (error)")
 
     max_per_run = int(cfg.get("import_rules", {}).get("max_imports_per_run", 80))
@@ -189,6 +273,7 @@ def run_auto_cycle(
 
     stats = Counter()
     results = []
+    unmatched_lines = []
     imported_n = 0
     incomplete_n = 0
 
@@ -268,6 +353,10 @@ def run_auto_cycle(
             row["has_admin_info"] = "NO"
             row["notes"] = "no_tthc_match"
             stats["waiting_admin"] += 1
+            unmatched_lines.append(
+                f"NO_TTHC\t{row.get('ho_ten') or data.get('ho_ten')}\t"
+                f"year={data.get('nam_sinh')}\tphone={data.get('sdt')}\t{pdf.name}"
+            )
             continue
 
         # IMPORTANT: UI opens by phieukhamId — never use cdId as save key
@@ -540,7 +629,18 @@ def run_auto_cycle(
     summary = dict(stats)
     summary["new_files"] = added
     summary["results"] = len(results)
+    summary["inbox_pdfs"] = inbox_pdf_n
+    summary["error_pdfs"] = error_pdf_n
+    summary["requeued_disk"] = requeued_disk
     safe_print(f"Auto cycle stats: {summary}")
+    if unmatched_lines:
+        try:
+            uout = build / "excel_preview" / "hourly_chua_khop_tthc.txt"
+            uout.parent.mkdir(parents=True, exist_ok=True)
+            uout.write_text("\n".join(unmatched_lines) + "\n", encoding="utf-8")
+            safe_print(f"Chua khop TTHC ({len(unmatched_lines)}): {uout}")
+        except Exception as e:
+            safe_print(f"WARN unmatched list: {e}")
     return summary
 
 
