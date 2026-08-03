@@ -51,6 +51,7 @@ Write-Host "BuildRoot: $BuildRoot"
 Write-Host "Running hourly_sync.py (UU TIEN INBOX / PDF moi co TTHC) ..."
 # Khong --repair full: tranh ton slot vao hang nghin case incomplete
 # Van tu bo sung thieu neu notes goi y incomplete (gioi han so luong)
+$started = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 $out = & python ".\pipeline\hourly_sync.py" 2>&1
 $code = $LASTEXITCODE
 $out | ForEach-Object { Write-Host $_ }
@@ -59,6 +60,18 @@ try { $out | Out-File -FilePath $log -Encoding utf8 } catch {
   try { $out | Out-File -FilePath $fallback -Encoding utf8 } catch {}
   Write-Host "WARN: log fallback -> $fallback"
 }
+
+# Heartbeat o 2 cho: Drive build + local (de biet task co fire khi G:\ loi)
+$ended = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+$hb = "started=$started`nended=$ended`nexit=$code`nlog=$log`n"
+try {
+  $hbPath = Join-Path $BuildRoot "logs\LAST_HOURLY_OK.txt"
+  Ensure-Dir (Join-Path $BuildRoot "logs") | Out-Null
+  Set-Content -LiteralPath $hbPath -Value $hb -Encoding utf8
+} catch {}
+try {
+  Set-Content -LiteralPath (Join-Path $LocalLogDir "LAST_HOURLY_OK.txt") -Value $hb -Encoding utf8
+} catch {}
 
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $snapDir = Join-Path $BuildRoot "cases_snapshot"

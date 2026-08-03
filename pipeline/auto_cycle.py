@@ -491,10 +491,34 @@ def run_auto_cycle(
     write_cases(cases_path, rows)
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    if results:
-        out = build / "excel_preview" / f"CLS_auto_import_{stamp}.xlsx"
-        write_result_excel(results, out)
-        safe_print(f"Result Excel: {out}")
+    # Always write Excel so hourly activity is visible even when 0 imports
+    out = build / "excel_preview" / f"CLS_auto_import_{stamp}.xlsx"
+    try:
+        write_result_excel(results or [], out)
+        safe_print(f"Result Excel: {out} (rows={len(results)})")
+    except Exception as e:
+        safe_print(f"WARN: cannot write result excel: {e}")
+
+    # Heartbeat: proves Task Scheduler actually ran this hour
+    try:
+        hb_dir = build / "logs"
+        hb_dir.mkdir(parents=True, exist_ok=True)
+        summary_pre = dict(stats)
+        summary_pre["new_files"] = added
+        summary_pre["new_files_error"] = added_err
+        summary_pre["results"] = len(results)
+        hb_line = (
+            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\t"
+            f"imported={summary_pre.get('imported', 0)}\t"
+            f"waiting_admin={summary_pre.get('waiting_admin', 0)}\t"
+            f"new_inbox={added}\tnew_error={added_err}\t"
+            f"results={len(results)}\n"
+        )
+        (hb_dir / "LAST_HOURLY_OK.txt").write_text(hb_line, encoding="utf-8")
+        with (hb_dir / "hourly_heartbeat.log").open("a", encoding="utf-8") as f:
+            f.write(hb_line)
+    except Exception as e:
+        safe_print(f"WARN: heartbeat write failed: {e}")
 
     # snapshot ledger
     snap = build / "cases_snapshot" / f"cases-{stamp}.csv"
