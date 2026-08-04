@@ -145,6 +145,9 @@ def _split_sections(text: str) -> tuple[str, str, str]:
 def _parse_lab_line(line: str, name_pat: str) -> tuple[str, str] | None:
     m = re.search(name_pat + r"\s*(.+)$", line, re.I)
     if not m:
+        # Name alone on line (value often on next line in Thuận Kiều PDFs)
+        if re.search(name_pat + r"\s*$", line, re.I):
+            return None
         return None
     rest = m.group(1).strip()
     # Prefer number / Am tinh / (+)
@@ -173,11 +176,43 @@ def _parse_lab_line(line: str, name_pat: str) -> tuple[str, str] | None:
 
 
 def _find_lab_in_text(section: str, pat: str) -> tuple[str, str] | None:
-    for line in section.splitlines():
-        if re.search(pat, line, re.I):
-            got = _parse_lab_line(line, pat)
-            if got:
-                return got
+    lines = section.splitlines()
+    for i, line in enumerate(lines):
+        if not re.search(pat, line, re.I):
+            continue
+        got = _parse_lab_line(line, pat)
+        if got:
+            return got
+        # Multiline: "Glucose" then next line "3.98 mmol/L"
+        for j in range(1, 3):
+            if i + j >= len(lines):
+                break
+            nxt = lines[i + j].strip()
+            if not nxt:
+                continue
+            if re.search(
+                r"(?i)^(?:Creatinine|Creatinin|AST|ALT|Urea|Ure|Urê|WBC|RBC|PLT|"
+                r"Urobilinogen|Protein|Ketone|Bilirubin|Nitrite|pH|Leukocytes|"
+                r"Erythrocytes|Hemoglobin|Hematocrit|Neutrophils|Lymphocytes|"
+                r"Monocytes|Eosinophils|Basophils|MPV|RDW|MCV|MCHC|MCH)\b",
+                nxt,
+            ):
+                break
+            vm = re.match(
+                rf"^{_VAL_TOKEN}\s*(?P<unit>[A-Za-z%μµ^0-9/.\-]*)",
+                nxt,
+                re.I,
+            )
+            if vm:
+                val = re.sub(r"\s+", " ", vm.group("val")).strip()
+                unit = (vm.group("unit") or "").strip()
+                if re.fullmatch(r"[<>]?\d+(?:[.,]\d+)?", val):
+                    val = (
+                        _norm_num(val.lstrip("<>"))
+                        if not val.startswith(("<", ">"))
+                        else val[0] + _norm_num(val[1:])
+                    )
+                return val, unit
     return None
 
 
@@ -205,7 +240,24 @@ def parse_labs(text: str) -> dict:
     ]:
         got = _find_lab_in_text(chem_body, pat) or _find_lab_in_text(chem_fallback, pat)
         if got:
+            # Blood Glucose must be numeric — ignore urine "Âm tính" if chem split failed
+            if key == "Glucose" and not re.fullmatch(r"[<>]?\d+(?:[.,]\d+)?", str(got[0])):
+                got = None
+        if got:
             labs[key] = {"value_raw": got[0], "unit_raw": got[1]}
+
+    # Explicit blood-Glucose rescue from whole PDF text (before urine Âm tính line)
+    if "Glucose" not in labs:
+        pre_urine = text
+        m_u = re.search(r"(?is)\n\s*(?:Nước\s*tiểu|Phân\s*tích\s*nước\s*tiểu)\b", text)
+        if m_u:
+            pre_urine = text[: m_u.start()]
+        got = _find_lab_in_text(
+            pre_urine,
+            r"(?:\bGlucose\b|Đường\s*(?:huyết|máu)|Duong\s*(?:huyet|mau))",
+        )
+        if got and re.fullmatch(r"[<>]?\d+(?:[.,]\d+)?", str(got[0])):
+            labs["Glucose"] = {"value_raw": got[0], "unit_raw": got[1]}
 
     # Urine
     for key, pat in URINE_SPECS:

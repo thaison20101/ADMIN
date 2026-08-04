@@ -492,7 +492,20 @@ def run_auto_cycle(
                 row["status"] = "SKIP_ALREADY_CLS"
                 row["notes"] = "already_has_cls_get"
                 stats["skip_already_cls"] += 1
-            # Tidy: move out of INBOX/ERROR once CLS is complete on web
+            # Only move when PDF payload fields (except Ure) are present on web
+            still = cls_missing_lab_fields(existing, payload)
+            still = [k for k in still if k != "SinhHoaMau_Ure"]
+            if still:
+                row["status"] = "READY_IMPORT"
+                row["notes"] = f"incomplete_keep_work:{','.join(still[:8])}"[:200]
+                stats["incomplete_block_move"] += 1
+                # If already wrongly in PROCESSED, pull back to INBOX for repair
+                if "/PROCESSED" in src_u:
+                    moved_back = _move_pdf(pdf, inbox, pid=pid)
+                    if moved_back:
+                        row["source_file"] = str(moved_back)
+                        row["file_name"] = moved_back.name
+                continue
             moved = _move_pdf(pdf, processed, pid=pid)
             if moved:
                 row["source_file"] = str(moved)
