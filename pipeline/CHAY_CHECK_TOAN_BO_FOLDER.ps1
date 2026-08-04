@@ -1,13 +1,16 @@
 # ============================================================
-# CHECK LAI TOAN BO FOLDER (INBOX + ERROR + PROCESSED)
+# 1 LENH: CHECK TOAN BO FOLDER + BAT HOURLY MOI 1 GIO
 # Rule:
 #  - Nhap TAT CA field co tren PDF (tru Ure)
 #  - PDF FULL (mau + sinh hoa) -> PROCESSED
 #  - PDF chi nuoc tieu / thieu 1 phan -> van nhap phan co, roi ERROR
 #  - Chua co TTHC -> giu INBOX
+#  - Cuoi cung: cai/cap nhat Task Scheduler PKDK_Hourly_Sync
 #
 #   cd C:\Users\thais\ADMIN
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_CHECK_TOAN_BO_FOLDER.ps1
+#
+# PowerShell Admin. KHONG click vao cua so khi dang chay.
 # ============================================================
 
 $ErrorActionPreference = "Continue"
@@ -26,7 +29,7 @@ function Count-Pdf([string]$Path) {
 
 Write-Host ""
 Write-Host "############################################################"
-Write-Host "#  CHECK TOAN BO FOLDER + IMPORT THEO RULE MOI           #"
+Write-Host "#  CHECK TOAN BO FOLDER + IMPORT + HOURLY MOI 1 GIO      #"
 Write-Host "############################################################"
 Write-Host ""
 
@@ -50,6 +53,7 @@ Write-Host "==== 3/5 RESET toan bo INBOX+ERROR+PROCESSED ===="
 
 Write-Host "==== 4/5 REPAIR/IMPORT nhieu vong ===="
 Write-Host "FULL -> PROCESSED | PARTIAL/URINE_ONLY -> ERROR (van nhap phan co) | no TTHC -> INBOX"
+Write-Host "LUU Y: moi vong co the mat nhieu phut (index Medinet). KHONG click vao cua so."
 $code = 0
 for ($round = 1; $round -le 10; $round++) {
   Write-Host ("----- VONG {0}/10 -----" -f $round)
@@ -68,8 +72,13 @@ for ($round = 1; $round -le 10; $round++) {
   if (($imported -le 0) -and ($partial -le 0) -and ($queued -le 0) -and $round -ge 2) { break }
 }
 
-Write-Host "==== 5/5 Task hourly + dem folder ===="
+Write-Host "==== 5/5 CAI / CAP NHAT HOURLY PKDK_Hourly_Sync ===="
 & powershell -ExecutionPolicy Bypass -File ".\pipeline\install_hourly_task.ps1"
+$codeTask = $LASTEXITCODE
+if ($codeTask -ne 0) {
+  Write-Host "WARN: chua cai duoc hourly (can Run as administrator)."
+  Write-Host "Chay lai: .\pipeline\install_hourly_task.ps1"
+}
 
 Write-Host ""
 Write-Host "========== XONG =========="
@@ -77,5 +86,9 @@ Write-Host ("SAU: INBOX={0} ERROR={1} PROCESSED={2}" -f (Count-Pdf $Inbox), (Cou
 Write-Host "INBOX = chua co TTHC"
 Write-Host "ERROR = chi nuoc tieu / thieu 1 phan (da nhap phan co tren PDF)"
 Write-Host "PROCESSED = du mau + sinh hoa (tru Ure)"
+Write-Host "Hourly: Get-ScheduledTask -TaskName PKDK_Hourly_Sync"
+Write-Host ("Exit import={0} task={1}" -f $code, $codeTask)
 Write-Host "=========================="
+if ($codeTask -ne 0) { exit $codeTask }
 if ($code -ne 0) { exit $code }
+exit 0
