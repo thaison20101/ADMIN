@@ -200,7 +200,15 @@ def run_auto_cycle(
             old = (r.get("status") or "").upper()
             r["source_file"] = str(pdf)
             r["file_name"] = pdf.name
-            if old != "READY_IMPORT" or f"disk_{tag}_requeue" not in str(r.get("notes") or ""):
+            # Keep known-done rows as done so they can be moved to PROCESSED
+            # even if current TTHC re-match is ambiguous.
+            if old in {"IMPORTED", "SKIP_ALREADY_CLS"}:
+                if (r.get("notes") or "") != f"disk_{tag}_done:{old}":
+                    r["status"] = old
+                    r["import_attempts"] = "0"
+                    r["notes"] = f"disk_{tag}_done:{old}"[:200]
+                    requeued_disk += 1
+            elif old != "READY_IMPORT" or f"disk_{tag}_requeue" not in str(r.get("notes") or ""):
                 r["status"] = "READY_IMPORT"
                 r["import_attempts"] = "0"
                 r["notes"] = f"disk_{tag}_requeue:{old}"[:200]
@@ -298,6 +306,30 @@ def run_auto_cycle(
         row["source_file"] = str(pdf)
         src_u = str(pdf).replace("\\", "/").upper()
         stuck_in_work = ("/INBOX" in src_u) or ("/ERROR" in src_u)
+
+        # If ledger already says done, prioritize moving out of INBOX/ERROR so
+        # PROCESSED count reflects completed imports (Ure may be intentionally empty).
+        if status in {"IMPORTED", "SKIP_ALREADY_CLS"} and stuck_in_work and not repair:
+            notes_peek = str(row.get("notes") or "")
+            needs_recheck = any(
+                x in notes_peek
+                for x in (
+                    "incomplete",
+                    "SET-no-urine",
+                    "SET-urine-all",
+                    "import_fail",
+                    "queued_max",
+                )
+            )
+            if not needs_recheck:
+                moved = _move_pdf(pdf, processed, pid=str(row.get("ma_phieu") or ""))
+                if moved:
+                    row["source_file"] = str(moved)
+                    row["file_name"] = moved.name
+                row["status"] = "IMPORTED" if status == "IMPORTED" else "SKIP_ALREADY_CLS"
+                row["notes"] = "already_done_move_processed"
+                stats["moved_done_from_work"] += 1
+                continue
 
         if status == "PARSE_ERROR" and not repair and not stuck_in_work:
             stats["skipped_parse"] += 1
