@@ -307,29 +307,9 @@ def run_auto_cycle(
         src_u = str(pdf).replace("\\", "/").upper()
         stuck_in_work = ("/INBOX" in src_u) or ("/ERROR" in src_u)
 
-        # If ledger already says done, prioritize moving out of INBOX/ERROR so
-        # PROCESSED count reflects completed imports (Ure may be intentionally empty).
-        if status in {"IMPORTED", "SKIP_ALREADY_CLS"} and stuck_in_work and not repair:
-            notes_peek = str(row.get("notes") or "")
-            needs_recheck = any(
-                x in notes_peek
-                for x in (
-                    "incomplete",
-                    "SET-no-urine",
-                    "SET-urine-all",
-                    "import_fail",
-                    "queued_max",
-                )
-            )
-            if not needs_recheck:
-                moved = _move_pdf(pdf, processed, pid=str(row.get("ma_phieu") or ""))
-                if moved:
-                    row["source_file"] = str(moved)
-                    row["file_name"] = moved.name
-                row["status"] = "IMPORTED" if status == "IMPORTED" else "SKIP_ALREADY_CLS"
-                row["notes"] = "already_done_move_processed"
-                stats["moved_done_from_work"] += 1
-                continue
+        # Done rows in INBOX/ERROR must still be re-checked against the current
+        # web form first. If fields are complete (Ure ignored), later logic will
+        # move them to PROCESSED; if fields are missing, later logic will repair.
 
         if status == "PARSE_ERROR" and not repair and not stuck_in_work:
             stats["skipped_parse"] += 1
