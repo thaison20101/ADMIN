@@ -31,7 +31,7 @@ from medinet_api import (  # noqa: E402
     verify_cls_saved,
     web_cls_looks_incomplete,
 )
-from pdf_extract import extract_pdf  # noqa: E402
+from pdf_extract import classify_pdf_coverage, extract_pdf  # noqa: E402
 from phase_b_import import write_result_excel  # noqa: E402
 from phase_b_preview import (  # noqa: E402
     build_root,
@@ -104,6 +104,48 @@ def _row_priority(row: dict) -> int:
     if st in {"IMPORTED", "SKIP_ALREADY_CLS"}:
         return 5
     return 6
+
+
+def _route_after_import(
+    *,
+    pdf: Path,
+    row: dict,
+    pid: str,
+    coverage: str,
+    processed: Path,
+    error_dir: Path,
+    stats: Counter,
+    note: str,
+) -> None:
+    """FULL → PROCESSED; URINE_ONLY/PARTIAL/EMPTY → ERROR (đã nhập phần có trên PDF)."""
+    if coverage == "FULL":
+        dest = processed
+        row["status"] = "IMPORTED"
+        row["notes"] = f"imported_full:{note}"[:200]
+        stats["imported"] += 1
+        stats["routed_processed"] += 1
+        tag = "PROCESSED"
+    else:
+        dest = error_dir
+        row["status"] = "ERROR_IMPORT"
+        row["notes"] = f"imported_{coverage.lower()}_to_error:{note}"[:200]
+        stats["imported_partial_to_error"] += 1
+        stats["routed_error"] += 1
+        tag = "ERROR"
+    moved = _move_pdf(pdf, dest, pid=pid)
+    if moved:
+        row["source_file"] = str(moved)
+        row["file_name"] = moved.name
+        if tag == "PROCESSED":
+            try:
+                for dup in error_dir.glob(Path(pdf.name).name):
+                    if dup.resolve() != Path(moved).resolve():
+                        dup.unlink(missing_ok=True)
+            except Exception:
+                pass
+    elif pdf.exists():
+        row["notes"] = f"{row['notes']};move_failed"[:200]
+    safe_print(f"  {tag} coverage={coverage} {row.get('ho_ten')} pid={pid}")
 
 
 def run_auto_cycle(
@@ -358,6 +400,8 @@ def run_auto_cycle(
         data["source_file"] = str(pdf)
         if row.get("ma_phieu"):
             data["ma_phieu"] = row.get("ma_phieu")
+        coverage = data.get("pdf_coverage") or classify_pdf_coverage(data.get("labs") or {})
+        data["pdf_coverage"] = coverage
         st, rec = match_patient(data, index)
         row["last_checked_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -427,15 +471,31 @@ def run_auto_cycle(
             elif force or repair or stuck_in_work:
                 st = "READY_IMPORT"  # re-evaluate incompleteness below
             else:
-                row["status"] = "SKIP_ALREADY_CLS"
-                row["notes"] = "already_has_cls"
-                row["has_admin_info"] = "YES"
-                # Done on web — do not leave PDF forever in INBOX
-                moved = _move_pdf(pdf, processed, pid=pid)
-                if moved:
-                    row["source_file"] = str(moved)
-                stats["skip_already_cls"] += 1
-                continue
+                # Already on web and not stuck — still route by PDF coverage
+                payload_early = labs_to_form_payload(
+                    data.get("labs") or {},
+                    phieukham_id=pid,
+                    gioi_tinh=data.get("gioi_tinh") or "",
+                )
+                miss_e = [
+                    k
+                    for k in cls_missing_lab_fields(existing_early, payload_early)
+                    if k != "SinhHoaMau_Ure"
+                ]
+                if miss_e:
+                    st = "READY_IMPORT"
+                else:
+                    _route_after_import(
+                        pdf=pdf,
+                        row=row,
+                        pid=pid,
+                        coverage=coverage,
+                        processed=processed,
+                        error_dir=error_dir,
+                        stats=stats,
+                        note="already_has_cls",
+                    )
+                    continue
 
         if not pid:
             row["status"] = "WAITING_ADMIN"
@@ -484,36 +544,35 @@ def run_auto_cycle(
         force_this = force or needs_urine_fix
 
         if has_cls and not force_this:
-            # Web already has complete-enough values — do not overwrite
-            if status == "IMPORTED":
-                row["status"] = "IMPORTED"
-                stats["repair_ok_already" if repair else "skipped_imported"] += 1
-            else:
-                row["status"] = "SKIP_ALREADY_CLS"
-                row["notes"] = "already_has_cls_get"
-                stats["skip_already_cls"] += 1
-            # Only move when PDF payload fields (except Ure) are present on web
+            # Web already has all PDF fields (Ure ignored) — route by PDF coverage
             still = cls_missing_lab_fields(existing, payload)
             still = [k for k in still if k != "SinhHoaMau_Ure"]
             if still:
                 row["status"] = "READY_IMPORT"
                 row["notes"] = f"incomplete_keep_work:{','.join(still[:8])}"[:200]
                 stats["incomplete_block_move"] += 1
-                # If already wrongly in PROCESSED, pull back to INBOX for repair
                 if "/PROCESSED" in src_u:
                     moved_back = _move_pdf(pdf, inbox, pid=pid)
                     if moved_back:
                         row["source_file"] = str(moved_back)
                         row["file_name"] = moved_back.name
                 continue
-            moved = _move_pdf(pdf, processed, pid=pid)
-            if moved:
-                row["source_file"] = str(moved)
+            row["imported_at"] = row.get("imported_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            _route_after_import(
+                pdf=pdf,
+                row=row,
+                pid=pid,
+                coverage=coverage,
+                processed=processed,
+                error_dir=error_dir,
+                stats=stats,
+                note="already_on_web",
+            )
             continue
         if not has_cls or needs_urine_fix:
             why = "empty-on-web" if not has_cls else f"incomplete:{','.join(missing_on_web[:8]) or 'heuristic'}"
             if repair or needs_urine_fix:
-                safe_print(f"  REPAIR {why} {row.get('ho_ten')} pid={pid}")
+                safe_print(f"  REPAIR {why} {row.get('ho_ten')} pid={pid} coverage={coverage}")
                 stats["repair_empty" if not has_cls else "repair_incomplete"] += 1
             row["status"] = "READY_IMPORT"
             if needs_urine_fix:
@@ -575,8 +634,9 @@ def run_auto_cycle(
         partial_bad = ("SET-no-urine-text" in (msg or "")) or ("SET-urine-all-dropped" in (msg or ""))
 
         if ok and verified and fields_sent > 0 and urine_ok and not partial_bad:
+            still_missing = [k for k in still_missing if k != "SinhHoaMau_Ure"]
             if still_missing:
-                # Blood verified but some chem/urine from PDF still empty — keep retrying
+                # PDF fields still empty on web — keep retrying (do not park yet)
                 row["status"] = "READY_IMPORT"
                 row["notes"] = f"incomplete_after_save:{','.join(still_missing[:10])};{msg}"[:200]
                 result_row.update(
@@ -588,32 +648,33 @@ def run_auto_cycle(
                 )
                 stats["error_import"] += 1
                 safe_print(
-                    f"  INCOMPLETE {data.get('ho_ten')} pid={pid} missing={still_missing[:8]}"
+                    f"  INCOMPLETE {data.get('ho_ten')} pid={pid} missing={still_missing[:8]} coverage={coverage}"
                 )
                 results.append(result_row)
                 if sleep_s:
                     time.sleep(sleep_s)
                 continue
-            row["status"] = "IMPORTED"
+            # All PDF fields (except Ure) are on web → route by coverage
             row["imported_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            row["notes"] = msg or "imported"
-            result_row.update({"import_status": "IMPORTED", "message": msg, "verified": "YES"})
-            stats["imported"] += 1
+            result_row.update(
+                {
+                    "import_status": "IMPORTED" if coverage == "FULL" else f"IMPORTED_{coverage}",
+                    "message": f"{msg};coverage={coverage}",
+                    "verified": "YES",
+                }
+            )
             imported_n += 1
-            # Always move to PROCESSED (including PDFs previously stuck in ERROR)
-            moved = _move_pdf(pdf, processed, pid=pid)
-            if moved:
-                row["source_file"] = str(moved)
-                # Remove same-name leftovers still in ERROR
-                try:
-                    for dup in error_dir.glob(pdf.name):
-                        if dup.resolve() != Path(moved).resolve():
-                            dup.unlink(missing_ok=True)
-                except Exception:
-                    pass
-            elif pdf.exists():
-                row["notes"] = f"{row['notes']};move_to_processed_failed"[:200]
-            safe_print(f"  IMPORTED {data.get('ho_ten')} pid={pid} fields={fields_sent}")
+            _route_after_import(
+                pdf=pdf,
+                row=row,
+                pid=pid,
+                coverage=coverage,
+                processed=processed,
+                error_dir=error_dir,
+                stats=stats,
+                note=msg or "imported",
+            )
+            safe_print(f"  SAVED {data.get('ho_ten')} pid={pid} fields={fields_sent} coverage={coverage}")
         else:
             max_attempts = int(cfg.get("tracking", {}).get("max_import_attempts", 5))
             # repair: keep retrying instead of parking forever in ERROR

@@ -461,15 +461,62 @@ def normalize_for_web(labs: dict) -> dict:
     return out
 
 
+def _lab_has_value(labs: dict, key: str) -> bool:
+    item = labs.get(key) or {}
+    v = item.get("value_web")
+    if v in (None, ""):
+        v = item.get("value_raw")
+    return v not in (None, "")
+
+
+def classify_pdf_coverage(labs: dict | None) -> str:
+    """Classify how complete the PDF lab content is.
+
+    FULL     = has blood core + chemistry core (Urea never required)
+    URINE_ONLY = only urine / no blood+chem
+    PARTIAL  = some blood or chem but not enough for FULL
+    EMPTY    = no usable labs
+    """
+    labs = labs or {}
+    blood_keys = ("WBC", "RBC", "HGB", "PLT")
+    chem_keys = ("Glucose", "Creatinine", "AST", "ALT")  # Urea excluded by design
+    urine_keys = (
+        "Urobilinogen",
+        "Glucose_NT",
+        "Ketone",
+        "Bilirubin_NT",
+        "Protein_NT",
+        "Nitrite",
+        "pH_NT",
+        "Mau_NT",
+        "Ti_trong",
+        "Bach_cau_NT",
+    )
+    blood_n = sum(1 for k in blood_keys if _lab_has_value(labs, k))
+    chem_n = sum(1 for k in chem_keys if _lab_has_value(labs, k))
+    urine_n = sum(1 for k in urine_keys if _lab_has_value(labs, k))
+
+    if blood_n == 0 and chem_n == 0 and urine_n == 0:
+        return "EMPTY"
+    # FULL: đủ công thức máu cốt lõi + sinh hóa cốt lõi (trừ Ure)
+    if blood_n >= 3 and chem_n >= 3:
+        return "FULL"
+    if urine_n > 0 and blood_n == 0 and chem_n == 0:
+        return "URINE_ONLY"
+    return "PARTIAL"
+
+
 def extract_pdf(path: Path) -> dict:
     text = read_pdf_text(path)
     header = parse_header(text)
     labs_raw = parse_labs(text)
     labs = normalize_for_web(labs_raw)
+    coverage = classify_pdf_coverage(labs)
     return {
         "source_file": str(path),
         "file_name": path.name,
         **header,
         "labs": labs,
+        "pdf_coverage": coverage,
         "parse_ok": bool(header.get("ho_ten") and labs),
     }
