@@ -188,6 +188,24 @@ def _fold_name(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def _year_from_ngaysinh(ns) -> str:
+    """Extract birth year from Medinet NgaySinh.
+
+    API may return ISO `1943-01-01` OR DMY `01/01/1943`. Taking [:4] on DMY
+    wrongly yields `01/0` and breaks all name|year matches → mass NO_TTHC.
+    """
+    s = str(ns or "").strip()
+    if not s:
+        return ""
+    if re.match(r"^(19|20)\d{2}\b", s):
+        return s[:4]
+    m = re.search(r"(19\d{2}|20\d{2})\s*$", s)
+    if m:
+        return m.group(1)
+    m = re.search(r"(19\d{2}|20\d{2})", s)
+    return m.group(1) if m else ""
+
+
 def _names_soft_match(a: str, b: str) -> bool:
     """True when folded names are equal or clearly the same person."""
     fa, fb = _fold_name(a), _fold_name(b)
@@ -286,8 +304,7 @@ def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
                 index["all_ids"].add(pid)
                 phone = re.sub(r"\D", "", str(r.get("SDT") or ""))
                 name = (r.get("HoTen") or "").strip().upper()
-                ns = str(r.get("NgaySinh") or "")[:10]
-                year = ns[:4] if ns else ""
+                year = _year_from_ngaysinh(r.get("NgaySinh"))
                 mp = str(r.get("MaPhieu") or "")
                 rec = {**r, "_mau": mau}
                 if phone:
@@ -369,7 +386,7 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
     yr_target = year or fn_year
 
     def _rec_year(rec: dict) -> str:
-        return str(rec.get("NgaySinh") or "")[:4]
+        return _year_from_ngaysinh(rec.get("NgaySinh"))
 
     def _year_ok(rec: dict) -> bool:
         if not yr_target:
@@ -505,6 +522,80 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
     if pid not in index["no_cls_ids"]:
         return "SKIP_ALREADY_CLS", rec
     return "READY_IMPORT", rec
+
+
+def search_patient_live(
+    token: str,
+    *,
+    name: str,
+    year: str,
+    date_from: str,
+    date_to: str,
+) -> tuple[str, dict | None, str]:
+    """Fallback when day-index miss: query M3/M4 by HoTen over full date span.
+
+    Returns (status, rec, token).
+    """
+    if not name or not year:
+        return "WAITING_ADMIN", None, token
+
+    reports = [
+        ("M3", "KSKDK_DanhSach_KSK_M13", "NgayTao"),
+        ("M4", "KSKDK_DanhSach_KSK_NguoiCaoTuoi_Report", "KSKDK_NgayKham"),
+    ]
+    fold = _fold_name(name)
+    hits = []
+
+    def get_report(code):
+        s, d = api(token, f"/api/services/app/DRReport/GetIdByCode?Code={code}&SessionSiteId=130")
+        items = ((d or {}).get("result") or {}).get("data") or []
+        return items[0] if items else None
+
+    dr = f"{date_from} - {date_to}"
+    for mau, code, date_field in reports:
+        rep = get_report(code)
+        if not rep:
+            continue
+        store, ds = rep["sqlContent"], rep["dataSourceId"]
+        for ho in filter(None, [name, fold]):
+            s, d = api(
+                token,
+                f"/api/services/app/DRViewer/ExecuteStoreWithParam_ByDatasource?dataSourceId={ds}&store={store}",
+                "POST",
+                to_fparams(
+                    {
+                        date_field: dr,
+                        "NgayTao": dr,
+                        "KSKDK_NgayKham": dr,
+                        "HoTen": ho,
+                        "page": 1,
+                        "pageSize": 200,
+                    }
+                ),
+            )
+            for r in ((d or {}).get("result") or {}).get("data") or []:
+                if _year_from_ngaysinh(r.get("NgaySinh")) != str(year):
+                    continue
+                if not _names_soft_match(name, str(r.get("HoTen") or "")):
+                    continue
+                hits.append({**r, "_mau": mau})
+
+    # Prefer ChatLuong no-CLS if multiple; else first
+    seen = set()
+    uniq = []
+    for h in hits:
+        pid = h.get("phieukhamId") or h.get("Id")
+        if pid in seen:
+            continue
+        seen.add(pid)
+        uniq.append(h)
+    if not uniq:
+        return "WAITING_ADMIN", None, token
+    # If multiple same name+year, wait (need phone/cccd)
+    if len(uniq) > 1:
+        return "WAITING_ADMIN", None, token
+    rec = uniq[0]
+    return "READY_IMPORT", rec, token
 
 
 def write_preview_excel(rows: list[dict], path: Path) -> None:

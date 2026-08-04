@@ -38,6 +38,7 @@ from phase_b_preview import (  # noqa: E402
     fetch_unit_index,
     load_config,
     match_patient,
+    search_patient_live,
 )
 from win_console import safe_print, setup_utf8_stdio  # noqa: E402
 
@@ -359,6 +360,28 @@ def run_auto_cycle(
             data["ma_phieu"] = row.get("ma_phieu")
         st, rec = match_patient(data, index)
         row["last_checked_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Live name+year search when day-index missed (common if NgaySinh format
+        # or paging skipped the patient). Fixes cases like TRỊNH THẾ NỮ.
+        if st == "WAITING_ADMIN":
+            live_st, live_rec, token_box["t"] = search_patient_live(
+                token_box["t"],
+                name=str(data.get("ho_ten") or row.get("ho_ten") or ""),
+                year=str(data.get("nam_sinh") or ""),
+                date_from=date_from,
+                date_to=date_to,
+            )
+            if live_st != "WAITING_ADMIN" and live_rec:
+                st, rec = live_st, live_rec
+                # Re-check whether CLS already exists
+                pid_live = live_rec.get("phieukhamId") or live_rec.get("Id")
+                if pid_live not in (None, ""):
+                    existing_live, token_box["t"] = load_cls_view(
+                        token_box["t"], pid_live, reauth=reauth
+                    )
+                    if cls_has_lab_values(existing_live):
+                        st = "SKIP_ALREADY_CLS"
+                stats["live_name_match"] += 1
 
         if st == "WAITING_ADMIN":
             row["status"] = "WAITING_ADMIN"
