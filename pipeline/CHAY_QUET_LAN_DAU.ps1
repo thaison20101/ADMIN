@@ -104,7 +104,7 @@ $codeTask = $LASTEXITCODE
 Write-Host ""
 Write-Host "========== XONG =========="
 Write-Host ("SAU: INBOX={0} MISSING={1} ERROR={2} PROCESSED={3}" -f (Count-Pdf $Inbox), (Count-Pdf $Missing), (Count-Pdf $ErrorDir), (Count-Pdf $Processed))
-Write-Host "MISSING   = chua co TTHC (bao bo phan nhap) — list: build\excel_preview\missing_can_tthc.txt"
+Write-Host "MISSING   = chua co TTHC (bao bo phan nhap) - list: build\excel_preview\missing_can_tthc.txt"
 Write-Host "ERROR     = co TTHC nhung PDF chi 1 phan (da nhap phan co)"
 Write-Host "PROCESSED = FULL mau + sinh hoa (tru Ure) + da khop TTHC dung"
 Write-Host "Hourly tiep theo CHI quet INBOX_CLS + MISSING (tranh quet di quet lai)"
