@@ -48,7 +48,8 @@ if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdkthuankieu" }
 if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "P@ssw0rd" }
 
 Write-Host "BuildRoot: $BuildRoot"
-Write-Host "Hourly: LUON quet INBOX + ERROR; co TTHC (ten+nam sinh) -> import + PROCESSED; chua -> giu INBOX"
+Write-Host "Hourly: chi quet INBOX_CLS + MISSING"
+Write-Host "  FULL -> PROCESSED | PARTIAL -> ERROR (nhap phan co) | no TTHC -> MISSING"
 Write-Host "Ngay kham index: 01/07/2026 -> hom nay (rolling)"
 $started = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 $out = & python ".\pipeline\hourly_sync.py" 2>&1

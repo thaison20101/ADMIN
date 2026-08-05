@@ -34,9 +34,9 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "==== 3/5 pip deps ===="
 & python -m pip install -q -r ".\pipeline\requirements.txt"
 
-Write-Host "==== 4/5 REPAIR + IMPORT TOAN BO (co the mat nhieu phut) ===="
+Write-Host "==== 4/5 REPAIR + IMPORT (full-scan lan dau) ===="
 Write-Host "Import PDF moi + ghi de form thieu (nuoc tieu Am tinh->Negative, Ure, ...)"
-$out = & python ".\pipeline\hourly_sync.py" --repair 2>&1
+$out = & python ".\pipeline\hourly_sync.py" --full-scan --repair --audit-processed 2>&1
 $code = $LASTEXITCODE
 $out | ForEach-Object { Write-Host $_ }
 
@@ -53,8 +53,9 @@ Write-Host ""
 Write-Host "========== XONG =========="
 Write-Host "Da chay repair 1 lan + cai PKDK_Hourly_Sync (moi 1 gio)."
 Write-Host "Laptop can BAT + dang nhap Windows de Task Scheduler chay."
-Write-Host "PDF moi: tha vao INBOX_CLS (Google Drive sync)."
+Write-Host "PDF moi: tha vao INBOX_CLS. Chua co TTHC -> MISSING. Hourly chi quet INBOX+MISSING."
 Write-Host "Excel: build for Supper Data\excel_preview\CLS_auto_import_*.xlsx"
+Write-Host "List MISSING: build for Supper Data\excel_preview\missing_can_tthc.txt"
 Write-Host "Kiem tra task:"
 Write-Host "  Get-ScheduledTask -TaskName PKDK_Hourly_Sync"
 Write-Host "=========================="

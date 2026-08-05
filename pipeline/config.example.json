@@ -4,8 +4,10 @@
     "inbox_folder": "INBOX_CLS",
     "processed_folder": "PROCESSED",
     "error_folder": "ERROR",
+    "missing_folder": "MISSING",
     "local_sync_root": "G:/Drive của tôi/PKDK_Thuankieu_Pipeline",
-    "build_root": "G:/Drive của tôi/build for Supper Data"
+    "build_root": "G:/Drive của tôi/build for Supper Data",
+    "note": "Full-scan: TOAN BO folder (ke ca PROCESSED). Hourly: chi INBOX_CLS + MISSING. No TTHC → MISSING. Match: ten+nam_sinh+ngay_in_KQ."
   },
   "tracking": {
     "cases_csv": "tracking/cases.csv",

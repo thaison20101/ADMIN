@@ -31,6 +31,7 @@ def main() -> int:
     drive.setdefault("inbox_folder", "INBOX_CLS")
     drive.setdefault("processed_folder", "PROCESSED")
     drive.setdefault("error_folder", "ERROR")
+    drive.setdefault("missing_folder", "MISSING")
 
     med = cfg.setdefault("medinet", {})
     # Always: 01/07/2026 -> today (rolling; empty date_to = hôm nay)

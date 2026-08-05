@@ -14,7 +14,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -206,20 +206,78 @@ def _year_from_ngaysinh(ns) -> str:
     return m.group(1) if m else ""
 
 
+def _parse_any_date(value) -> date | None:
+    """Parse PDF ngay_co_kq / Medinet NgayKham / filename DDMMYY → date."""
+    s = str(value or "").strip()
+    if not s:
+        return None
+    # ISO / Medinet: 2026-07-23 or 2026-07-23T00:00:00
+    m = re.match(r"^(20\d{2}|19\d{2})-(\d{2})-(\d{2})", s)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            return None
+    # DMY: 23/07/2026 or 23/07/2026 14:30
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(20\d{2}|19\d{2})", s)
+    if m:
+        try:
+            return date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+        except ValueError:
+            return None
+    # Filename prefix DDMMYY
+    m = re.match(r"^(\d{2})(\d{2})(\d{2})\b", s)
+    if m:
+        dd, mm, yy = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        year = 2000 + yy if yy < 100 else yy
+        try:
+            return date(year, mm, dd)
+        except ValueError:
+            return None
+    return None
+
+
+def _date_proximity_score(pdf_d: date | None, rec_d: date | None) -> int:
+    """Score how well PDF result-print date fits Medinet NgayKham.
+
+    Lab may be printed BEFORE khám (ngay_co_kq earlier than NgayKham).
+    Allow exam up to 45 days after print, or print up to 7 days after exam.
+    """
+    if not pdf_d or not rec_d:
+        return 0
+    delta = (rec_d - pdf_d).days  # + = khám after print
+    if -7 <= delta <= 3:
+        return 3  # same day / nearly same
+    if 0 <= delta <= 14:
+        return 2  # print before exam within 2 weeks
+    if -7 <= delta <= 45:
+        return 1  # still plausible
+    return 0  # too far — demote heavily when disambiguating
+
+
 def _names_soft_match(a: str, b: str) -> bool:
-    """True when folded names are equal or clearly the same person."""
+    """True when folded names are the same person (strict on họ + tên).
+
+    Rejects subset traps like "NGUYEN THI KIEU" ⊂ "NGUYEN THI KIEU DIEM"
+    which previously caused false TTHC matches → wrong PROCESSED.
+    """
     fa, fb = _fold_name(a), _fold_name(b)
     if not fa or not fb:
         return False
     if fa == fb:
         return True
     ta, tb = fa.split(), fb.split()
+    if not ta or not tb:
+        return False
     if sorted(ta) == sorted(tb):
         return True
-    if ta[0] == tb[0] and ta[-1] == tb[-1] and min(len(ta), len(tb)) >= 2:
-        return True
-    sa, sb = set(ta), set(tb)
-    return sa <= sb or sb <= sa
+    # Vietnamese identity: họ (first) + tên (last) must both match.
+    # Extra middle tokens OK (OCR drop "THI"); different LAST token = other person.
+    if len(ta) < 2 or len(tb) < 2:
+        return False
+    if ta[0] != tb[0] or ta[-1] != tb[-1]:
+        return False
+    return True
 
 
 def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
@@ -348,9 +406,12 @@ def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
 def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
     """Return (status, medinet_row).
 
-    Name matches MUST agree on nam_sinh (year) — e.g. two NGUYỄN THỊ CHO
-    (1950 vs 1953) must not be confused. CCCD / MaPhieu / phieukhamId are
-    strong keys and may override when unique.
+    Hard keys:
+      - nam_sinh (năm sinh) MUST match
+      - họ + tên (strict soft: same first+last token; no subset names)
+    Soft key:
+      - ngày có kết quả (PDF) vs NgayKham (Medinet): may differ because lab
+        can be printed BEFORE khám — allow exam up to ~45 days after print.
     """
     phone = re.sub(r"\D", "", str(row.get("sdt") or ""))
     name = (row.get("ho_ten") or "").strip().upper()
@@ -359,6 +420,11 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
     cccd = re.sub(r"\D", "", str(row.get("cccd") or ""))
     fname = str(row.get("file_name") or row.get("source_file") or "")
     stem = Path(fname).stem if fname else ""
+
+    # PDF result-print date: header "Ngày có kết quả" or filename DDMMYY
+    pdf_result_d = _parse_any_date(row.get("ngay_co_kq"))
+    if not pdf_result_d:
+        pdf_result_d = _parse_any_date(stem[:6] if re.match(r"^\d{6}-", stem) else "")
 
     fn_name, fn_year = "", ""
     m_fn = re.search(
@@ -392,6 +458,9 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
         if not yr_target:
             return False
         return _rec_year(rec) == yr_target
+
+    def _rec_ngaykham(rec: dict) -> date | None:
+        return _parse_any_date(rec.get("NgayKham") or rec.get("KSKDK_NgayKham") or rec.get("NgayTao"))
 
     strong = []  # CCCD / MaPhieu / explicit pid — still verify year when we have one
     if cccd and cccd in index.get("by_cccd", {}):
@@ -432,10 +501,18 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
                 if ky == yr_target and _names_soft_match(nm, kn):
                     candidates.extend(recs)
 
+    # Lab SID in "DDMMYY-SID - NAME - YEAR - M/F" is NOT phieukhamId
+    lab_sid = ""
+    m_lab = re.match(r"^(\d{6})-(\d+)\b", stem)
+    if m_lab:
+        lab_sid = m_lab.group(2)
+
     digit_hits = []
     for m in re.finditer(r"(?<!\d)(\d{6,7})(?!\d)", stem):
         token = m.group(1)
         if re.match(r"^\d{6}-\d+", stem) and token == stem.split("-", 1)[0][:6]:
+            continue
+        if lab_sid and token == lab_sid:
             continue
         if token in index.get("by_pid", {}):
             digit_hits.append(index["by_pid"][token])
@@ -489,9 +566,11 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
         )
         year_ok = 2 if yr_target and ns == yr_target else 0
         phone_ok = 1 if phone and re.sub(r"\D", "", str(c.get("SDT") or "")) == phone else 0
+        date_ok = _date_proximity_score(pdf_result_d, _rec_ngaykham(c))
         mau = row.get("mau_kham")
         mau_ok = 1 if mau and c.get("_mau") == mau else 0
-        return (year_ok + name_ok + phone_ok, mau_ok)
+        # Primary: year+name+phone+date; secondary: mau
+        return (year_ok + name_ok + phone_ok + date_ok, mau_ok, date_ok)
 
     uniq.sort(key=_score, reverse=True)
     # Require name soft-match when we have a name (after year filter)
@@ -506,8 +585,37 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
             # keep strong pid-only hits already year-filtered
             pass
 
+    # Prefer exact folded name over soft (ho+ten) matches
+    if fold_target:
+        exact = [
+            c
+            for c in uniq
+            if _fold_name(fold_target) == _fold_name(str(c.get("HoTen") or ""))
+        ]
+        if exact:
+            uniq = exact
+
+    # When several same name+year: use ngày in KQ vs NgayKham to pick / reject
+    if len(uniq) > 1 and pdf_result_d:
+        dated = [c for c in uniq if _date_proximity_score(pdf_result_d, _rec_ngaykham(c)) > 0]
+        if len(dated) == 1:
+            uniq = dated
+        elif len(dated) > 1:
+            dated.sort(key=_score, reverse=True)
+            top = _score(dated[0])
+            tied = [c for c in dated if _score(c) == top]
+            if len(tied) == 1:
+                uniq = tied
+            elif phone or cccd:
+                uniq = tied
+            else:
+                return "WAITING_ADMIN", None
+        elif not phone and not cccd:
+            # Multiple name+year but NONE near PDF print date → do not guess
+            return "WAITING_ADMIN", None
+
     if len(uniq) > 1:
-        # Still ambiguous after year+name — need phone/cccd; else wait
+        # Still ambiguous after year+name(+date) — need phone/cccd; else wait
         top = _score(uniq[0])
         tied = [c for c in uniq if _score(c) == top]
         if len(tied) > 1 and not phone and not cccd:
@@ -518,6 +626,11 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
     preferred = [c for c in uniq if c.get("_mau") == mau] or uniq
     preferred.sort(key=_score, reverse=True)
     rec = preferred[0]
+
+    # Single candidate with known PDF date but NgayKham far away: still accept
+    # (in trước / khám sau can exceed window for unique name+year). Only block
+    # when we had to choose among multiples (handled above).
+
     pid = rec.get("phieukhamId") or rec.get("Id")
     if pid not in index["no_cls_ids"]:
         return "SKIP_ALREADY_CLS", rec
@@ -531,10 +644,12 @@ def search_patient_live(
     year: str,
     date_from: str,
     date_to: str,
+    ngay_co_kq: str = "",
 ) -> tuple[str, dict | None, str]:
     """Fallback when day-index miss: query M3/M4 by HoTen over full date span.
 
-    Returns (status, rec, token).
+    Disambiguate same name+year via ngày có kết quả vs NgayKham (print may
+    precede exam). Returns (status, rec, token).
     """
     if not name or not year:
         return "WAITING_ADMIN", None, token
@@ -544,6 +659,7 @@ def search_patient_live(
         ("M4", "KSKDK_DanhSach_KSK_NguoiCaoTuoi_Report", "KSKDK_NgayKham"),
     ]
     fold = _fold_name(name)
+    pdf_d = _parse_any_date(ngay_co_kq)
     hits = []
 
     def get_report(code):
@@ -580,7 +696,6 @@ def search_patient_live(
                     continue
                 hits.append({**r, "_mau": mau})
 
-    # Prefer ChatLuong no-CLS if multiple; else first
     seen = set()
     uniq = []
     for h in hits:
@@ -591,7 +706,48 @@ def search_patient_live(
         uniq.append(h)
     if not uniq:
         return "WAITING_ADMIN", None, token
-    # If multiple same name+year, wait (need phone/cccd)
+
+    # Prefer exact folded name
+    exact = [h for h in uniq if _fold_name(name) == _fold_name(str(h.get("HoTen") or ""))]
+    if exact:
+        uniq = exact
+
+    if len(uniq) > 1 and pdf_d:
+        dated = [
+            h
+            for h in uniq
+            if _date_proximity_score(
+                pdf_d, _parse_any_date(h.get("NgayKham") or h.get("KSKDK_NgayKham"))
+            )
+            > 0
+        ]
+        if len(dated) == 1:
+            uniq = dated
+        elif len(dated) > 1:
+            dated.sort(
+                key=lambda h: _date_proximity_score(
+                    pdf_d, _parse_any_date(h.get("NgayKham") or h.get("KSKDK_NgayKham"))
+                ),
+                reverse=True,
+            )
+            best = _date_proximity_score(
+                pdf_d, _parse_any_date(dated[0].get("NgayKham") or dated[0].get("KSKDK_NgayKham"))
+            )
+            tied = [
+                h
+                for h in dated
+                if _date_proximity_score(
+                    pdf_d, _parse_any_date(h.get("NgayKham") or h.get("KSKDK_NgayKham"))
+                )
+                == best
+            ]
+            if len(tied) == 1:
+                uniq = tied
+            else:
+                return "WAITING_ADMIN", None, token
+        else:
+            return "WAITING_ADMIN", None, token
+
     if len(uniq) > 1:
         return "WAITING_ADMIN", None, token
     rec = uniq[0]

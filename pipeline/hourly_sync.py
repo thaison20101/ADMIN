@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""Hourly pipeline: Drive INBOX_CLS + ERROR → match Medinet → auto-import CLS.
+"""Hourly pipeline: Drive INBOX_CLS + MISSING → match Medinet → auto-import CLS.
 
 Flow each hour (laptop on + Task Scheduler + Google Drive sync):
-1) ALWAYS re-scan local Drive INBOX_CLS and ERROR PDFs
-2) Re-match TTHC (M3/M4) by name + nam_sinh (required) / phone / CCCD
+1) Scan local Drive INBOX_CLS and MISSING PDFs only
+2) Re-match TTHC by name + nam_sinh + ngay in KQ (~ NgayKham, cho phep in truoc)
 3) Date index: 01/07/2026 → today (rolling)
-4) If TTHC found → import CLS → move PROCESSED
-5) If no TTHC yet → keep in INBOX (ERROR waiting → move back to INBOX)
-6) Write result Excel + heartbeat under build_root
+4) If TTHC found + FULL labs → import → PROCESSED
+5) If TTHC found + PARTIAL labs → import available fields → ERROR
+6) If no TTHC → move/keep MISSING (list for TTHC team)
+7) Write result Excel + heartbeat under build_root
+
+Full catch-up (bat so BN cu): python hourly_sync.py --full-scan --repair
+  → TOAN BO folder ke ca PROCESSED
 """
 
 from __future__ import annotations
@@ -191,6 +195,16 @@ def main() -> int:
         action="store_true",
         help="Repair false IMPORTED / ERROR_IMPORT (re-import if web empty)",
     )
+    ap.add_argument(
+        "--full-scan",
+        action="store_true",
+        help="Quet TOAN BO folder (ke ca PROCESSED) de bat so BN cu",
+    )
+    ap.add_argument(
+        "--audit-processed",
+        action="store_true",
+        help="Re-check PROCESSED; no TTHC match → move MISSING",
+    )
     ap.add_argument("--register-only", action="store_true", help="Only register inbox files, no import")
     args = ap.parse_args()
 
@@ -217,6 +231,8 @@ def main() -> int:
         limit=args.limit,
         force=args.force,
         repair=args.repair,
+        full_scan=args.full_scan,
+        audit_processed=args.audit_processed,
     )
     safe_print(f"Done: {summary}")
     # Non-zero if hard import errors dominated? keep 0 for scheduler stability

@@ -1,7 +1,18 @@
 #!/usr/bin/env python3
-"""One automated cycle: inbox PDFs → match Medinet → import CLS for READY cases.
+"""One automated cycle: PDF CLS → match Medinet → import.
 
-Used by hourly_sync. Safe to re-run: skips IMPORTED / SKIP_ALREADY_CLS.
+Routing:
+  FULL (mau + sinh hoa, bo qua Ure) → import → PROCESSED
+  PARTIAL / URINE_ONLY → import phan co → ERROR
+  Khong co TTHC → MISSING (bao bo phan nhap TTHC)
+
+Scan:
+  --full-scan (lan dau / bat so): TOAN BO folder duoi pipeline root
+    (gom INBOX, MISSING, ERROR, PROCESSED, folder khac) — khong bo sot BN cu
+  mac dinh / hourly: chi INBOX_CLS + MISSING
+
+Khop TTHC: ten (ho+ten) + nam sinh + ngay in KQ (~ NgayKham, cho phep in truoc).
+Ky quet ngay: 01/07/2026 → hom nay (rolling).
 """
 
 from __future__ import annotations
@@ -52,6 +63,51 @@ def _today_dmy() -> str:
     return date.today().strftime("%d/%m/%Y")
 
 
+def _drive_dirs(cfg: dict) -> tuple[Path, Path, Path, Path, Path]:
+    """Return (sync_root, inbox, processed, error, missing)."""
+    sync = Path(cfg.get("drive", {}).get("local_sync_root") or "")
+    if sync.exists():
+        inbox = sync / cfg["drive"]["inbox_folder"]
+        processed = sync / cfg["drive"]["processed_folder"]
+        error_dir = sync / cfg["drive"]["error_folder"]
+        missing = sync / cfg["drive"].get("missing_folder", "MISSING")
+    else:
+        sync = ROOT
+        inbox = ROOT / "INBOX_CLS"
+        processed = ROOT / "PROCESSED"
+        error_dir = ROOT / "ERROR"
+        missing = ROOT / "MISSING"
+    return sync, inbox, processed, error_dir, missing
+
+
+def _collect_scan_dirs(
+    sync: Path,
+    inbox: Path,
+    missing: Path,
+    error_dir: Path,
+    processed: Path,
+    *,
+    full_scan: bool,
+) -> list[Path]:
+    """Folders whose PDFs are registered + re-queued this run.
+
+    full_scan=True → TOAN BO folder (ke ca PROCESSED) de khong bo sot BN cu.
+    hourly → chi INBOX + MISSING.
+    """
+    if not full_scan:
+        return [inbox, missing]
+    roots: list[Path] = []
+    skip = {".git"}
+    if sync.exists():
+        for child in sorted(sync.iterdir()):
+            if child.is_dir() and child.name.lower() not in skip:
+                roots.append(child)
+    for must in (inbox, missing, error_dir, processed):
+        if must.exists() and must not in roots:
+            roots.append(must)
+    return roots
+
+
 def _resolve_pdf(row: dict, inbox: Path, *extra_dirs: Path) -> Path | None:
     src = Path(row.get("source_file") or "")
     if src.exists():
@@ -86,24 +142,31 @@ def _move_pdf(pdf: Path, dest_dir: Path, pid: str = "") -> Path | None:
 
 
 def _row_priority(row: dict) -> int:
-    """Lower = import sooner. Prefer fresh INBOX over mass incomplete-repair."""
+    """Lower = import sooner. Prefer INBOX/MISSING; PROCESSED audit last."""
     st = (row.get("status") or "").upper()
     src = (row.get("source_file") or "").replace("\\", "/").upper()
     in_inbox = "INBOX" in src
+    in_missing = "/MISSING" in src or src.endswith("/MISSING")
+    in_hot = in_inbox or in_missing
     in_error = "/ERROR" in src or src.endswith("/ERROR")
-    if st in {"NEW_LAB", "READY_IMPORT"} and in_inbox:
+    in_processed = "/PROCESSED" in src
+    if st in {"NEW_LAB", "READY_IMPORT"} and in_hot:
         return 0
-    if st in {"ERROR_IMPORT", "ERROR"} and in_inbox:
+    if st in {"ERROR_IMPORT", "ERROR"} and in_hot:
         return 1
-    if st in {"NEW_LAB", "READY_IMPORT", "ERROR_IMPORT", "ERROR"} and in_error:
+    if st == "WAITING_ADMIN" and in_missing:
         return 2
-    if st in {"NEW_LAB", "READY_IMPORT", "ERROR_IMPORT", "ERROR"}:
+    if st in {"NEW_LAB", "READY_IMPORT", "ERROR_IMPORT", "ERROR"} and in_error:
         return 3
-    if st == "WAITING_ADMIN":
+    if st in {"NEW_LAB", "READY_IMPORT", "ERROR_IMPORT", "ERROR"} and not in_processed:
         return 4
-    if st in {"IMPORTED", "SKIP_ALREADY_CLS"}:
+    if st == "WAITING_ADMIN":
         return 5
-    return 6
+    if in_processed:
+        return 6  # ra soat PROCESSED sau cung (BN cu / sai TTHC)
+    if st in {"IMPORTED", "SKIP_ALREADY_CLS"}:
+        return 7
+    return 8
 
 
 def _route_after_import(
@@ -138,9 +201,10 @@ def _route_after_import(
         row["file_name"] = moved.name
         if tag == "PROCESSED":
             try:
-                for dup in error_dir.glob(Path(pdf.name).name):
-                    if dup.resolve() != Path(moved).resolve():
-                        dup.unlink(missing_ok=True)
+                for folder in (error_dir,):
+                    for dup in folder.glob(Path(pdf.name).name):
+                        if dup.resolve() != Path(moved).resolve():
+                            dup.unlink(missing_ok=True)
             except Exception:
                 pass
     elif pdf.exists():
@@ -154,29 +218,46 @@ def run_auto_cycle(
     limit: int = 0,
     force: bool = False,
     repair: bool = False,
+    full_scan: bool = False,
+    audit_processed: bool = False,
     sleep_s: float = 0.25,
 ) -> dict:
-    """Process pending inbox cases. Returns stats dict."""
+    """Process PDFs. Hourly = INBOX+MISSING; full_scan = TOAN BO (ke ca PROCESSED)."""
     cfg = load_config()
     build = build_root(cfg)
-    sync = Path(cfg.get("drive", {}).get("local_sync_root") or "")
-    inbox = sync / cfg["drive"]["inbox_folder"] if sync.exists() else ROOT / "INBOX_CLS"
-    processed = sync / cfg["drive"]["processed_folder"] if sync.exists() else ROOT / "PROCESSED"
-    error_dir = sync / cfg["drive"]["error_folder"] if sync.exists() else ROOT / "ERROR"
-    for p in (inbox, processed, error_dir):
+    sync, inbox, processed, error_dir, missing = _drive_dirs(cfg)
+    for p in (inbox, processed, error_dir, missing):
         p.mkdir(parents=True, exist_ok=True)
+
+    # full-scan luon kem audit PROCESSED de bat BN cu bi sai / thieu TTHC
+    if full_scan:
+        audit_processed = True
+
+    mode = "FULL_SCAN" if full_scan else "HOURLY"
+    scan_dirs = _collect_scan_dirs(
+        sync, inbox, missing, error_dir, processed, full_scan=full_scan
+    )
+    safe_print(f"Mode: {mode} | scan dirs ({len(scan_dirs)}): {[d.name for d in scan_dirs]}")
 
     cases_path = ROOT / cfg.get("tracking", {}).get("cases_csv", "tracking/cases.csv")
     from hourly_sync import read_cases, register_new_files, write_cases  # local import
 
     rows = read_cases(cases_path)
-    added = register_new_files(inbox, rows)
-    # Also pick up PDFs stuck in ERROR from older failed runs
-    added_err = register_new_files(error_dir, rows)
+    added = 0
+    added_err = 0
+    added_missing = 0
+    for d in scan_dirs:
+        n = register_new_files(d, rows)
+        added += n
+        tag = d.name.upper()
+        if tag == "ERROR":
+            added_err += n
+        elif tag == "MISSING":
+            added_missing += n
 
-    # CRITICAL: every PDF physically in INBOX/ERROR must be re-queued each run.
+    # CRITICAL: every PDF physically in scan dirs must be re-queued each run.
     # Tracking often says WAITING_ADMIN / SKIP / IMPORTED while file still sits
-    # in INBOX → hourly then reports "0 patients" and keeps missing them.
+    # in INBOX/MISSING → hourly then reports "0 patients" and keeps missing them.
     by_name = {}
     by_hash = {r.get("file_hash"): r for r in rows if r.get("file_hash")}
 
@@ -195,9 +276,10 @@ def run_auto_cycle(
 
     requeued_disk = 0
     orphan_registered = 0
-    for base, tag in ((inbox, "inbox"), (error_dir, "error")):
+    for base in scan_dirs:
         if not base.exists():
             continue
+        tag = base.name.lower()
         for pdf in base.rglob("*.pdf"):
             key = pdf.name.lower()
             r = by_name.get(key) or by_name.get(_base_name(pdf.name))
@@ -259,7 +341,7 @@ def run_auto_cycle(
     if orphan_registered:
         safe_print(f"Registered orphan PDFs on disk: {orphan_registered}")
     if requeued_disk:
-        safe_print(f"Re-queued from disk INBOX/ERROR: {requeued_disk}")
+        safe_print(f"Re-queued from disk scan dirs: {requeued_disk}")
 
     requeued_err = 0
     for r in rows:
@@ -272,8 +354,7 @@ def run_auto_cycle(
             r["import_attempts"] = "0"
             requeued_err += 1
         elif repair and in_error:
-            # PDF still in ERROR → always re-import (fill missing Urobilinogen/Ure/etc.)
-            # Do NOT move to PROCESSED until import verifies complete.
+            # PDF still in ERROR → always re-import (full-scan/repair catches old gaps)
             r["status"] = "READY_IMPORT"
             r["import_attempts"] = "0"
             r["notes"] = f"requeue_error_folder:{st}:{r.get('notes') or ''}"[:200]
@@ -290,13 +371,18 @@ def run_auto_cycle(
 
     inbox_pdf_n = len(list(inbox.rglob("*.pdf"))) if inbox.exists() else 0
     error_pdf_n = len(list(error_dir.rglob("*.pdf"))) if error_dir.exists() else 0
+    missing_pdf_n = len(list(missing.rglob("*.pdf"))) if missing.exists() else 0
     safe_print(f"Inbox: {inbox} (pdfs_on_disk={inbox_pdf_n})")
+    safe_print(f"Missing: {missing} (pdfs_on_disk={missing_pdf_n})")
     safe_print(f"Error: {error_dir} (pdfs_on_disk={error_pdf_n})")
-    safe_print(f"New files registered: {added} (inbox) + {added_err} (error)")
+    safe_print(
+        f"New files registered: {added} total "
+        f"(missing_folder={added_missing}, error={added_err})"
+    )
 
     max_per_run = int(cfg.get("import_rules", {}).get("max_imports_per_run", 80))
-    if repair:
-        max_per_run = max(max_per_run, 1000)
+    if full_scan or repair:
+        max_per_run = max(max_per_run, 5000)  # bat so BN cu — khong gioi han thap
     else:
         # Hourly: push throughput for NEW inbox imports
         max_per_run = max(max_per_run, 300)
@@ -304,8 +390,8 @@ def run_auto_cycle(
         max_per_run = min(max_per_run, limit)
     # Reserve most slots for new/empty imports; only a few incomplete overwrites
     max_incomplete = int(cfg.get("import_rules", {}).get("max_incomplete_per_run", 200 if repair else 40))
-    if repair:
-        max_incomplete = max(max_incomplete, 500)
+    if full_scan or repair:
+        max_incomplete = max(max_incomplete, 2000)
 
     user = os.environ.get("MEDINET_USER", "pkdkthuankieu")
     password = os.environ.get("MEDINET_PASS", "P@ssw0rd")
@@ -328,6 +414,53 @@ def run_auto_cycle(
     imported_n = 0
     incomplete_n = 0
 
+    # One-shot: rà PROCESSED — PDF không còn khớp TTHC (rule mới) → MISSING
+    if audit_processed and processed.exists():
+        safe_print("==== AUDIT PROCESSED (no TTHC → MISSING) ====")
+        proc_pdfs = sorted(processed.rglob("*.pdf"))
+        if limit:
+            proc_pdfs = proc_pdfs[:limit]
+        for i, pdf in enumerate(proc_pdfs, 1):
+            try:
+                data = extract_pdf(pdf)
+            except Exception as e:
+                stats["audit_parse_error"] += 1
+                continue
+            if not data.get("parse_ok"):
+                stats["audit_parse_error"] += 1
+                continue
+            st, rec = match_patient(data, index)
+            if st == "WAITING_ADMIN":
+                live_st, live_rec, token_box["t"] = search_patient_live(
+                    token_box["t"],
+                    name=str(data.get("ho_ten") or ""),
+                    year=str(data.get("nam_sinh") or ""),
+                    date_from=date_from,
+                    date_to=date_to,
+                    ngay_co_kq=str(data.get("ngay_co_kq") or ""),
+                )
+                if live_st != "WAITING_ADMIN" and live_rec:
+                    st, rec = live_st, live_rec
+            if st == "WAITING_ADMIN":
+                unmatched_lines.append(
+                    f"NO_TTHC_FROM_PROCESSED\t{data.get('ho_ten')}\t"
+                    f"year={data.get('nam_sinh')}\tngay_kq={data.get('ngay_co_kq')}\t{pdf.name}"
+                )
+                if not dry_run:
+                    moved = _move_pdf(pdf, missing)
+                    if moved:
+                        stats["audit_moved_missing"] += 1
+                else:
+                    stats["audit_would_move_missing"] += 1
+            else:
+                stats["audit_ok"] += 1
+            if i % 200 == 0:
+                safe_print(f"  audited {i}/{len(proc_pdfs)} ...")
+        safe_print(
+            f"Audit done: ok={stats['audit_ok']} moved_missing={stats['audit_moved_missing']} "
+            f"parse_err={stats['audit_parse_error']}"
+        )
+
     # Process INBOX / READY first, then WAITING_ADMIN, then incomplete repair last
     row_order = sorted(range(len(rows)), key=lambda i: (_row_priority(rows[i]), i))
     safe_print(
@@ -338,8 +471,8 @@ def run_auto_cycle(
         row = rows[ri]
         status = (row.get("status") or "").upper()
 
-        # Attach file early — hourly ALWAYS re-checks PDFs in INBOX/ERROR
-        pdf = _resolve_pdf(row, inbox, processed, error_dir)
+        # Attach file early — always re-check PDFs in current scan dirs
+        pdf = _resolve_pdf(row, inbox, missing, processed, error_dir)
         if not pdf or not pdf.exists():
             if status in PENDING | {"IMPORTED", "SKIP_ALREADY_CLS", "PARSE_ERROR"}:
                 row["notes"] = "source_pdf_missing"
@@ -348,9 +481,13 @@ def run_auto_cycle(
         row["file_name"] = pdf.name
         row["source_file"] = str(pdf)
         src_u = str(pdf).replace("\\", "/").upper()
-        stuck_in_work = ("/INBOX" in src_u) or ("/ERROR" in src_u)
+        # Hourly: chi xu ly file nam trong INBOX / MISSING
+        # Full-scan: xu ly MOI PDF trong moi folder (ke ca PROCESSED)
+        if not full_scan and not (("/INBOX" in src_u) or ("/MISSING" in src_u)):
+            continue
+        stuck_in_work = full_scan or ("/INBOX" in src_u) or ("/MISSING" in src_u)
 
-        # Done rows in INBOX/ERROR must still be re-checked against the current
+        # Done rows in work folders must still be re-checked against the current
         # web form first. If fields are complete (Ure ignored), later logic will
         # move them to PROCESSED; if fields are missing, later logic will repair.
 
@@ -358,8 +495,8 @@ def run_auto_cycle(
             stats["skipped_parse"] += 1
             continue
 
-        # Hourly rule: mọi PDF trong INBOX/ERROR luôn được kiểm tra lại TTHC.
-        # Chỉ skip IMPORTED/SKIP khi file đã nằm PROCESSED.
+        # Hourly rule: moi PDF trong INBOX/MISSING luon duoc kiem tra lai TTHC.
+        # Chi skip IMPORTED/SKIP khi file da nam PROCESSED.
         if status in {"IMPORTED", "SKIP_ALREADY_CLS"} and not repair and not stuck_in_work:
             notes_peek = str(row.get("notes") or "")
             needs_recheck = any(
@@ -414,6 +551,7 @@ def run_auto_cycle(
                 year=str(data.get("nam_sinh") or ""),
                 date_from=date_from,
                 date_to=date_to,
+                ngay_co_kq=str(data.get("ngay_co_kq") or ""),
             )
             if live_st != "WAITING_ADMIN" and live_rec:
                 st, rec = live_st, live_rec
@@ -436,13 +574,13 @@ def run_auto_cycle(
                 f"NO_TTHC\t{row.get('ho_ten') or data.get('ho_ten')}\t"
                 f"year={data.get('nam_sinh')}\tphone={data.get('sdt')}\t{pdf.name}"
             )
-            # Chưa có TTHC → luôn giữ / đưa về INBOX (không để trong ERROR)
-            if "/ERROR" in src_u:
-                moved = _move_pdf(pdf, inbox)
+            # Chưa có TTHC → chuyển sang MISSING (bao bo phan nhap TTHC)
+            if "/MISSING" not in src_u:
+                moved = _move_pdf(pdf, missing)
                 if moved:
                     row["source_file"] = str(moved)
                     row["file_name"] = moved.name
-                    stats["error_to_inbox_waiting"] += 1
+                    stats["moved_missing"] += 1
             continue
 
         # IMPORTANT: UI opens by phieukhamId — never use cdId as save key
@@ -462,7 +600,7 @@ def run_auto_cycle(
         if st == "SKIP_ALREADY_CLS":
             # List says already has CLS — during repair/force fall through so we
             # can still fill missing urine (Âm tính→Negative) / Urê / etc.
-            # Also when PDF still stuck in INBOX/ERROR: re-check gaps then move.
+            # Also when PDF still stuck in work folders: re-check gaps then move.
             existing_early, token_box["t"] = (
                 load_cls_view(token_box["t"], pid, reauth=reauth) if pid else (None, token_box["t"])
             )
@@ -721,12 +859,16 @@ def run_auto_cycle(
         summary_pre = dict(stats)
         summary_pre["new_files"] = added
         summary_pre["new_files_error"] = added_err
+        summary_pre["new_files_missing"] = added_missing
         summary_pre["results"] = len(results)
+        summary_pre["mode"] = mode
         hb_line = (
             f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\t"
+            f"mode={mode}\t"
             f"imported={summary_pre.get('imported', 0)}\t"
             f"waiting_admin={summary_pre.get('waiting_admin', 0)}\t"
-            f"new_inbox={added}\tnew_error={added_err}\t"
+            f"moved_missing={summary_pre.get('moved_missing', 0)}\t"
+            f"new_files={added}\tnew_error={added_err}\t"
             f"results={len(results)}\n"
         )
         (hb_dir / "LAST_HOURLY_OK.txt").write_text(hb_line, encoding="utf-8")
@@ -743,20 +885,35 @@ def run_auto_cycle(
         pass
 
     summary = dict(stats)
+    summary["mode"] = mode
     summary["new_files"] = added
+    summary["new_files_missing"] = added_missing
     summary["results"] = len(results)
     summary["inbox_pdfs"] = inbox_pdf_n
+    summary["missing_pdfs"] = missing_pdf_n
     summary["error_pdfs"] = error_pdf_n
     summary["requeued_disk"] = requeued_disk
     safe_print(f"Auto cycle stats: {summary}")
-    if unmatched_lines:
-        try:
-            uout = build / "excel_preview" / "hourly_chua_khop_tthc.txt"
-            uout.parent.mkdir(parents=True, exist_ok=True)
-            uout.write_text("\n".join(unmatched_lines) + "\n", encoding="utf-8")
-            safe_print(f"Chua khop TTHC ({len(unmatched_lines)}): {uout}")
-        except Exception as e:
-            safe_print(f"WARN unmatched list: {e}")
+    # Always refresh MISSING list for TTHC team (even when 0)
+    try:
+        uout = build / "excel_preview" / "missing_can_tthc.txt"
+        uout.parent.mkdir(parents=True, exist_ok=True)
+        # keep legacy alias
+        legacy = build / "excel_preview" / "hourly_chua_khop_tthc.txt"
+        body = (
+            f"# missing_can_tthc | {stamp} | mode={mode} | "
+            f"ky={date_from}->{date_to}\n"
+            "# format: NO_TTHC | ho_ten | year=... | phone=... | pdf\n"
+        )
+        if unmatched_lines:
+            body += "\n".join(unmatched_lines) + "\n"
+        else:
+            body += "# 0\n"
+        uout.write_text(body, encoding="utf-8")
+        legacy.write_text(body, encoding="utf-8")
+        safe_print(f"MISSING list ({len(unmatched_lines)}): {uout}")
+    except Exception as e:
+        safe_print(f"WARN unmatched list: {e}")
     return summary
 
 
@@ -772,12 +929,24 @@ def main() -> int:
         action="store_true",
         help="Re-check IMPORTED/ERROR/SKIP; re-import if web empty OR thiếu nước tiểu/sinh hoá",
     )
+    ap.add_argument(
+        "--full-scan",
+        action="store_true",
+        help="Quet TOAN BO folder (ke ca PROCESSED). Mac dinh hourly chi INBOX+MISSING",
+    )
+    ap.add_argument(
+        "--audit-processed",
+        action="store_true",
+        help="Ra soat PROCESSED: khong khop TTHC (ten+nam sinh+ngay in KQ) → MISSING",
+    )
     args = ap.parse_args()
     run_auto_cycle(
         dry_run=args.dry_run,
         limit=args.limit,
         force=args.force,
         repair=args.repair,
+        full_scan=args.full_scan,
+        audit_processed=args.audit_processed,
     )
     return 0
 
