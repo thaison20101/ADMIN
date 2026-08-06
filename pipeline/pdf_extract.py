@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Extract lab results from Thuận Kiều PDF lab reports."""
+"""Extract lab results from Thuận Kiều PDF lab reports.
+
+Important: values may sit in either:
+  - column Kết quả (normal / in-range), OR
+  - column Ghi chú (abnormal / out-of-range, often AFTER the reference interval)
+
+Both must be read and sent to Medinet. Never skip a PDF field that exists.
+Urea is optional when absent from the PDF.
+"""
 
 from __future__ import annotations
 
@@ -61,10 +69,44 @@ VALUE_RE = re.compile(
     re.I,
 )
 _AM_TINH_RE = re.compile(r"âm\s*t[íi]nh|am\s*tinh", re.I)
+# PDF "Khoảng tham chiếu" e.g. ( 80.0 - 99.0 ) / (4.01-11.42)
+_REF_RANGE_RE = re.compile(
+    r"\(\s*[<>]?\d+(?:[.,]\d+)?\s*[-–—]\s*[<>]?\d+(?:[.,]\d+)?\s*\)"
+)
+_NUM_RE = re.compile(r"[<>]?\d+(?:[.,]\d+)?")
 
 
 def _norm_num(s: str) -> str:
     return s.replace(",", ".").strip()
+
+
+def _strip_ref_ranges(s: str) -> str:
+    """Remove reference intervals so Ghi-chú abnormal values are not mistaken."""
+    return _REF_RANGE_RE.sub(" ", s or "")
+
+
+def _normalize_val_token(val: str) -> str:
+    val = re.sub(r"\s+", " ", (val or "").strip())
+    if re.fullmatch(r"[<>]?\d+(?:[.,]\d+)?", val):
+        if val.startswith(("<", ">")):
+            return val[0] + _norm_num(val[1:])
+        return _norm_num(val)
+    return val
+
+
+def _extract_unit(text: str) -> str:
+    """Pick a likely unit token from leftover text after the value."""
+    if not text:
+        return ""
+    # Prefer common lab units
+    m = re.search(
+        r"(?i)\b(g/L|g/dL|G/L|T/L|fL|pg|mmol/L|mcmol/L|umol/L|µmol/L|%|L/L)\b",
+        text,
+    )
+    if m:
+        return m.group(1)
+    parts = text.strip().split()
+    return parts[0] if parts else ""
 
 
 def read_pdf_text(path: Path) -> str:
@@ -143,36 +185,46 @@ def _split_sections(text: str) -> tuple[str, str, str]:
 
 
 def _parse_lab_line(line: str, name_pat: str) -> tuple[str, str] | None:
+    """Parse `Name <value> [ref] [unit]` OR `Name [ref] [unit] <value>` (Ghi chú).
+
+    Thuận Kiều PDFs put OUT-OF-RANGE results in column Ghi chú (often AFTER the
+    reference interval). Old parser grabbed the first number inside (80.0-99.0)
+    or failed → MCV/MCH/MCHC/Hb missing on web.
+    """
     m = re.search(name_pat + r"\s*(.+)$", line, re.I)
     if not m:
-        # Name alone on line (value often on next line in Thuận Kiều PDFs)
         if re.search(name_pat + r"\s*$", line, re.I):
             return None
         return None
     rest = m.group(1).strip()
-    # Prefer number / Am tinh / (+)
-    vm = re.match(
-        rf"^{_VAL_TOKEN}\s*(?:\([^)]*\))?\s*(?P<unit>.*)$",
+    if not rest:
+        return None
+
+    # Qualitative tokens first (urine)
+    qm = re.match(
+        r"^(?P<val>\(\s*\+\s*\)|Âm\s*t[íi]nh|Am\s*tinh|Positive|Negative)\b",
         rest,
         re.I,
     )
-    if not vm:
-        # value may appear before unit words stuck together
-        vm2 = re.search(
-            r"(?P<val>\(\s*\+\s*\)|Âm\s*t[íi]nh|Am\s*tinh|Negative|[<>]?\d+(?:[.,]\d+)?)",
-            rest,
-            re.I,
-        )
-        if not vm2:
-            return None
-        val = re.sub(r"\s+", " ", vm2.group("val")).strip()
-        unit = ""
-    else:
-        val = re.sub(r"\s+", " ", vm.group("val")).strip()
-        unit = (vm.group("unit") or "").strip().split()[0] if (vm.group("unit") or "").strip() else ""
-    if re.fullmatch(r"[<>]?\d+(?:[.,]\d+)?", val):
-        val = _norm_num(val.lstrip("<>")) if not val.startswith(("<", ">")) else val[0] + _norm_num(val[1:])
-    return val, unit
+    if qm:
+        return _normalize_val_token(qm.group("val")), ""
+
+    # Strip reference ranges, then take the first remaining number (= true result).
+    # Works for both:
+    #   MCV 76.7 ( 80.0 - 99.0 ) fL
+    #   MCV ( 80.0 - 99.0 ) fL 76.7   ← value in Ghi chú
+    cleaned = _strip_ref_ranges(rest)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    nm = _NUM_RE.search(cleaned)
+    if nm:
+        val = _normalize_val_token(nm.group(0))
+        after = cleaned[nm.end() :]
+        before = cleaned[: nm.start()]
+        unit = _extract_unit(after) or _extract_unit(before)
+        return val, unit
+
+    # No number outside refs → maybe only ref on this line (value on next line)
+    return None
 
 
 def _find_lab_in_text(section: str, pat: str) -> tuple[str, str] | None:
@@ -183,8 +235,8 @@ def _find_lab_in_text(section: str, pat: str) -> tuple[str, str] | None:
         got = _parse_lab_line(line, pat)
         if got:
             return got
-        # Multiline: "Glucose" then next line "3.98 mmol/L"
-        for j in range(1, 3):
+        # Multiline: "MCV" / "MCV ( 80 - 99 ) fL" then next line "76.7"
+        for j in range(1, 4):
             if i + j >= len(lines):
                 break
             nxt = lines[i + j].strip()
@@ -194,25 +246,33 @@ def _find_lab_in_text(section: str, pat: str) -> tuple[str, str] | None:
                 r"(?i)^(?:Creatinine|Creatinin|AST|ALT|Urea|Ure|Urê|WBC|RBC|PLT|"
                 r"Urobilinogen|Protein|Ketone|Bilirubin|Nitrite|pH|Leukocytes|"
                 r"Erythrocytes|Hemoglobin|Hematocrit|Neutrophils|Lymphocytes|"
-                r"Monocytes|Eosinophils|Basophils|MPV|RDW|MCV|MCHC|MCH)\b",
+                r"Monocytes|Eosinophils|Basophils|MPV|RDW|MCV|MCHC|MCH|"
+                r"Glucose|Platelets)\b",
                 nxt,
             ):
                 break
+            # Skip pure reference-range / unit-only lines
+            nxt_clean = _strip_ref_ranges(nxt)
+            nxt_clean = re.sub(r"\s+", " ", nxt_clean).strip()
+            if not nxt_clean or re.fullmatch(
+                r"(?i)(?:g/L|g/dL|G/L|T/L|fL|pg|mmol/L|%|L/L|mcmol/L|umol/L|µmol/L)",
+                nxt_clean,
+            ):
+                continue
             vm = re.match(
                 rf"^{_VAL_TOKEN}\s*(?P<unit>[A-Za-z%μµ^0-9/.\-]*)",
-                nxt,
+                nxt_clean,
                 re.I,
             )
             if vm:
-                val = re.sub(r"\s+", " ", vm.group("val")).strip()
+                val = _normalize_val_token(vm.group("val"))
                 unit = (vm.group("unit") or "").strip()
-                if re.fullmatch(r"[<>]?\d+(?:[.,]\d+)?", val):
-                    val = (
-                        _norm_num(val.lstrip("<>"))
-                        if not val.startswith(("<", ">"))
-                        else val[0] + _norm_num(val[1:])
-                    )
                 return val, unit
+            nm = _NUM_RE.search(nxt_clean)
+            if nm:
+                return _normalize_val_token(nm.group(0)), _extract_unit(
+                    nxt_clean[nm.end() :]
+                )
     return None
 
 

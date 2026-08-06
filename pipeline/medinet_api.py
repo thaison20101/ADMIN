@@ -306,8 +306,23 @@ def labs_to_form_payload(labs: dict, *, phieukham_id: int | str, gioi_tinh: str 
     return payload
 
 
+def _num_close(a, b, *, rel: float = 0.02, abs_tol: float = 0.05) -> bool:
+    """True when two lab numbers are effectively the same."""
+    try:
+        fa = float(str(a).strip().replace(",", ".").lstrip("<>"))
+        fb = float(str(b).strip().replace(",", ".").lstrip("<>"))
+    except Exception:
+        return str(a).strip() == str(b).strip()
+    if fa == fb:
+        return True
+    return abs(fa - fb) <= max(abs_tol, rel * max(abs(fa), abs(fb), 1.0))
+
+
 def cls_missing_lab_fields(existing: dict | None, payload: dict) -> list[str]:
-    """Lab fields present in payload but empty on the web Get/FormViewer row."""
+    """Lab fields in PDF payload that are empty OR wrong on the web form.
+
+    Rule: điền theo PDF (bình thường lẫn bất thường). Ure never required.
+    """
     if not existing:
         return [
             k
@@ -324,6 +339,11 @@ def cls_missing_lab_fields(existing: dict | None, payload: dict) -> list[str]:
         got = existing.get(k)
         if got in (None, ""):
             missing.append(k)
+            continue
+        if k in NUMBER_FIELDS and sent not in (None, ""):
+            # PDF value differs from web → must rewrite (old bug wrote ref-range)
+            if not _num_close(got, sent):
+                missing.append(k)
             continue
         if k in URINE_TEXT_FIELDS and sent == "Negative":
             gl = re.sub(r"\s+", " ", str(got).strip().lower())
