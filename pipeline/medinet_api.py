@@ -449,17 +449,32 @@ def verify_cls_saved(
     phieukham_id: int | str,
     payload: dict | None = None,
     reauth=None,
+    *,
+    retries: int = 5,
+    delay_s: float = 0.6,
 ) -> tuple[bool, str, str]:
     """Confirm CLS is readable on the same phieukhamId the UI uses.
 
     Prefer merged Get+FormViewer — Get alone often returns empty even when
     the web form has values (false ERROR_IMPORT / stuck INBOX).
 
+    Medinet often lags right after Set ("Thành công" but Get empty for 1–3s).
+    Retry briefly before declaring failure.
+
     Returns (ok, detail, token).
     """
-    row, token = load_cls_view(token, phieukham_id, reauth=reauth)
-    if not cls_has_lab_values(row):
-        return False, "Get+FormViewer empty after save", token
+    last_detail = "Get+FormViewer empty after save"
+    row = None
+    attempts = max(1, int(retries))
+    for attempt in range(attempts):
+        if attempt:
+            time.sleep(delay_s * attempt)
+        row, token = load_cls_view(token, phieukham_id, reauth=reauth)
+        if cls_has_lab_values(row):
+            break
+        last_detail = f"Get+FormViewer empty after save (try {attempt + 1}/{attempts})"
+    else:
+        return False, last_detail, token
 
     # Spot-check a value we sent (avoid false IMPORTED on wrong id)
     if payload:
