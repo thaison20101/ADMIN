@@ -99,8 +99,9 @@ def main() -> int:
                     pdfs.append((p, None))
     safe_print(f"PDF to check: {len(pdfs)}")
 
-    user = os.environ.get("MEDINET_USER", "pkdkthuankieu")
-    password = os.environ.get("MEDINET_PASS", "P@ssw0rd")
+    from medinet_creds import get_medinet_creds
+
+    user, password = get_medinet_creds(cfg)
     token = authenticate(user, password)
 
     from datetime import date

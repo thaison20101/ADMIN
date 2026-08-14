@@ -18,8 +18,8 @@ Set-Location $Repo
 
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUTF8 = "1"
-if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdkthuankieu" }
-if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "P@ssw0rd" }
+if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdk_Thuankieu" }
+if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "pkdk_Thuankieu#2026" }
 try {
   [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
   $OutputEncoding = [System.Text.UTF8Encoding]::new($false)

@@ -70,8 +70,9 @@ def main() -> int:
     safe_print(f"Folders: {', '.join(str(d) for d in dirs)}")
     safe_print(f"PDF count: {len(pdfs)}")
 
-    user = os.environ.get("MEDINET_USER", "pkdkthuankieu")
-    password = os.environ.get("MEDINET_PASS", "P@ssw0rd")
+    from medinet_creds import get_medinet_creds
+
+    user, password = get_medinet_creds(cfg)
     token = authenticate(user, password)
     date_from = cfg.get("medinet", {}).get("date_from", "01/07/2026")
     date_to = cfg.get("medinet", {}).get("date_to") or ""

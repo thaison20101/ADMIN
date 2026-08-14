@@ -925,8 +925,9 @@ def main() -> int:
     if not args.skip_medinet:
         import os
 
-        user = os.environ.get("MEDINET_USER", "pkdkthuankieu")
-        password = os.environ.get("MEDINET_PASS", "P@ssw0rd")
+        from medinet_creds import get_medinet_creds
+
+        user, password = get_medinet_creds(cfg)
         safe_print("Auth Medinet + index July lists...", flush=True)
         token = authenticate(user, password)
         date_from = cfg.get("medinet", {}).get("date_from") or "01/07/2026"

@@ -56,8 +56,8 @@ if ($logDirOk) {
 python -m pip install -q -r .\pipeline\requirements.txt
 if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 
-$env:MEDINET_USER = if ($env:MEDINET_USER) { $env:MEDINET_USER } else { "pkdkthuankieu" }
-$env:MEDINET_PASS = if ($env:MEDINET_PASS) { $env:MEDINET_PASS } else { "P@ssw0rd" }
+$env:MEDINET_USER = if ($env:MEDINET_USER) { $env:MEDINET_USER } else { "pkdk_Thuankieu" }
+$env:MEDINET_PASS = if ($env:MEDINET_PASS) { $env:MEDINET_PASS } else { "pkdk_Thuankieu#2026" }
 
 $pyArgs = @(".\pipeline\phase_b_preview.py")
 if ($Limit -gt 0) { $pyArgs += @("--limit", "$Limit") }

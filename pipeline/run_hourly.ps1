@@ -18,6 +18,17 @@ if (-not (Test-Path ".\pipeline\config.local.json")) {
 
 & python ".\pipeline\ensure_config.py" | Out-Null
 
+# Load Medinet login: env → config.local.json → defaults
+try {
+  $credLines = @(& python ".\pipeline\medinet_creds.py" 2>$null)
+  if ($credLines.Count -ge 2) {
+    $env:MEDINET_USER = [string]$credLines[0]
+    $env:MEDINET_PASS = [string]$credLines[1]
+  }
+} catch {}
+if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdk_Thuankieu" }
+if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "pkdk_Thuankieu#2026" }
+
 $buildRootFile = Join-Path $env:TEMP "pkdk_build_root.txt"
 & python ".\pipeline\resolve_build_root.py" --out "$buildRootFile" | Out-Null
 if (Test-Path -LiteralPath $buildRootFile) {
@@ -44,8 +55,8 @@ if ($logDirOk) {
   $log = Join-Path $LocalLogDir ("hourly-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
 }
 
-if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdkthuankieu" }
-if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "P@ssw0rd" }
+if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdk_Thuankieu" }
+if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "pkdk_Thuankieu#2026" }
 
 Write-Host "BuildRoot: $BuildRoot"
 Write-Host "Hourly: chi quet INBOX_CLS + MISSING"

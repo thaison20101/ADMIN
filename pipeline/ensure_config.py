@@ -37,6 +37,13 @@ def main() -> int:
     # Always: 01/07/2026 -> today (rolling; empty date_to = hôm nay)
     med["date_from"] = "01/07/2026"
     med["date_to"] = ""  # empty = today in auto_cycle / rasoat / repair
+    # Rotate legacy defaults → current PKDK login (config.local is gitignored)
+    old_users = {"", "pkdkthuankieu"}
+    old_passes = {"", "P@ssw0rd"}
+    if str(med.get("username") or "").strip() in old_users:
+        med["username"] = "pkdk_Thuankieu"
+    if str(med.get("password") or "").strip() in old_passes:
+        med["password"] = "pkdk_Thuankieu#2026"
 
     rules = cfg.setdefault("import_rules", {})
     rules["enabled"] = True

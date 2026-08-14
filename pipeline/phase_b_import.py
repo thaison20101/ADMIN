@@ -303,8 +303,9 @@ def main() -> int:
         )
         return 0
 
-    user = os.environ.get("MEDINET_USER", "pkdkthuankieu")
-    password = os.environ.get("MEDINET_PASS", "P@ssw0rd")
+    from medinet_creds import get_medinet_creds
+
+    user, password = get_medinet_creds(cfg)
     token_box = {"t": authenticate(user, password)}
 
     def reauth():
