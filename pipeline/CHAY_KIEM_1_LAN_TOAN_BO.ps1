@@ -42,10 +42,14 @@ Write-Host "#  (KHONG cai hourly — chi chay 1 lan)                     #"
 Write-Host "############################################################"
 Write-Host ""
 
-Write-Host "==== 1/3 git pull (rule TTHC moi) ===="
-git fetch origin
-git checkout cursor/drive-hourly-pipeline-df0f
-git pull origin cursor/drive-hourly-pipeline-df0f
+Write-Host "==== 1/3 cap nhat code (git neu co; khong thi bo qua) ===="
+if (Test-Path -LiteralPath (Join-Path $Repo ".git")) {
+  git fetch origin
+  git checkout cursor/drive-hourly-pipeline-df0f
+  git pull origin cursor/drive-hourly-pipeline-df0f
+} else {
+  Write-Host "Khong co .git (thuong do giai ZIP) — bo qua git pull."
+}
 
 Write-Host "==== 2/3 config + deps ===="
 & python ".\pipeline\ensure_config.py"
