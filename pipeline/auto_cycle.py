@@ -65,18 +65,20 @@ def _today_dmy() -> str:
 
 def _drive_dirs(cfg: dict) -> tuple[Path, Path, Path, Path, Path]:
     """Return (sync_root, inbox, processed, error, missing)."""
-    sync = Path(cfg.get("drive", {}).get("local_sync_root") or "")
-    if sync.exists():
-        inbox = sync / cfg["drive"]["inbox_folder"]
-        processed = sync / cfg["drive"]["processed_folder"]
-        error_dir = sync / cfg["drive"]["error_folder"]
-        missing = sync / cfg["drive"].get("missing_folder", "MISSING")
-    else:
-        sync = ROOT
-        inbox = ROOT / "INBOX_CLS"
-        processed = ROOT / "PROCESSED"
-        error_dir = ROOT / "ERROR"
-        missing = ROOT / "MISSING"
+    try:
+        from drive_paths import discover_pipeline_root, ensure_standard_folders, discover_build_root
+
+        sync = discover_pipeline_root(cfg)
+        build = discover_build_root(cfg)
+        ensure_standard_folders(sync, build)
+    except Exception:
+        sync = Path(cfg.get("drive", {}).get("local_sync_root") or "")
+        if not sync.exists():
+            sync = ROOT
+    inbox = sync / cfg["drive"].get("inbox_folder", "INBOX_CLS")
+    processed = sync / cfg["drive"].get("processed_folder", "PROCESSED")
+    error_dir = sync / cfg["drive"].get("error_folder", "ERROR")
+    missing = sync / cfg["drive"].get("missing_folder", "MISSING")
     return sync, inbox, processed, error_dir, missing
 
 

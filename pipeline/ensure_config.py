@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CFG = Path(__file__).resolve().parent / "config.local.json"
 EXAMPLE = Path(__file__).resolve().parent / "config.example.json"
 
-# ASCII-only path literals; resolve_build_root handles real Drive folder names.
+# ASCII-only path literals; drive_paths resolves real Drive folder names.
 DEFAULT_SYNC = r"G:/Drive cua toi/PKDK_Thuankieu_Pipeline"
 DEFAULT_BUILD = r"G:/Drive cua toi/build for Supper Data"
 
@@ -54,11 +54,26 @@ def main() -> int:
     rules["max_incomplete_per_run"] = max(int(rules.get("max_incomplete_per_run") or 0), 80)
 
     CFG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Auto-discover real Drive paths + create standard folders (same on every PC)
+    try:
+        from drive_paths import sync_drive_layout
+
+        summary = sync_drive_layout(cfg)
+        sync_root = summary["pipeline_root"]
+        build_root = summary["build_root"]
+    except Exception as e:
+        sync_root = drive.get("local_sync_root")
+        build_root = drive.get("build_root")
+        print(f"WARN drive_paths: {e}")
+
     from datetime import date
 
     print(
         "config OK",
-        drive.get("local_sync_root"),
+        sync_root,
+        "build=",
+        build_root,
         "date_from=01/07/2026",
         f"date_to=today({date.today().strftime('%d/%m/%Y')})",
     )

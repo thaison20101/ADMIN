@@ -109,18 +109,32 @@ def _resolve_existing_build(raw: str) -> Path:
 
 
 def build_root(cfg: dict) -> Path:
-    raw = cfg.get("drive", {}).get("build_root") or r"G:\Drive của tôi\build for Supper Data"
-    p = _resolve_existing_build(str(raw))
-    for sub in ("excel_preview", "missing_or_updated", "logs", "cases_snapshot"):
-        (p / sub).mkdir(parents=True, exist_ok=True)
-    return p
+    try:
+        from drive_paths import discover_build_root, discover_pipeline_root, ensure_standard_folders
+
+        pipeline = discover_pipeline_root(cfg)
+        p = discover_build_root(cfg)
+        ensure_standard_folders(pipeline, p)
+        return p
+    except Exception:
+        raw = cfg.get("drive", {}).get("build_root") or r"G:\Drive của tôi\build for Supper Data"
+        p = _resolve_existing_build(str(raw))
+        for sub in ("excel_preview", "missing_or_updated", "logs", "cases_snapshot"):
+            (p / sub).mkdir(parents=True, exist_ok=True)
+        return p
 
 
 def inbox_dir(cfg: dict) -> Path:
-    sync = Path(cfg.get("drive", {}).get("local_sync_root") or "")
-    if sync.exists():
-        return sync / cfg["drive"]["inbox_folder"]
-    return ROOT / "INBOX_CLS"
+    try:
+        from drive_paths import discover_pipeline_root
+
+        sync = discover_pipeline_root(cfg)
+        return sync / cfg["drive"].get("inbox_folder", "INBOX_CLS")
+    except Exception:
+        sync = Path(cfg.get("drive", {}).get("local_sync_root") or "")
+        if sync.exists():
+            return sync / cfg["drive"]["inbox_folder"]
+        return ROOT / "INBOX_CLS"
 
 
 def list_pdfs(inbox: Path, limit: int | None) -> list[Path]:
