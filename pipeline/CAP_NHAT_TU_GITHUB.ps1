@@ -73,4 +73,4 @@ Get-Item -LiteralPath (Join-Path $Repo "pipeline\CHAY_KIEM_1_LAN_TOAN_BO.ps1") |
 Write-Host ""
 Write-Host "OK. Tiep theo chay:"
 Write-Host "  powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_KIEM_1_LAN_TOAN_BO.ps1"
-Write-Host "  (script do se git pull — neu khong co .git thi bo qua loi git, van full-scan duoc)"
+Write-Host "  (script do se git pull - neu khong co .git thi bo qua loi git, van full-scan duoc)"
