@@ -41,9 +41,29 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host ""
 Write-Host "==== Kiem tra o dia / Google Drive ===="
-Get-PSDrive -PSProvider FileSystem | Format-Table Name,Root,Used,Free -AutoSize
-Write-Host "Neu khong thay G: (hoac H:) -> cai Google Drive Desktop + dang nhap dung tai khoan."
-Write-Host "Sau khi sync xong, chay lai script nay."
+Get-PSDrive -PSProvider FileSystem | Format-Table Name,Root -AutoSize
+Write-Host ""
+Write-Host "Thu My Drive / Drive cua toi:"
+@(
+  "G:\My Drive",
+  "G:\Drive của tôi",
+  "G:\Drive cua toi",
+  "$env:USERPROFILE\Google Drive\My Drive",
+  "$env:USERPROFILE\GoogleDrive\My Drive"
+) | ForEach-Object {
+  if (Test-Path -LiteralPath $_) {
+    Write-Host ("  FOUND: " + $_)
+    Get-ChildItem -LiteralPath $_ -Directory -ErrorAction SilentlyContinue |
+      Select-Object -First 15 Name |
+      ForEach-Object { Write-Host ("    - " + $_.Name) }
+  } else {
+    Write-Host ("  miss : " + $_)
+  }
+}
+Write-Host ""
+Write-Host "Can thay folder: PKDK_Thuankieu_Pipeline  va  build for Supper Data"
+Write-Host "Neu chua thay: mo G:\ -> My Drive, doi Google Drive sync xong, chay lai."
+Write-Host ""
 
 Write-Host ""
 Write-Host "==== Cap nhat config.local.json + login ===="

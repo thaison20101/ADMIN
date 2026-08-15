@@ -25,9 +25,9 @@ EXAMPLE_CONFIG = Path(__file__).resolve().parent / "config.example.json"
 PIPELINE_NAME = "PKDK_Thuankieu_Pipeline"
 BUILD_NAME = "build for Supper Data"
 DRIVE_MIDS = (
+    "My Drive",  # Google Drive Desktop (English) — phổ biến máy mới
     "Drive của tôi",
     "Drive của Tôi",
-    "My Drive",
     "Drive cua toi",
 )
 DRIVE_LETTERS = ("G:", "H:", "D:", "E:", "F:", "I:", "J:")
