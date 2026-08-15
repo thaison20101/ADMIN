@@ -270,10 +270,12 @@ def _date_proximity_score(pdf_d: date | None, rec_d: date | None) -> int:
 
 
 def _names_soft_match(a: str, b: str) -> bool:
-    """True when folded names are the same person (strict on họ + tên).
+    """True only when full names match (after accent-fold).
 
-    Rejects subset traps like "NGUYEN THI KIEU" ⊂ "NGUYEN THI KIEU DIEM"
-    which previously caused false TTHC matches → wrong PROCESSED.
+    REQUIRES same token count — rejects:
+      TRAN SANH  ≠  TRAN NGOC SANH
+      NGUYEN THI THOM  ≠  NGUYEN VAN THOM
+      NGUYEN THI KIEU  ≠  NGUYEN THI KIEU DIEM
     """
     fa, fb = _fold_name(a), _fold_name(b)
     if not fa or not fb:
@@ -283,15 +285,59 @@ def _names_soft_match(a: str, b: str) -> bool:
     ta, tb = fa.split(), fb.split()
     if not ta or not tb:
         return False
-    if sorted(ta) == sorted(tb):
+    # Same words, possibly reordered (rare) — still same count
+    if len(ta) == len(tb) and sorted(ta) == sorted(tb):
         return True
-    # Vietnamese identity: họ (first) + tên (last) must both match.
-    # Extra middle tokens OK (OCR drop "THI"); different LAST token = other person.
-    if len(ta) < 2 or len(tb) < 2:
+    return False
+
+
+def _norm_gender(val: str) -> str:
+    """Return 'M', 'F', or '' if unknown."""
+    s = _fold_name(str(val or "")).replace(" ", "")
+    if not s or s in {".", "-", "?", "X"}:
+        return ""
+    if s in {"M", "NAM", "MALE", "1", "TRUE"}:
+        return "M"
+    if s in {"F", "NU", "NỮ", "FEMALE", "0", "FALSE", "NU"}:
+        return "F"
+    # Vietnamese folded: NU (from Nữ)
+    if s.startswith("NAM"):
+        return "M"
+    if s.startswith("NU"):
+        return "F"
+    return ""
+
+
+def _rec_gender(rec: dict) -> str:
+    for k in ("GioiTinh", "gioi_tinh", "Gender", "IsNamGioi"):
+        if k not in rec and k != "IsNamGioi":
+            continue
+        raw = rec.get(k)
+        if k == "IsNamGioi":
+            if raw in (1, "1", True, "true", "True"):
+                return "M"
+            if raw in (0, "0", False, "false", "False"):
+                return "F"
+            continue
+        g = _norm_gender(str(raw or ""))
+        if g:
+            return g
+    return ""
+
+
+def _phone_digits(val: str) -> str:
+    d = re.sub(r"\D", "", str(val or ""))
+    # PDF often has "." or blank — ignore short garbage
+    if len(d) < 9:
+        return ""
+    return d
+
+
+def _phones_match(a: str, b: str) -> bool:
+    da, db = _phone_digits(a), _phone_digits(b)
+    if not da or not db:
         return False
-    if ta[0] != tb[0] or ta[-1] != tb[-1]:
-        return False
-    return True
+    return da == db or da.endswith(db[-9:]) or db.endswith(da[-9:])
 
 
 def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
@@ -420,16 +466,18 @@ def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
 def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
     """Return (status, medinet_row).
 
-    Hard keys:
-      - nam_sinh (năm sinh) MUST match
-      - họ + tên (strict soft: same first+last token; no subset names)
+    Hard keys (all required when present on PDF):
+      - full name (exact after fold; same token count — no TRAN SANH ≈ TRAN NGOC SANH)
+      - nam_sinh (năm sinh)
+      - giới tính (M/F) when known on PDF/filename
+      - SĐT when PDF has a usable phone (≥9 digits)
     Soft key:
-      - ngày có kết quả (PDF) vs NgayKham (Medinet): may differ because lab
-        can be printed BEFORE khám — allow exam up to ~45 days after print.
+      - ngày có kết quả (PDF) vs NgayKham — print may precede exam.
     """
-    phone = re.sub(r"\D", "", str(row.get("sdt") or ""))
+    phone = _phone_digits(row.get("sdt") or "")
     name = (row.get("ho_ten") or "").strip().upper()
     year = str(row.get("nam_sinh") or "").strip()
+    gender = _norm_gender(row.get("gioi_tinh") or "")
     sid = str(row.get("sid") or row.get("ma_phieu") or "")
     cccd = re.sub(r"\D", "", str(row.get("cccd") or ""))
     fname = str(row.get("file_name") or row.get("source_file") or "")
@@ -440,28 +488,30 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
     if not pdf_result_d:
         pdf_result_d = _parse_any_date(stem[:6] if re.match(r"^\d{6}-", stem) else "")
 
-    fn_name, fn_year = "", ""
+    fn_name, fn_year, fn_gender = "", "", ""
     m_fn = re.search(
-        r"^\d{6}-\d+\s*-\s*(.+?)\s*-\s*(19\d{2}|20\d{2})\s*-\s*[MF](?:_|\.|$)",
+        r"^\d{6}-\d+\s*-\s*(.+?)\s*-\s*(19\d{2}|20\d{2})\s*-\s*([MF])(?:_|\.|$)",
         stem,
         re.I,
     )
     if not m_fn:
         m_fn = re.search(
-            r"^\d{6}-\d+\s*-\s*(.+?)\s*-\s*(19\d{2}|20\d{2})\s*-\s*[MF]\b",
+            r"^\d{6}-\d+\s*-\s*(.+?)\s*-\s*(19\d{2}|20\d{2})\s*-\s*([MF])\b",
             stem,
             re.I,
         )
     if m_fn:
         fn_name = m_fn.group(1).strip().upper()
         fn_year = m_fn.group(2)
+        fn_gender = _norm_gender(m_fn.group(3))
         if not name:
             name = fn_name
-        # Prefer filename year when present (stable on INBOX names)
         if fn_year:
             year = fn_year
         elif not year:
             year = fn_year
+        if not gender and fn_gender:
+            gender = fn_gender
 
     yr_target = year or fn_year
 
@@ -473,10 +523,23 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
             return False
         return _rec_year(rec) == yr_target
 
+    def _gender_ok(rec: dict) -> bool:
+        if not gender:
+            return True  # PDF unknown → do not block
+        rg = _rec_gender(rec)
+        if not rg:
+            return True  # web missing gender → keep, score later
+        return rg == gender
+
+    def _phone_ok(rec: dict) -> bool:
+        if not phone:
+            return True  # PDF no usable phone → do not block
+        return _phones_match(phone, str(rec.get("SDT") or ""))
+
     def _rec_ngaykham(rec: dict) -> date | None:
         return _parse_any_date(rec.get("NgayKham") or rec.get("KSKDK_NgayKham") or rec.get("NgayTao"))
 
-    strong = []  # CCCD / MaPhieu / explicit pid — still verify year when we have one
+    strong = []  # CCCD / MaPhieu / explicit pid — still verify year/name/gender
     if cccd and cccd in index.get("by_cccd", {}):
         strong.append(index["by_cccd"][cccd])
     for mp in filter(None, [sid, row.get("ma_phieu")]):
@@ -495,7 +558,7 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
             strong.append(index["by_pid"][token])
 
     candidates = []
-    # Phone: only keep same birth year when year known (avoid wrong twin-name)
+    # Phone lookup: only when PDF has phone; still require year+name later
     if phone and phone in index["by_phone"]:
         for rec in index["by_phone"][phone]:
             if not yr_target or _year_ok(rec):
@@ -544,8 +607,6 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
     # Strong keys: prefer year agreement; if year known and conflicts → drop
     for rec in strong:
         if yr_target and not _year_ok(rec):
-            # Unique id with conflicting year: still trust id (CCCD/MaPhieu/pid)
-            # only when name also soft-matches or no name available
             rn = str(rec.get("HoTen") or "")
             if fold_target and rn and not _names_soft_match(fold_target, rn):
                 continue
@@ -563,13 +624,37 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
     if not uniq:
         return "WAITING_ADMIN", None
 
-    # HARD FILTER: when PDF/filename has nam_sinh, only same-year candidates
+    # HARD FILTER: năm sinh
     if yr_target:
         same_year = [c for c in uniq if _year_ok(c)]
         if same_year:
             uniq = same_year
         else:
-            # No year agreement → do not guess among same-name different years
+            return "WAITING_ADMIN", None
+
+    # HARD FILTER: họ tên đầy đủ (cùng số từ)
+    if fold_target:
+        named = [c for c in uniq if _names_soft_match(fold_target, str(c.get("HoTen") or ""))]
+        if named:
+            uniq = named
+        else:
+            # Strong CCCD/pid may keep only if name also matches — otherwise reject
+            return "WAITING_ADMIN", None
+
+    # HARD FILTER: giới tính (khi PDF/filename biết M/F)
+    if gender:
+        gendered = [c for c in uniq if _gender_ok(c)]
+        if gendered:
+            uniq = gendered
+        else:
+            return "WAITING_ADMIN", None
+
+    # HARD FILTER: SĐT khi PDF có số hợp lệ
+    if phone:
+        phoned = [c for c in uniq if _phone_ok(c)]
+        if phoned:
+            uniq = phoned
+        else:
             return "WAITING_ADMIN", None
 
     def _score(c: dict) -> tuple:
@@ -579,27 +664,16 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
             1 if fold_target and _names_soft_match(fold_target, rn) else 0
         )
         year_ok = 2 if yr_target and ns == yr_target else 0
-        phone_ok = 1 if phone and re.sub(r"\D", "", str(c.get("SDT") or "")) == phone else 0
+        phone_ok = 2 if phone and _phones_match(phone, str(c.get("SDT") or "")) else 0
+        gender_ok = 1 if gender and _rec_gender(c) == gender else 0
         date_ok = _date_proximity_score(pdf_result_d, _rec_ngaykham(c))
         mau = row.get("mau_kham")
         mau_ok = 1 if mau and c.get("_mau") == mau else 0
-        # Primary: year+name+phone+date; secondary: mau
-        return (year_ok + name_ok + phone_ok + date_ok, mau_ok, date_ok)
+        return (year_ok + name_ok + phone_ok + gender_ok + date_ok, mau_ok, date_ok)
 
     uniq.sort(key=_score, reverse=True)
-    # Require name soft-match when we have a name (after year filter)
-    if fold_target:
-        named = [c for c in uniq if _names_soft_match(fold_target, str(c.get("HoTen") or ""))]
-        if named:
-            uniq = named
-        elif not cccd and not any(
-            str(row.get("ma_phieu") or "") and str(row.get("ma_phieu")) in index.get("by_maphieu", {})
-            for _ in [0]
-        ):
-            # keep strong pid-only hits already year-filtered
-            pass
 
-    # Prefer exact folded name over soft (ho+ten) matches
+    # Prefer exact folded name
     if fold_target:
         exact = [
             c
@@ -625,11 +699,9 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
             else:
                 return "WAITING_ADMIN", None
         elif not phone and not cccd:
-            # Multiple name+year but NONE near PDF print date → do not guess
             return "WAITING_ADMIN", None
 
     if len(uniq) > 1:
-        # Still ambiguous after year+name(+date) — need phone/cccd; else wait
         top = _score(uniq[0])
         tied = [c for c in uniq if _score(c) == top]
         if len(tied) > 1 and not phone and not cccd:
@@ -659,14 +731,19 @@ def search_patient_live(
     date_from: str,
     date_to: str,
     ngay_co_kq: str = "",
+    gioi_tinh: str = "",
+    sdt: str = "",
 ) -> tuple[str, dict | None, str]:
     """Fallback when day-index miss: query M3/M4 by HoTen over full date span.
 
-    Disambiguate same name+year via ngày có kết quả vs NgayKham (print may
-    precede exam). Returns (status, rec, token).
+    Same hard filters as match_patient: full name, year, gender (if known),
+    phone (if PDF has usable digits). Returns (status, rec, token).
     """
     if not name or not year:
         return "WAITING_ADMIN", None, token
+
+    gender = _norm_gender(gioi_tinh)
+    phone = _phone_digits(sdt)
 
     reports = [
         ("M3", "KSKDK_DanhSach_KSK_M13", "NgayTao"),
@@ -707,6 +784,12 @@ def search_patient_live(
                 if _year_from_ngaysinh(r.get("NgaySinh")) != str(year):
                     continue
                 if not _names_soft_match(name, str(r.get("HoTen") or "")):
+                    continue
+                if gender:
+                    rg = _rec_gender(r)
+                    if rg and rg != gender:
+                        continue
+                if phone and not _phones_match(phone, str(r.get("SDT") or "")):
                     continue
                 hits.append({**r, "_mau": mau})
 

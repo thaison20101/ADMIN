@@ -441,6 +441,8 @@ def run_auto_cycle(
                     date_from=date_from,
                     date_to=date_to,
                     ngay_co_kq=str(data.get("ngay_co_kq") or ""),
+                    gioi_tinh=str(data.get("gioi_tinh") or ""),
+                    sdt=str(data.get("sdt") or ""),
                 )
                 if live_st != "WAITING_ADMIN" and live_rec:
                     st, rec = live_st, live_rec
@@ -555,6 +557,8 @@ def run_auto_cycle(
                 date_from=date_from,
                 date_to=date_to,
                 ngay_co_kq=str(data.get("ngay_co_kq") or ""),
+                gioi_tinh=str(data.get("gioi_tinh") or ""),
+                sdt=str(data.get("sdt") or ""),
             )
             if live_st != "WAITING_ADMIN" and live_rec:
                 st, rec = live_st, live_rec
