@@ -47,30 +47,23 @@ Write-Host "==== 2/4 config + deps ===="
 & python ".\pipeline\ensure_config.py"
 & python -m pip install -q -r ".\pipeline\requirements.txt"
 
-$cfgOut = & python -c @"
-import json
-from pathlib import Path
-c=json.loads(Path('pipeline/config.local.json').read_text(encoding='utf-8-sig'))
-s=c['drive']['local_sync_root']
-d=c['drive']
-print(s)
-print(s+'\\'+d['inbox_folder'])
-print(s+'\\'+d['error_folder'])
-print(s+'\\'+d['processed_folder'])
-print(s+'\\'+d.get('missing_folder','MISSING'))
-"@
+$cfgOut = & python ".\pipeline\print_drive_dirs.py"
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "ERROR: khong doc duoc config.local.json"
+  exit 1
+}
 $lines = @($cfgOut)
-$SyncRoot = $lines[0]
-$Inbox = $lines[1]
-$ErrorDir = $lines[2]
-$Processed = $lines[3]
-$Missing = $lines[4]
+$SyncRoot = [string]$lines[0]
+$Inbox = [string]$lines[1]
+$ErrorDir = [string]$lines[2]
+$Processed = [string]$lines[3]
+$Missing = [string]$lines[4]
 New-Item -ItemType Directory -Force -Path $Missing | Out-Null
 
 Write-Host ("TRUOC: INBOX={0} MISSING={1} ERROR={2} PROCESSED={3}" -f (Count-Pdf $Inbox), (Count-Pdf $Missing), (Count-Pdf $ErrorDir), (Count-Pdf $Processed))
 Write-Host "Ky quet Medinet: 01/07/2026 -> hom nay (rolling)"
 Write-Host "Khop: HO TEN DAY DU + nam sinh + gioi tinh + SDT (neu PDF co) + ngay in KQ"
-Write-Host "     (muon CHI quet 1 lan, KHONG cai hourly → CHAY_KIEM_1_LAN_TOAN_BO.ps1)"
+Write-Host "     (muon CHI quet 1 lan, KHONG cai hourly -> CHAY_KIEM_1_LAN_TOAN_BO.ps1)"
 
 Write-Host "==== 3/4 FULL SCAN TOAN BO FOLDER + REPAIR (nhieu vong) ===="
 Write-Host "Quet: INBOX + MISSING + ERROR + PROCESSED + moi folder khac"

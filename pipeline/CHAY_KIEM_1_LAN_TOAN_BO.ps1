@@ -3,18 +3,18 @@
 #
 # Quet: INBOX_CLS + MISSING + ERROR + PROCESSED (+ folder khac)
 # Rule TTHC: ho ten day du + nam sinh + gioi tinh + SDT (neu PDF co)
-#  - Khong khop / khop sai (vd TRAN SANH ≠ TRAN NGOC SANH) → MISSING
-#  - FULL labs → import → PROCESSED
-#  - PARTIAL → import phan co → ERROR
+#  - Khong khop / khop sai (vd TRAN SANH != TRAN NGOC SANH) -> MISSING
+#  - FULL labs -> import -> PROCESSED
+#  - PARTIAL -> import phan co -> ERROR
 #
 # BN da nhap CLS SAI tren Medinet:
-#  - Xoa CLS sai tren web (form CLS cua dung BN)
-#  - De PDF o MISSING / INBOX; khi TTHC dung + PDF moi → import de len
+#  - Xoa CLS sai tren web
+#  - De PDF o MISSING / INBOX; khi TTHC dung + PDF moi -> import de len
 #
 #   cd C:\Users\Administrator\ADMIN
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_KIEM_1_LAN_TOAN_BO.ps1
 #
-# KHONG click vao cua so khi dang chay. Chi can 1 lan — khong bat Task Scheduler.
+# KHONG click vao cua so khi dang chay. Chi can 1 lan - khong bat Task Scheduler.
 # ============================================================
 
 $ErrorActionPreference = "Continue"
@@ -38,7 +38,7 @@ function Count-Pdf([string]$Path) {
 Write-Host ""
 Write-Host "############################################################"
 Write-Host "#  KIEM 1 LAN: INBOX + MISSING + ERROR + PROCESSED         #"
-Write-Host "#  (KHONG cai hourly — chi chay 1 lan)                     #"
+Write-Host "#  (KHONG cai hourly - chi chay 1 lan)                     #"
 Write-Host "############################################################"
 Write-Host ""
 
@@ -48,7 +48,7 @@ if (Test-Path -LiteralPath (Join-Path $Repo ".git")) {
   git checkout cursor/drive-hourly-pipeline-df0f
   git pull origin cursor/drive-hourly-pipeline-df0f
 } else {
-  Write-Host "Khong co .git (thuong do giai ZIP) — bo qua git pull."
+  Write-Host "Khong co .git (thuong do giai ZIP) - bo qua git pull."
 }
 
 Write-Host "==== 2/3 config + deps ===="
@@ -56,24 +56,17 @@ Write-Host "==== 2/3 config + deps ===="
 & python -m pip install -q -r ".\pipeline\requirements.txt"
 & python ".\pipeline\test_match_strict.py"
 
-$cfgOut = & python -c @"
-import json
-from pathlib import Path
-c=json.loads(Path('pipeline/config.local.json').read_text(encoding='utf-8-sig'))
-s=c['drive']['local_sync_root']
-d=c['drive']
-print(s)
-print(s+'\\'+d['inbox_folder'])
-print(s+'\\'+d['error_folder'])
-print(s+'\\'+d['processed_folder'])
-print(s+'\\'+d.get('missing_folder','MISSING'))
-"@
+$cfgOut = & python ".\pipeline\print_drive_dirs.py"
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "ERROR: khong doc duoc config.local.json"
+  exit 1
+}
 $lines = @($cfgOut)
-$SyncRoot = $lines[0]
-$Inbox = $lines[1]
-$ErrorDir = $lines[2]
-$Processed = $lines[3]
-$Missing = $lines[4]
+$SyncRoot = [string]$lines[0]
+$Inbox = [string]$lines[1]
+$ErrorDir = [string]$lines[2]
+$Processed = [string]$lines[3]
+$Missing = [string]$lines[4]
 New-Item -ItemType Directory -Force -Path $Missing | Out-Null
 
 Write-Host ("TRUOC: INBOX={0} MISSING={1} ERROR={2} PROCESSED={3}" -f (Count-Pdf $Inbox), (Count-Pdf $Missing), (Count-Pdf $ErrorDir), (Count-Pdf $Processed))
@@ -83,7 +76,7 @@ Write-Host "     TRAN SANH != TRAN NGOC SANH / TRAN VAN SANH"
 
 Write-Host "==== 3/3 FULL SCAN + REPAIR (nhieu vong, KHONG hourly) ===="
 Write-Host "Ep rematch moi PDF (ke ca da IMPORTED trong PROCESSED)."
-Write-Host "Khong khop TTHC -> chuyen MISSING. Co the mat LAU — dung click cua so."
+Write-Host "Khong khop TTHC -> chuyen MISSING. Co the mat LAU - dung click cua so."
 $code = 0
 for ($round = 1; $round -le 12; $round++) {
   Write-Host ("----- VONG {0}/12 -----" -f $round)
@@ -107,15 +100,15 @@ for ($round = 1; $round -le 12; $round++) {
 }
 
 Write-Host ""
-Write-Host "========== XONG (1 LAN — KHONG cai hourly) =========="
+Write-Host "========== XONG (1 LAN - KHONG cai hourly) =========="
 Write-Host ("SAU: INBOX={0} MISSING={1} ERROR={2} PROCESSED={3}" -f (Count-Pdf $Inbox), (Count-Pdf $Missing), (Count-Pdf $ErrorDir), (Count-Pdf $Processed))
 Write-Host "MISSING   = PDF chua khop TTHC dung (bao bo phan nhap / doi PDF moi)"
 Write-Host "ERROR     = co TTHC nhung PDF chi 1 phan (da nhap phan co)"
 Write-Host "PROCESSED = FULL + da khop TTHC dung"
 Write-Host ""
 Write-Host "Neu BN bi nhap CLS SAI tren web:"
-Write-Host "  1) Mo form CLS dung BN sai → xoa het ket qua CLS"
-Write-Host "  2) De PDF o MISSING/INBOX; khi TTHC dung → chay lai script nay hoac tha PDF moi"
+Write-Host "  1) Mo form CLS dung BN sai -> xoa het ket qua CLS"
+Write-Host "  2) De PDF o MISSING/INBOX; khi TTHC dung -> chay lai script nay hoac tha PDF moi"
 Write-Host "  3) He thong se import de len (web trong thi ghi lai)"
 Write-Host "List MISSING: build for Supper Data\excel_preview\missing_can_tthc.txt"
 Write-Host ("Exit={0}" -f $code)
