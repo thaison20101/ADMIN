@@ -35,6 +35,15 @@ if (-not (Test-Path ".\pipeline\drive_paths.py")) {
 Write-Host "==== Tim Drive + tao folder chuan ===="
 & python ".\pipeline\drive_paths.py"
 $code = $LASTEXITCODE
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "WARN: drive_paths exit=$LASTEXITCODE"
+}
+
+Write-Host ""
+Write-Host "==== Kiem tra o dia / Google Drive ===="
+Get-PSDrive -PSProvider FileSystem | Format-Table Name,Root,Used,Free -AutoSize
+Write-Host "Neu khong thay G: (hoac H:) -> cai Google Drive Desktop + dang nhap dung tai khoan."
+Write-Host "Sau khi sync xong, chay lai script nay."
 
 Write-Host ""
 Write-Host "==== Cap nhat config.local.json + login ===="

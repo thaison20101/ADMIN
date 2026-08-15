@@ -4,13 +4,17 @@
 Discovers:
   <DriveLetter>/(Drive của tôi|My Drive|...)/PKDK_Thuankieu_Pipeline
   <DriveLetter>/(...)/build for Supper Data
+  Also: %USERPROFILE%\\Google Drive\\..., GoogleDrive\\...
 
-Creates standard folders: INBOX_CLS, MISSING, ERROR, PROCESSED.
+Never mkdir on a missing drive letter (avoids WinError 3 on PCs without G:).
+Creates standard folders: INBOX_CLS, MISSING, ERROR, PROCESSED — only under a
+path that already exists or under local fallback.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -26,7 +30,7 @@ DRIVE_MIDS = (
     "My Drive",
     "Drive cua toi",
 )
-DRIVE_LETTERS = ("G:", "H:", "D:", "E:", "F:")
+DRIVE_LETTERS = ("G:", "H:", "D:", "E:", "F:", "I:", "J:")
 STD_FOLDERS = ("INBOX_CLS", "MISSING", "ERROR", "PROCESSED")
 
 
@@ -42,6 +46,15 @@ def _unique(paths: list[Path]) -> list[Path]:
     return out
 
 
+def _drive_exists(letter: str) -> bool:
+    """True only if Windows drive letter is mounted (e.g. G:)."""
+    try:
+        root = Path(f"{letter}/")
+        return root.exists()
+    except Exception:
+        return False
+
+
 def _load_cfg() -> dict:
     for p in (LOCAL_CONFIG, EXAMPLE_CONFIG):
         if p.exists():
@@ -52,64 +65,117 @@ def _load_cfg() -> dict:
     return {}
 
 
-def discover_pipeline_root(cfg: dict | None = None) -> Path:
-    cfg = cfg if cfg is not None else _load_cfg()
+def _user_drive_bases() -> list[Path]:
+    """Common Google Drive Desktop locations under the user profile."""
+    home = Path(os.environ.get("USERPROFILE") or Path.home())
+    bases: list[Path] = []
+    for name in (
+        "Google Drive",
+        "GoogleDrive",
+        "My Drive",
+        "Drive của tôi",
+        "Drive cua toi",
+    ):
+        bases.append(home / name)
+    # Newer Google Drive Desktop often nests: Google Drive/My Drive
+    for outer in ("Google Drive", "GoogleDrive"):
+        for mid in DRIVE_MIDS:
+            bases.append(home / outer / mid)
+    return bases
+
+
+def _pipeline_candidates(cfg: dict) -> list[Path]:
     raw = str((cfg.get("drive") or {}).get("local_sync_root") or "").strip()
     cands: list[Path] = []
     if raw:
         cands.append(Path(raw))
     for letter in DRIVE_LETTERS:
+        if not _drive_exists(letter):
+            continue
         for mid in DRIVE_MIDS:
             cands.append(Path(f"{letter}/{mid}/{PIPELINE_NAME}"))
+            cands.append(Path(f"{letter}/{PIPELINE_NAME}"))
+    for base in _user_drive_bases():
+        cands.append(base / PIPELINE_NAME)
+        for mid in DRIVE_MIDS:
+            cands.append(base / mid / PIPELINE_NAME)
     cands.append(ROOT / PIPELINE_NAME)
-    for p in _unique(cands):
+    return _unique(cands)
+
+
+def _build_candidates(cfg: dict) -> list[Path]:
+    raw = str((cfg.get("drive") or {}).get("build_root") or "").strip()
+    cands: list[Path] = []
+    if raw:
+        cands.append(Path(raw))
+    for letter in DRIVE_LETTERS:
+        if not _drive_exists(letter):
+            continue
+        for mid in DRIVE_MIDS:
+            cands.append(Path(f"{letter}/{mid}/{BUILD_NAME}"))
+            cands.append(Path(f"{letter}/{BUILD_NAME}"))
+    for base in _user_drive_bases():
+        cands.append(base / BUILD_NAME)
+        for mid in DRIVE_MIDS:
+            cands.append(base / mid / BUILD_NAME)
+    cands.append(ROOT / "pipeline" / "work" / "build")
+    return _unique(cands)
+
+
+def _first_existing_dir(cands: list[Path]) -> Path | None:
+    for p in cands:
         try:
             if p.exists() and p.is_dir():
                 return p
         except Exception:
             continue
-    # Prefer creating under first existing Drive mid, else G:/Drive của tôi
+    return None
+
+
+def _create_under_existing_base(name: str) -> Path | None:
+    """Create <base>/<name> only when <base> already exists."""
+    bases: list[Path] = []
     for letter in DRIVE_LETTERS:
+        if not _drive_exists(letter):
+            continue
         for mid in DRIVE_MIDS:
-            base = Path(f"{letter}/{mid}")
-            try:
-                if base.exists():
-                    dest = base / PIPELINE_NAME
-                    dest.mkdir(parents=True, exist_ok=True)
-                    return dest
-            except Exception:
+            bases.append(Path(f"{letter}/{mid}"))
+        bases.append(Path(f"{letter}/"))
+    bases.extend(_user_drive_bases())
+    for base in _unique(bases):
+        try:
+            if not base.exists():
                 continue
-    dest = Path(f"G:/{DRIVE_MIDS[0]}/{PIPELINE_NAME}")
+            dest = base / name
+            dest.mkdir(parents=True, exist_ok=True)
+            return dest
+        except Exception:
+            continue
+    return None
+
+
+def discover_pipeline_root(cfg: dict | None = None) -> Path:
+    cfg = cfg if cfg is not None else _load_cfg()
+    found = _first_existing_dir(_pipeline_candidates(cfg))
+    if found:
+        return found
+    created = _create_under_existing_base(PIPELINE_NAME)
+    if created:
+        return created
+    # Local fallback — never touch missing G:
+    dest = ROOT / PIPELINE_NAME
     dest.mkdir(parents=True, exist_ok=True)
     return dest
 
 
 def discover_build_root(cfg: dict | None = None) -> Path:
     cfg = cfg if cfg is not None else _load_cfg()
-    raw = str((cfg.get("drive") or {}).get("build_root") or "").strip()
-    cands: list[Path] = []
-    if raw:
-        cands.append(Path(raw))
-    for letter in DRIVE_LETTERS:
-        for mid in DRIVE_MIDS:
-            cands.append(Path(f"{letter}/{mid}/{BUILD_NAME}"))
-    cands.append(ROOT / "pipeline" / "work" / "build")
-    for p in _unique(cands):
-        try:
-            if p.exists() and p.is_dir():
-                return p
-        except Exception:
-            continue
-    for letter in DRIVE_LETTERS:
-        for mid in DRIVE_MIDS:
-            base = Path(f"{letter}/{mid}")
-            try:
-                if base.exists():
-                    dest = base / BUILD_NAME
-                    dest.mkdir(parents=True, exist_ok=True)
-                    return dest
-            except Exception:
-                continue
+    found = _first_existing_dir(_build_candidates(cfg))
+    if found:
+        return found
+    created = _create_under_existing_base(BUILD_NAME)
+    if created:
+        return created
     dest = ROOT / "pipeline" / "work" / "build"
     dest.mkdir(parents=True, exist_ok=True)
     return dest
@@ -158,11 +224,21 @@ def sync_drive_layout(cfg: dict | None = None) -> dict:
     for name in STD_FOLDERS:
         p = folders[name]
         counts[name] = len(list(p.rglob("*.pdf"))) if p.exists() else 0
+    on_drive = any(
+        str(pipeline).upper().startswith(f"{L}/") or str(pipeline).upper().startswith(f"{L}\\")
+        for L in DRIVE_LETTERS
+    ) or ("google" in str(pipeline).lower()) or ("drive" in str(pipeline).lower() and "pipeline" not in str(pipeline.parent).lower())
     return {
         "pipeline_root": str(pipeline),
         "build_root": str(build),
         "config": str(cfg_path),
         "pdf_counts": counts,
+        "using_local_fallback": str(ROOT) in str(pipeline),
+        "hint": (
+            ""
+            if not (str(ROOT) in str(pipeline))
+            else "CHUA THAY GOOGLE DRIVE — cai Google Drive Desktop, dang nhap, doi sync xong roi chay lai."
+        ),
     }
 
 
@@ -182,7 +258,10 @@ def main() -> int:
         print(f"CONFIG  : {summary['config']}")
         for k, n in (summary.get("pdf_counts") or {}).items():
             print(f"  {k}: {n} pdf")
-        print("OK: folders INBOX_CLS / MISSING / ERROR / PROCESSED ready")
+        if summary.get("hint"):
+            print(f"WARN: {summary['hint']}")
+        else:
+            print("OK: folders INBOX_CLS / MISSING / ERROR / PROCESSED ready")
     return 0
 
 
