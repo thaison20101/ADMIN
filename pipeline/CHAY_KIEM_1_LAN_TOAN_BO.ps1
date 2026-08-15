@@ -1,19 +1,20 @@
 # ============================================================
-# QUET TOAN BO (LAN DAU / BAT SO BN CU) + BAT HOURLY
+# KIEM 1 LAN TOAN BO PDF (KHONG cai hourly)
 #
-# Rule:
-#  - Quet TOAN BO folder: INBOX + MISSING + ERROR + PROCESSED + folder khac
-#  - FULL (mau+sinh hoa, bo Ure) -> PROCESSED
-#  - PARTIAL / chi nuoc tieu -> nhap phan co -> ERROR
-#  - Khong TTHC -> MISSING
-#  - PROCESSED sai / khong khop TTHC (ten+nam sinh+ngay in KQ) -> MISSING
-#  - Sau do hourly chi quet INBOX_CLS + MISSING
-#  - Ky quet: 01/07/2026 -> hom nay
+# Quet: INBOX_CLS + MISSING + ERROR + PROCESSED (+ folder khac)
+# Rule TTHC: ho ten day du + nam sinh + gioi tinh + SDT (neu PDF co)
+#  - Khong khop / khop sai (vd TRAN SANH ≠ TRAN NGOC SANH) → MISSING
+#  - FULL labs → import → PROCESSED
+#  - PARTIAL → import phan co → ERROR
 #
-#   cd C:\Users\thais\ADMIN
-#   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_QUET_LAN_DAU.ps1
+# BN da nhap CLS SAI tren Medinet:
+#  - Xoa CLS sai tren web (form CLS cua dung BN)
+#  - De PDF o MISSING / INBOX; khi TTHC dung + PDF moi → import de len
 #
-# PowerShell Admin. KHONG click vao cua so khi dang chay.
+#   cd C:\Users\Administrator\ADMIN
+#   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_KIEM_1_LAN_TOAN_BO.ps1
+#
+# KHONG click vao cua so khi dang chay. Chi can 1 lan — khong bat Task Scheduler.
 # ============================================================
 
 $ErrorActionPreference = "Continue"
@@ -36,16 +37,20 @@ function Count-Pdf([string]$Path) {
 
 Write-Host ""
 Write-Host "############################################################"
-Write-Host "#  QUET TOAN BO (MOI FOLDER) + BAT SO BN CU + HOURLY       #"
+Write-Host "#  KIEM 1 LAN: INBOX + MISSING + ERROR + PROCESSED         #"
+Write-Host "#  (KHONG cai hourly — chi chay 1 lan)                     #"
 Write-Host "############################################################"
 Write-Host ""
 
-Write-Host "==== 1/4 git pull ===="
+Write-Host "==== 1/3 git pull (rule TTHC moi) ===="
+git fetch origin
+git checkout cursor/drive-hourly-pipeline-df0f
 git pull origin cursor/drive-hourly-pipeline-df0f
 
-Write-Host "==== 2/4 config + deps ===="
+Write-Host "==== 2/3 config + deps ===="
 & python ".\pipeline\ensure_config.py"
 & python -m pip install -q -r ".\pipeline\requirements.txt"
+& python ".\pipeline\test_match_strict.py"
 
 $cfgOut = & python -c @"
 import json
@@ -68,14 +73,13 @@ $Missing = $lines[4]
 New-Item -ItemType Directory -Force -Path $Missing | Out-Null
 
 Write-Host ("TRUOC: INBOX={0} MISSING={1} ERROR={2} PROCESSED={3}" -f (Count-Pdf $Inbox), (Count-Pdf $Missing), (Count-Pdf $ErrorDir), (Count-Pdf $Processed))
-Write-Host "Ky quet Medinet: 01/07/2026 -> hom nay (rolling)"
-Write-Host "Khop: HO TEN DAY DU + nam sinh + gioi tinh + SDT (neu PDF co) + ngay in KQ"
-Write-Host "     (muon CHI quet 1 lan, KHONG cai hourly → CHAY_KIEM_1_LAN_TOAN_BO.ps1)"
+Write-Host "Ky Medinet: 01/07/2026 -> hom nay"
+Write-Host "Khop: HO TEN DAY DU + nam sinh + gioi tinh + SDT (neu PDF co)"
+Write-Host "     TRAN SANH != TRAN NGOC SANH / TRAN VAN SANH"
 
-Write-Host "==== 3/4 FULL SCAN TOAN BO FOLDER + REPAIR (nhieu vong) ===="
-Write-Host "Quet: INBOX + MISSING + ERROR + PROCESSED + moi folder khac"
-Write-Host "FULL->PROCESSED | PARTIAL->ERROR | no TTHC->MISSING"
-Write-Host "LUU Y: co the mat LAU (hang nghin PDF). KHONG click vao cua so."
+Write-Host "==== 3/3 FULL SCAN + REPAIR (nhieu vong, KHONG hourly) ===="
+Write-Host "Ep rematch moi PDF (ke ca da IMPORTED trong PROCESSED)."
+Write-Host "Khong khop TTHC -> chuyen MISSING. Co the mat LAU — dung click cua so."
 $code = 0
 for ($round = 1; $round -le 12; $round++) {
   Write-Host ("----- VONG {0}/12 -----" -f $round)
@@ -98,20 +102,19 @@ for ($round = 1; $round -le 12; $round++) {
   if (($imported -le 0) -and ($partial -le 0) -and ($queued -le 0) -and ($movedMiss -le 0) -and ($auditMiss -le 0) -and $round -ge 2) { break }
 }
 
-Write-Host "==== 4/4 CAI / CAP NHAT HOURLY PKDK_Hourly_Sync ===="
-& powershell -ExecutionPolicy Bypass -File ".\pipeline\install_hourly_task.ps1"
-$codeTask = $LASTEXITCODE
-
 Write-Host ""
-Write-Host "========== XONG =========="
+Write-Host "========== XONG (1 LAN — KHONG cai hourly) =========="
 Write-Host ("SAU: INBOX={0} MISSING={1} ERROR={2} PROCESSED={3}" -f (Count-Pdf $Inbox), (Count-Pdf $Missing), (Count-Pdf $ErrorDir), (Count-Pdf $Processed))
-Write-Host "MISSING   = chua co TTHC (bao bo phan nhap) - list: build\excel_preview\missing_can_tthc.txt"
+Write-Host "MISSING   = PDF chua khop TTHC dung (bao bo phan nhap / doi PDF moi)"
 Write-Host "ERROR     = co TTHC nhung PDF chi 1 phan (da nhap phan co)"
-Write-Host "PROCESSED = FULL mau + sinh hoa (tru Ure) + da khop TTHC dung"
-Write-Host "Hourly tiep theo CHI quet INBOX_CLS + MISSING (tranh quet di quet lai)"
-Write-Host "Ky quet: 01/07/2026 -> hom nay"
-Write-Host ("Exit import={0} task={1}" -f $code, $codeTask)
-Write-Host "=========================="
-if ($codeTask -ne 0) { exit $codeTask }
+Write-Host "PROCESSED = FULL + da khop TTHC dung"
+Write-Host ""
+Write-Host "Neu BN bi nhap CLS SAI tren web:"
+Write-Host "  1) Mo form CLS dung BN sai → xoa het ket qua CLS"
+Write-Host "  2) De PDF o MISSING/INBOX; khi TTHC dung → chay lai script nay hoac tha PDF moi"
+Write-Host "  3) He thong se import de len (web trong thi ghi lai)"
+Write-Host "List MISSING: build for Supper Data\excel_preview\missing_can_tthc.txt"
+Write-Host ("Exit={0}" -f $code)
+Write-Host "===================================================="
 if ($code -ne 0) { exit $code }
 exit 0

@@ -327,9 +327,15 @@ def run_auto_cycle(
             old = (r.get("status") or "").upper()
             r["source_file"] = str(pdf)
             r["file_name"] = pdf.name
-            # Keep known-done rows as done so they can be moved to PROCESSED
-            # even if current TTHC re-match is ambiguous.
-            if old in {"IMPORTED", "SKIP_ALREADY_CLS"}:
+            # full-scan: ép rematch TTHC (rule mới) cho mọi PDF kể cả đã IMPORTED
+            # hourly: giữ IMPORTED/SKIP trên disk để tránh quét lại không cần
+            if full_scan:
+                if old != "READY_IMPORT" or f"disk_{tag}_fullrematch" not in str(r.get("notes") or ""):
+                    r["status"] = "READY_IMPORT"
+                    r["import_attempts"] = "0"
+                    r["notes"] = f"disk_{tag}_fullrematch:{old}"[:200]
+                    requeued_disk += 1
+            elif old in {"IMPORTED", "SKIP_ALREADY_CLS"}:
                 if (r.get("notes") or "") != f"disk_{tag}_done:{old}":
                     r["status"] = old
                     r["import_attempts"] = "0"
