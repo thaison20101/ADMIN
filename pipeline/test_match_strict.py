@@ -6,7 +6,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from datetime import date
+
 from pipeline.phase_b_preview import (  # noqa: E402
+    _daterange_chunks,
     _names_soft_match,
     _norm_gender,
     _phones_match,
@@ -131,10 +134,27 @@ def test_exact_match_ok():
     assert rec and rec.get("phieukhamId") == 333
 
 
+def test_daterange_chunks():
+
+    d0 = date(2026, 5, 2)
+    d1 = date(2026, 8, 17)
+    chunks = _daterange_chunks(d0, d1, chunk_days=14)
+    # 108 days inclusive → 8 windows of 14d
+    assert len(chunks) == 8, len(chunks)
+    assert chunks[0][0] == d0
+    assert chunks[-1][1] == d1
+    n = 0
+    for a, b in chunks:
+        n += (b - a).days + 1
+        assert (b - a).days + 1 <= 14
+    assert n == (d1 - d0).days + 1
+
+
 if __name__ == "__main__":
     test_names_reject_partial()
     test_gender_and_phone()
     test_tran_sanh_not_tran_ngoc_sanh()
     test_thi_thom_not_van_thom()
     test_exact_match_ok()
+    test_daterange_chunks()
     print("OK: all strict-match tests passed")

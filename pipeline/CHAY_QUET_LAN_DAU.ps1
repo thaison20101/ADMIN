@@ -71,10 +71,11 @@ Write-Host "Khop: HO TEN DAY DU + nam sinh + gioi tinh + SDT (neu PDF co)"
 Write-Host "Full-scan se xu ly CA file moi trong INBOX_CLS (khong can buoc rieng)."
 
 Write-Host "==== 3/4 FULL SCAN + REPAIR (INBOX + MISSING + ERROR + PROCESSED) ===="
+Write-Host "Index Medinet theo cua so 14 ngay (khong con 1 ngay/1 API)."
 Write-Host "KHONG click vao cua so khi dang chay."
 $code = 0
-for ($round = 1; $round -le 12; $round++) {
-  Write-Host ("----- VONG {0}/12 -----" -f $round)
+for ($round = 1; $round -le 4; $round++) {
+  Write-Host ("----- VONG {0}/4 -----" -f $round)
   $out = & python ".\pipeline\hourly_sync.py" --full-scan --repair 2>&1
   $code = $LASTEXITCODE
   $out | ForEach-Object { Write-Host $_ }

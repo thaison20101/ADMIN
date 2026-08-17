@@ -78,8 +78,8 @@ Write-Host "==== 3/3 FULL SCAN + REPAIR (nhieu vong, KHONG hourly) ===="
 Write-Host "Ep rematch moi PDF (ke ca da IMPORTED trong PROCESSED)."
 Write-Host "Khong khop TTHC -> chuyen MISSING. Co the mat LAU - dung click cua so."
 $code = 0
-for ($round = 1; $round -le 12; $round++) {
-  Write-Host ("----- VONG {0}/12 -----" -f $round)
+for ($round = 1; $round -le 4; $round++) {
+  Write-Host ("----- VONG {0}/4 -----" -f $round)
   $out = & python ".\pipeline\hourly_sync.py" --full-scan --repair 2>&1
   $code = $LASTEXITCODE
   $out | ForEach-Object { Write-Host $_ }

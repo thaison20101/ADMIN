@@ -43,8 +43,8 @@ Write-Host "Quet TOAN BO G:\Drive cua toi\PKDK_Thuankieu_Pipeline"
 Write-Host "Dien moi truong PDF len web (MCV/MCH/MCHC/Hb/... ke ca Ghi chu bat thuong)"
 Write-Host "Ure: chi dien neu PDF co; khong block."
 $code = 0
-for ($round = 1; $round -le 10; $round++) {
-  Write-Host ("----- VONG {0}/10 -----" -f $round)
+for ($round = 1; $round -le 4; $round++) {
+  Write-Host ("----- VONG {0}/4 -----" -f $round)
   $out = & python ".\pipeline\hourly_sync.py" --full-scan --repair 2>&1
   $code = $LASTEXITCODE
   $out | ForEach-Object { Write-Host $_ }

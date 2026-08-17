@@ -46,8 +46,8 @@ from pdf_extract import classify_pdf_coverage, extract_pdf  # noqa: E402
 from phase_b_import import write_result_excel  # noqa: E402
 from phase_b_preview import (  # noqa: E402
     build_root,
-    fetch_unit_index,
     load_config,
+    load_or_fetch_unit_index,
     match_patient,
     search_patient_live,
 )
@@ -222,7 +222,7 @@ def run_auto_cycle(
     repair: bool = False,
     full_scan: bool = False,
     audit_processed: bool = False,
-    sleep_s: float = 0.25,
+    sleep_s: float = 0.05,
 ) -> dict:
     """Process PDFs. Hourly = INBOX+MISSING; full_scan = TOAN BO (ke ca PROCESSED)."""
     cfg = load_config()
@@ -414,7 +414,14 @@ def run_auto_cycle(
     # date_to empty / missing / stale → always hôm nay (rolling)
     date_to = (cfg.get("medinet", {}).get("date_to") or "").strip() or _today_dmy()
     safe_print(f"Indexing Medinet NgayKham {date_from} -> {date_to} (rolling today) ...")
-    index = fetch_unit_index(token_box["t"], date_from, date_to)
+    cache_dir = ROOT / "pipeline" / "work" / "index_cache"
+    index = load_or_fetch_unit_index(
+        token_box["t"],
+        date_from,
+        date_to,
+        cache_dir=cache_dir,
+        max_age_hours=6 if (full_scan or repair) else 2,
+    )
     token_box["t"] = authenticate(user, password)
 
     stats = Counter()
@@ -423,8 +430,10 @@ def run_auto_cycle(
     imported_n = 0
     incomplete_n = 0
 
-    # One-shot: rà PROCESSED — PDF không còn khớp TTHC (rule mới) → MISSING
-    if audit_processed and processed.exists():
+    # PROCESSED rematch happens in the main loop when full_scan=True.
+    # The old extra audit_processed pass re-parsed every PDF (and live-searched
+    # misses) BEFORE any import — hours of duplicate work on large PROCESSED.
+    if audit_processed and not full_scan and processed.exists():
         safe_print("==== AUDIT PROCESSED (no TTHC → MISSING) ====")
         proc_pdfs = sorted(processed.rglob("*.pdf"))
         if limit:
@@ -764,7 +773,7 @@ def run_auto_cycle(
             continue
 
         ok, msg, _raw, token_box["t"] = insert_cls(token_box["t"], payload, reauth=reauth)
-        time.sleep(0.15)
+        time.sleep(0.05)
         verified, vdetail, token_box["t"] = verify_cls_saved(
             token_box["t"], pid, payload=payload, reauth=reauth
         )

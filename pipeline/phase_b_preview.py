@@ -340,8 +340,27 @@ def _phones_match(a: str, b: str) -> bool:
     return da == db or da.endswith(db[-9:]) or db.endswith(da[-9:])
 
 
-def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
-    """Build lookup by normalized name+phone and SID-ish MaPhieu for M3/M4."""
+def _daterange_chunks(d0, d1, chunk_days: int = 14):
+    """Split [d0, d1] into inclusive date windows of at most chunk_days."""
+    from datetime import timedelta
+
+    chunks = []
+    cur = d0
+    span = max(1, int(chunk_days))
+    while cur <= d1:
+        end = min(cur + timedelta(days=span - 1), d1)
+        chunks.append((cur, end))
+        cur = end + timedelta(days=1)
+    return chunks
+
+
+def fetch_unit_index(token: str, date_from: str, date_to: str, *, chunk_days: int = 14) -> dict:
+    """Build lookup by normalized name+phone and SID-ish MaPhieu for M3/M4.
+
+    Queries Medinet in date *windows* (default 14 days), not one HTTP call per
+    calendar day. Old per-day indexing (~48d × 2 reports × 2 calls) made each
+    full-scan round take many hours before any PDF was imported.
+    """
     reports = [
         ("M3", "KSKDK_DanhSach_KSK_M13", "NgayTao"),
         ("M4", "KSKDK_DanhSach_KSK_NguoiCaoTuoi_Report", "KSKDK_NgayKham"),
@@ -371,12 +390,13 @@ def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
     d0, d1 = parse_d(date_from), parse_d(date_to)
     # Widen start: M3 list filters NgayTao — phiếu tạo trước khoảng khám vẫn cần index
     d0 = d0 - timedelta(days=60)
-    days = []
-    cur = d0
-    while cur <= d1:
-        days.append(cur)
-        cur += timedelta(days=1)
-    safe_print(f"  Index day span {d0.strftime('%d/%m/%Y')} -> {d1.strftime('%d/%m/%Y')} ({len(days)} days)")
+    chunks = _daterange_chunks(d0, d1, chunk_days=chunk_days)
+    n_days = (d1 - d0).days + 1
+    safe_print(
+        f"  Index span {d0.strftime('%d/%m/%Y')} -> {d1.strftime('%d/%m/%Y')} "
+        f"({n_days} days, {len(chunks)} windows x{chunk_days}d)",
+        flush=True,
+    )
 
     def _cccd_of(r: dict) -> str:
         for k in (
@@ -400,8 +420,9 @@ def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
             continue
         store, ds = rep["sqlContent"], rep["dataSourceId"]
         safe_print(f"Indexing {mau} ({code}) ...", flush=True)
-        for day in days:
-            dr = f"{day.strftime('%d/%m/%Y')} - {day.strftime('%d/%m/%Y')}"
+        for w0, w1 in chunks:
+            dr = f"{w0.strftime('%d/%m/%Y')} - {w1.strftime('%d/%m/%Y')}"
+            safe_print(f"  {mau} window {dr}", flush=True)
             s, d = api(
                 token,
                 f"/api/services/app/DRViewer/ExecuteStoreWithParam_ByDatasource?dataSourceId={ds}&store={store}",
@@ -461,6 +482,44 @@ def fetch_unit_index(token: str, date_from: str, date_to: str) -> dict:
             flush=True,
         )
     return index
+
+
+def load_or_fetch_unit_index(
+    token: str,
+    date_from: str,
+    date_to: str,
+    *,
+    cache_dir: Path | None = None,
+    max_age_hours: float = 6,
+) -> dict:
+    """Reuse a recent pickle so full-scan rounds 2+ skip Medinet re-index."""
+    import pickle
+
+    if cache_dir is None:
+        cache_dir = Path(__file__).resolve().parent / "work" / "index_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    key = f"{date_from.replace('/', '')}_{date_to.replace('/', '')}.pkl"
+    path = cache_dir / key
+    now = time.time()
+    if path.exists():
+        age_h = (now - path.stat().st_mtime) / 3600.0
+        if age_h <= max_age_hours:
+            try:
+                with path.open("rb") as f:
+                    idx = pickle.load(f)
+                n = len(idx.get("all_ids") or [])
+                safe_print(f"  Index CACHE hit age={age_h:.1f}h ids={n} file={path.name}", flush=True)
+                return idx
+            except Exception as e:
+                safe_print(f"  Index cache unreadable: {e} — rebuild")
+    idx = fetch_unit_index(token, date_from, date_to)
+    try:
+        with path.open("wb") as f:
+            pickle.dump(idx, f, protocol=4)
+        safe_print(f"  Index CACHE wrote ids={len(idx.get('all_ids') or [])} -> {path.name}", flush=True)
+    except Exception as e:
+        safe_print(f"  WARN index cache write: {e}")
+    return idx
 
 
 def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
