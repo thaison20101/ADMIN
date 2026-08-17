@@ -49,14 +49,16 @@ for ($round = 1; $round -le 4; $round++) {
   $code = $LASTEXITCODE
   $out | ForEach-Object { Write-Host $_ }
   $text = ($out | Out-String)
+  $statLine = $text | & python ".\pipeline\parse_cycle_stats.py"
+  $parts = @($statLine -split "\s+")
   $imported = 0
   $incomplete = 0
   $queued = 0
-  if ($text -match "'imported':\s*(\d+)") { $imported = [int]$Matches[1] }
-  if ($text -match "'repair_incomplete':\s*(\d+)") { $incomplete = [int]$Matches[1] }
-  if ($text -match "'repair_empty':\s*(\d+)") { $incomplete += [int]$Matches[1] }
-  if ($text -match "'queued':\s*(\d+)") { $queued = [int]$Matches[1] }
-  if ($text -match "'queued_incomplete':\s*(\d+)") { $queued += [int]$Matches[1] }
+  if ($parts.Count -ge 6) {
+    $imported = [int]$parts[0]
+    $queued = [int]$parts[1]
+    $incomplete = [int]$parts[5]
+  }
   Write-Host ("Vong {0}: imported={1} repair={2} queued={3}" -f $round, $imported, $incomplete, $queued)
   if (($incomplete -le 0) -and ($queued -le 0) -and $round -ge 2) { break }
 }

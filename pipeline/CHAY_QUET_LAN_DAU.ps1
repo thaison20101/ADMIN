@@ -1,15 +1,9 @@
 # ============================================================
 # QUET TOAN BO (1 lan) + BAT HOURLY
-#
-# Quet: INBOX_CLS + MISSING + ERROR + PROCESSED (+ folder khac)
-#  - File MOI trong INBOX cung duoc dang ky + import trong cung lan chay
-#  - FULL -> PROCESSED | PARTIAL -> ERROR | no TTHC -> MISSING
-#  - Sau do bat hourly (chi INBOX + MISSING moi gio)
+# ASCII-only so Windows PowerShell 5.1 can parse this file.
 #
 #   cd C:\Users\thais\ADMIN
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_QUET_LAN_DAU.ps1
-#
-# PowerShell Admin. KHONG click vao cua so khi dang chay.
 # ============================================================
 
 $ErrorActionPreference = "Continue"
@@ -42,7 +36,7 @@ if (Test-Path -LiteralPath (Join-Path $Repo ".git")) {
   git checkout cursor/drive-hourly-pipeline-df0f
   git pull origin cursor/drive-hourly-pipeline-df0f
 } else {
-  Write-Host "Khong co .git — bo qua git pull."
+  Write-Host "Khong co .git - bo qua git pull."
 }
 
 Write-Host "==== 2/4 config + deps ===="
@@ -58,20 +52,23 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 $lines = @($cfgOut)
-$SyncRoot = [string]$lines[0]
 $Inbox = [string]$lines[1]
 $ErrorDir = [string]$lines[2]
 $Processed = [string]$lines[3]
 $Missing = [string]$lines[4]
 New-Item -ItemType Directory -Force -Path $Missing | Out-Null
 
-Write-Host ("TRUOC: INBOX={0} MISSING={1} ERROR={2} PROCESSED={3}" -f (Count-Pdf $Inbox), (Count-Pdf $Missing), (Count-Pdf $ErrorDir), (Count-Pdf $Processed))
+$nIn = Count-Pdf $Inbox
+$nMiss = Count-Pdf $Missing
+$nErr = Count-Pdf $ErrorDir
+$nPr = Count-Pdf $Processed
+Write-Host ("TRUOC: INBOX={0} MISSING={1} ERROR={2} PROCESSED={3}" -f $nIn, $nMiss, $nErr, $nPr)
 Write-Host "Ky Medinet: 01/07/2026 -> hom nay"
 Write-Host "Khop: HO TEN DAY DU + nam sinh + gioi tinh + SDT (neu PDF co)"
-Write-Host "Full-scan se xu ly CA file moi trong INBOX_CLS (khong can buoc rieng)."
+Write-Host "Full-scan xu ly CA file moi trong INBOX_CLS."
 
 Write-Host "==== 3/4 FULL SCAN + REPAIR (INBOX + MISSING + ERROR + PROCESSED) ===="
-Write-Host "Index Medinet theo cua so 14 ngay (khong con 1 ngay/1 API)."
+Write-Host "Index Medinet theo cua so 14 ngay."
 Write-Host "KHONG click vao cua so khi dang chay."
 $code = 0
 for ($round = 1; $round -le 4; $round++) {
@@ -80,13 +77,16 @@ for ($round = 1; $round -le 4; $round++) {
   $code = $LASTEXITCODE
   $out | ForEach-Object { Write-Host $_ }
   $text = ($out | Out-String)
+  $statLine = $text | & python ".\pipeline\parse_cycle_stats.py"
+  $parts = @($statLine -split "\s+")
   $imported = 0; $queued = 0; $partial = 0; $movedMiss = 0; $auditMiss = 0
-  if ($text -match "'imported':\s*(\d+)") { $imported = [int]$Matches[1] }
-  if ($text -match "'queued':\s*(\d+)") { $queued = [int]$Matches[1] }
-  if ($text -match "'queued_incomplete':\s*(\d+)") { $queued += [int]$Matches[1] }
-  if ($text -match "'imported_partial_to_error':\s*(\d+)") { $partial = [int]$Matches[1] }
-  if ($text -match "'moved_missing':\s*(\d+)") { $movedMiss = [int]$Matches[1] }
-  if ($text -match "'audit_moved_missing':\s*(\d+)") { $auditMiss = [int]$Matches[1] }
+  if ($parts.Count -ge 5) {
+    $imported = [int]$parts[0]
+    $queued = [int]$parts[1]
+    $partial = [int]$parts[2]
+    $movedMiss = [int]$parts[3]
+    $auditMiss = [int]$parts[4]
+  }
   Write-Host ("Vong {0}: imported={1} partial={2} missing={3} audit_missing={4} queued={5}" -f $round, $imported, $partial, $movedMiss, $auditMiss, $queued)
   if (($imported -le 0) -and ($partial -le 0) -and ($queued -le 0) -and ($movedMiss -le 0) -and ($auditMiss -le 0) -and $round -ge 2) { break }
 }
@@ -95,10 +95,14 @@ Write-Host "==== 4/4 CAI / BAT LAI HOURLY PKDK_Hourly_Sync ===="
 & powershell -ExecutionPolicy Bypass -File ".\pipeline\install_hourly_task.ps1"
 $codeTask = $LASTEXITCODE
 
+$nIn2 = Count-Pdf $Inbox
+$nMiss2 = Count-Pdf $Missing
+$nErr2 = Count-Pdf $ErrorDir
+$nPr2 = Count-Pdf $Processed
 Write-Host ""
 Write-Host "========== XONG =========="
-Write-Host ("SAU: INBOX={0} MISSING={1} ERROR={2} PROCESSED={3}" -f (Count-Pdf $Inbox), (Count-Pdf $Missing), (Count-Pdf $ErrorDir), (Count-Pdf $Processed))
-Write-Host "Hourly tiep theo: chi INBOX_CLS + MISSING (file moi tha vao INBOX se duoc xu ly)."
+Write-Host ("SAU: INBOX={0} MISSING={1} ERROR={2} PROCESSED={3}" -f $nIn2, $nMiss2, $nErr2, $nPr2)
+Write-Host "Hourly tiep theo: chi INBOX_CLS + MISSING."
 Write-Host ("Exit import={0} task={1}" -f $code, $codeTask)
 Write-Host "=========================="
 if ($codeTask -ne 0) { exit $codeTask }

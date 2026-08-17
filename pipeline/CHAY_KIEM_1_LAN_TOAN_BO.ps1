@@ -84,17 +84,20 @@ for ($round = 1; $round -le 4; $round++) {
   $code = $LASTEXITCODE
   $out | ForEach-Object { Write-Host $_ }
   $text = ($out | Out-String)
+  $statLine = $text | & python ".\pipeline\parse_cycle_stats.py"
+  $parts = @($statLine -split "\s+")
   $imported = 0
   $queued = 0
   $partial = 0
   $movedMiss = 0
   $auditMiss = 0
-  if ($text -match "'imported':\s*(\d+)") { $imported = [int]$Matches[1] }
-  if ($text -match "'queued':\s*(\d+)") { $queued = [int]$Matches[1] }
-  if ($text -match "'queued_incomplete':\s*(\d+)") { $queued += [int]$Matches[1] }
-  if ($text -match "'imported_partial_to_error':\s*(\d+)") { $partial = [int]$Matches[1] }
-  if ($text -match "'moved_missing':\s*(\d+)") { $movedMiss = [int]$Matches[1] }
-  if ($text -match "'audit_moved_missing':\s*(\d+)") { $auditMiss = [int]$Matches[1] }
+  if ($parts.Count -ge 5) {
+    $imported = [int]$parts[0]
+    $queued = [int]$parts[1]
+    $partial = [int]$parts[2]
+    $movedMiss = [int]$parts[3]
+    $auditMiss = [int]$parts[4]
+  }
   Write-Host ("Vong {0}: imported={1} partial={2} missing={3} audit_missing={4} queued={5}" -f $round, $imported, $partial, $movedMiss, $auditMiss, $queued)
   if (($imported -le 0) -and ($partial -le 0) -and ($queued -le 0) -and ($movedMiss -le 0) -and ($auditMiss -le 0) -and $round -ge 2) { break }
 }

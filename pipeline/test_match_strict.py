@@ -157,4 +157,8 @@ if __name__ == "__main__":
     test_thi_thom_not_van_thom()
     test_exact_match_ok()
     test_daterange_chunks()
+    from pipeline.parse_cycle_stats import parse as parse_stats
+
+    s = parse_stats("Done: {'imported': 103, 'queued': 0, 'imported_partial_to_error': 2}")
+    assert s["imported"] == 103 and s["partial"] == 2
     print("OK: all strict-match tests passed")
