@@ -41,7 +41,12 @@ KEEP_MARKERS = (
 
 
 def _drive_dirs(cfg: dict) -> tuple[Path, Path]:
-    sync = Path(cfg.get("drive", {}).get("local_sync_root") or "")
+    try:
+        from drive_paths import discover_pipeline_root
+
+        sync = discover_pipeline_root(cfg)
+    except Exception:
+        sync = Path(cfg.get("drive", {}).get("local_sync_root") or "")
     processed = sync / cfg["drive"].get("processed_folder", "PROCESSED")
     missing = sync / cfg["drive"].get("missing_folder", "MISSING")
     return processed, missing
@@ -88,10 +93,16 @@ def main() -> int:
         safe_print(f"No MISSING folder: {missing}")
         return 0
 
+    pdfs = list(missing.rglob("*.pdf"))
+    safe_print(f"Pipeline root: {processed.parent}")
+    safe_print(f"MISSING path : {missing} exists={missing.exists()} pdfs={len(pdfs)}")
+    safe_print(f"PROCESSED    : {processed}")
+    safe_print(f"tracking rows: {len(rows)} file={cases_path}")
+
     moved = 0
     skipped = 0
     processed.mkdir(parents=True, exist_ok=True)
-    for pdf in missing.rglob("*.pdf"):
+    for pdf in pdfs:
         row = by_name.get(pdf.name.lower())
         if not should_restore(row, source_path=str((row or {}).get("source_file") or pdf)):
             skipped += 1
