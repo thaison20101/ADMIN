@@ -50,8 +50,8 @@ def main() -> int:
     rules["auto_hourly"] = True
     # Enough headroom for hourly NEW inbox imports
     cur = int(rules.get("max_imports_per_run") or 0)
-    rules["max_imports_per_run"] = max(cur, 500)
-    rules["max_incomplete_per_run"] = max(int(rules.get("max_incomplete_per_run") or 0), 80)
+    rules["max_imports_per_run"] = max(cur, 2000)
+    rules["max_incomplete_per_run"] = max(int(rules.get("max_incomplete_per_run") or 0), 200)
 
     CFG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 

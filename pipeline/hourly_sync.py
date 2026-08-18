@@ -2,8 +2,8 @@
 """Hourly pipeline: Drive INBOX_CLS + MISSING → match Medinet → auto-import CLS.
 
 Flow each hour (laptop on + Task Scheduler + Google Drive sync):
-1) Scan local Drive INBOX_CLS and MISSING PDFs only
-2) Re-match TTHC by name + nam_sinh + ngay in KQ (~ NgayKham, cho phep in truoc)
+1) Scan local Drive INBOX_CLS + MISSING + ERROR PDFs (not PROCESSED)
+2) Re-match TTHC by full name + nam_sinh + gender + phone (if PDF has phone)
 3) Date index: 01/07/2026 → today (rolling)
 4) If TTHC found + FULL labs → import → PROCESSED
 5) If TTHC found + PARTIAL labs → import available fields → ERROR

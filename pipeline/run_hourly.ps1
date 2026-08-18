@@ -59,9 +59,10 @@ if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdk_Thuankieu" }
 if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "pkdk_Thuankieu#2026" }
 
 Write-Host "BuildRoot: $BuildRoot"
-Write-Host "Hourly: chi quet INBOX_CLS + MISSING"
+Write-Host "Hourly: INBOX_CLS + MISSING + ERROR (khong rematch PROCESSED)"
 Write-Host "  FULL -> PROCESSED | PARTIAL -> ERROR (nhap phan co) | no TTHC -> MISSING"
 Write-Host "Ngay kham index: 01/07/2026 -> hom nay (rolling)"
+Write-Host "Khop: ho ten day du + nam sinh + gioi tinh + SDT (neu PDF co)"
 $started = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 $out = & python ".\pipeline\hourly_sync.py" 2>&1
 $code = $LASTEXITCODE

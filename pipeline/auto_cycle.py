@@ -94,10 +94,10 @@ def _collect_scan_dirs(
     """Folders whose PDFs are registered + re-queued this run.
 
     full_scan=True → TOAN BO folder (ke ca PROCESSED) de khong bo sot BN cu.
-    hourly → chi INBOX + MISSING.
+    hourly → INBOX + MISSING + ERROR (khong rematch PROCESSED).
     """
     if not full_scan:
-        return [inbox, missing]
+        return [inbox, missing, error_dir]
     roots: list[Path] = []
     skip = {".git"}
     if sync.exists():
@@ -392,8 +392,8 @@ def run_auto_cycle(
     if full_scan or repair:
         max_per_run = max(max_per_run, 5000)  # bat so BN cu — khong gioi han thap
     else:
-        # Hourly: push throughput for NEW inbox imports
-        max_per_run = max(max_per_run, 300)
+        # Hourly: drain INBOX/MISSING/ERROR quickly
+        max_per_run = max(max_per_run, 2000)
     if limit:
         max_per_run = min(max_per_run, limit)
     # Reserve most slots for new/empty imports; only a few incomplete overwrites
@@ -501,11 +501,17 @@ def run_auto_cycle(
         row["file_name"] = pdf.name
         row["source_file"] = str(pdf)
         src_u = str(pdf).replace("\\", "/").upper()
-        # Hourly: chi xu ly file nam trong INBOX / MISSING
-        # Full-scan: xu ly MOI PDF trong moi folder (ke ca PROCESSED)
-        if not full_scan and not (("/INBOX" in src_u) or ("/MISSING" in src_u)):
+        # Hourly: INBOX / MISSING / ERROR. Full-scan: moi folder (ke ca PROCESSED)
+        if not full_scan and not (
+            ("/INBOX" in src_u) or ("/MISSING" in src_u) or ("/ERROR" in src_u)
+        ):
             continue
-        stuck_in_work = full_scan or ("/INBOX" in src_u) or ("/MISSING" in src_u)
+        stuck_in_work = (
+            full_scan
+            or ("/INBOX" in src_u)
+            or ("/MISSING" in src_u)
+            or ("/ERROR" in src_u)
+        )
 
         # Done rows in work folders must still be re-checked against the current
         # web form first. If fields are complete (Ure ignored), later logic will
