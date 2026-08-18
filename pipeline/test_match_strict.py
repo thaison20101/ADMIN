@@ -216,4 +216,7 @@ if __name__ == "__main__":
             assert picked.resolve() == fat.resolve(), picked
 
     test_best_pipeline_picks_fat_tree()
+    from pipeline.drive_paths import _first_existing_dir, PINNED_PIPELINE
+    assert callable(_first_existing_dir)
+    assert "PKDK_Thuankieu_Pipeline" in str(PINNED_PIPELINE)
     print("OK: all strict-match tests passed")

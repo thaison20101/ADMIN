@@ -24,6 +24,9 @@ EXAMPLE_CONFIG = Path(__file__).resolve().parent / "config.example.json"
 
 PIPELINE_NAME = "PKDK_Thuankieu_Pipeline"
 BUILD_NAME = "build for Supper Data"
+# May A (may duy nhat): luon uu tien cay G:\ nay neu ton tai.
+PINNED_PIPELINE = Path(r"G:/Drive của tôi/PKDK_Thuankieu_Pipeline")
+PINNED_BUILD = Path(r"G:/Drive của tôi/build for Supper Data")
 DRIVE_MIDS = (
     "My Drive",  # Google Drive Desktop (English) — phổ biến máy mới
     "Drive của tôi",
@@ -136,6 +139,17 @@ def _pdf_count(root: Path) -> int:
     return n
 
 
+def _first_existing_dir(cands: list[Path]) -> Path | None:
+    """First candidate that exists (used for build_root)."""
+    for p in cands:
+        try:
+            if p.exists() and p.is_dir():
+                return p
+        except Exception:
+            continue
+    return None
+
+
 def _best_pipeline_dir(cands: list[Path]) -> Path | None:
     """Prefer the tree that actually holds PDFs (D: empty mirror must not win)."""
     existing: list[Path] = []
@@ -179,8 +193,27 @@ def _create_under_existing_base(name: str) -> Path | None:
 
 def discover_pipeline_root(cfg: dict | None = None) -> Path:
     cfg = cfg if cfg is not None else _load_cfg()
+    # Hard pin: this PC only uses G:\Drive của tôi\...
+    for pinned in (
+        PINNED_PIPELINE,
+        Path(r"G:/Drive cua toi/PKDK_Thuankieu_Pipeline"),
+        Path(r"G:/My Drive/PKDK_Thuankieu_Pipeline"),
+        Path(r"G:/PKDK_Thuankieu_Pipeline"),
+    ):
+        try:
+            if pinned.exists() and pinned.is_dir():
+                return pinned
+        except Exception:
+            continue
     found = _best_pipeline_dir(_pipeline_candidates(cfg))
     if found:
+        # Never keep an empty D: mirror if G: pin missed but G: has files
+        g_alt = Path(r"G:/Drive của tôi/PKDK_Thuankieu_Pipeline")
+        try:
+            if "D:" in str(found).upper() and _pdf_count(found) == 0 and g_alt.exists():
+                return g_alt
+        except Exception:
+            pass
         return found
     created = _create_under_existing_base(PIPELINE_NAME)
     if created:
@@ -193,6 +226,17 @@ def discover_pipeline_root(cfg: dict | None = None) -> Path:
 
 def discover_build_root(cfg: dict | None = None) -> Path:
     cfg = cfg if cfg is not None else _load_cfg()
+    for pinned in (
+        PINNED_BUILD,
+        Path(r"G:/Drive cua toi/build for Supper Data"),
+        Path(r"G:/My Drive/build for Supper Data"),
+        Path(r"G:/build for Supper Data"),
+    ):
+        try:
+            if pinned.exists() and pinned.is_dir():
+                return pinned
+        except Exception:
+            continue
     found = _first_existing_dir(_build_candidates(cfg))
     if found:
         return found

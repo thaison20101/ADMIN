@@ -32,6 +32,16 @@ def main() -> int:
     drive.setdefault("processed_folder", "PROCESSED")
     drive.setdefault("error_folder", "ERROR")
     drive.setdefault("missing_folder", "MISSING")
+    # May nay: luon G:\Drive cua toi (khong dung D:\ trong)
+    g_pipe = Path(r"G:/Drive của tôi/PKDK_Thuankieu_Pipeline")
+    g_build = Path(r"G:/Drive của tôi/build for Supper Data")
+    try:
+        if g_pipe.exists():
+            drive["local_sync_root"] = str(g_pipe).replace("\\", "/")
+        if g_build.exists():
+            drive["build_root"] = str(g_build).replace("\\", "/")
+    except Exception:
+        pass
 
     med = cfg.setdefault("medinet", {})
     # Always: 01/07/2026 -> today (rolling; empty date_to = hôm nay)
