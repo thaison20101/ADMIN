@@ -166,5 +166,8 @@ if __name__ == "__main__":
 
     assert should_restore({"status": "IMPORTED", "notes": "imported_full:ok"})
     assert should_restore({"status": "WAITING_ADMIN", "notes": "disk_processed_fullrematch:IMPORTED"})
+    assert should_restore(
+        {"status": "WAITING_ADMIN", "notes": "no_tthc_match", "source_file": r"G:\x\PROCESSED\a.pdf"}
+    )
     assert not should_restore({"status": "WAITING_ADMIN", "notes": "no_tthc_match"})
     print("OK: all strict-match tests passed")

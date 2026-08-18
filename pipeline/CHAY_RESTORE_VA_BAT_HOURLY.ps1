@@ -30,9 +30,16 @@ Write-Host "-- dry-run (chi liet ke) --"
 Write-Host "-- restore that --"
 & python ".\pipeline\restore_processed_from_missing.py"
 
-Write-Host "==== 3/3 BAT LAI hourly PKDK_Hourly_Sync ===="
-& powershell -ExecutionPolicy Bypass -File ".\pipeline\BAT_LAI_HOURLY.ps1"
-Get-ScheduledTask -TaskName PKDK_Hourly_Sync -ErrorAction SilentlyContinue | Format-List TaskName, State
+Write-Host "==== 3/3 BAT LAI hourly (khong dung BAT_LAI_HOURLY.ps1 neu file cu bi loi) ===="
+$TaskName = "PKDK_Hourly_Sync"
+try {
+  Enable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null
+  Write-Host "OK: Enable-ScheduledTask"
+} catch {
+  schtasks.exe /Change /TN $TaskName /ENABLE | Out-Null
+  Write-Host "OK: schtasks ENABLE (fallback)"
+}
+Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Format-List TaskName, State
 
 Write-Host ""
 Write-Host "XONG. Hourly State=Ready la OK. Chi quet INBOX + MISSING, ky 01/07 -> hom nay."

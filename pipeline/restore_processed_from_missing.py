@@ -36,6 +36,7 @@ KEEP_MARKERS = (
     "already_on_web",
     "fullrematch:IMPORTED",
     "fullrematch:SKIP",
+    "disk_processed",
 )
 
 
@@ -46,11 +47,25 @@ def _drive_dirs(cfg: dict) -> tuple[Path, Path]:
     return processed, missing
 
 
-def should_restore(row: dict) -> bool:
+def should_restore(row: dict | None, source_path: str = "") -> bool:
+    """True if PDF was previously imported / lived in PROCESSED.
+
+    Tracking is often empty or overwritten to WAITING_ADMIN after full-scan.
+    """
+    if row is None:
+        src = (source_path or "").replace("\\", "/").upper()
+        return "/PROCESSED/" in src or src.endswith("/PROCESSED")
     st = (row.get("status") or "").upper()
     notes = str(row.get("notes") or "")
-    blob = f"{st} {notes}".upper()
-    return any(m.upper() in blob for m in KEEP_MARKERS)
+    src = str(row.get("source_file") or source_path or "").replace("\\", "/").upper()
+    blob = f"{st} {notes} {src}".upper()
+    if any(m.upper() in blob for m in KEEP_MARKERS):
+        return True
+    if "/PROCESSED/" in src or src.endswith("/PROCESSED"):
+        return True
+    if "PROCESSED" in blob and "FULLREMATCH" in blob:
+        return True
+    return False
 
 
 def main() -> int:
@@ -78,19 +93,22 @@ def main() -> int:
     processed.mkdir(parents=True, exist_ok=True)
     for pdf in missing.rglob("*.pdf"):
         row = by_name.get(pdf.name.lower())
-        if row is None or not should_restore(row):
+        if not should_restore(row, source_path=str((row or {}).get("source_file") or pdf)):
             skipped += 1
             continue
         dest = processed / pdf.name
         if dest.exists() and dest.resolve() != pdf.resolve():
             dest = processed / f"{pdf.stem}_restored{pdf.suffix}"
-        safe_print(f"RESTORE {pdf.name} -> PROCESSED  notes={row.get('notes')}")
+        safe_print(f"RESTORE {pdf.name} -> PROCESSED  notes={(row or {}).get('notes')}")
         if not args.dry_run:
             shutil.move(str(pdf), str(dest))
-            row["source_file"] = str(dest)
-            row["file_name"] = dest.name
-            row["status"] = "IMPORTED"
-            row["notes"] = f"restored_from_missing:{row.get('notes') or ''}"[:200]
+            if row is None:
+                pass
+            else:
+                row["source_file"] = str(dest)
+                row["file_name"] = dest.name
+                row["status"] = "IMPORTED"
+                row["notes"] = f"restored_from_missing:{row.get('notes') or ''}"[:200]
         moved += 1
 
     if not args.dry_run:
