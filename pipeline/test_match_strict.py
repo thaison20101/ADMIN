@@ -134,6 +134,33 @@ def test_exact_match_ok():
     assert rec and rec.get("phieukhamId") == 333
 
 
+def test_web_empty_phone_still_matches_name_year():
+    idx = _empty_index()
+    ok = {
+        "HoTen": "TRẦN SANH",
+        "NgaySinh": "01/01/1966",
+        "GioiTinh": "Nam",
+        "SDT": ".",
+        "phieukhamId": 444,
+        "Id": 444,
+        "_mau": "M4",
+    }
+    idx["by_fold_year"]["TRAN SANH|1966"] = [ok]
+    idx["by_name_year"]["TRẦN SANH|1966"] = [ok]
+    idx["no_cls_ids"].add(444)
+    row = {
+        "ho_ten": "TRẦN SANH",
+        "nam_sinh": "1966",
+        "gioi_tinh": "Nam",
+        "sdt": "0776734159",
+        "file_name": "070826-485689 - TRAN SANH - 1966 - M.pdf",
+        "mau_kham": "M4",
+    }
+    st, rec = match_patient(row, idx)
+    assert st == "READY_IMPORT", st
+    assert rec and rec.get("phieukhamId") == 444
+
+
 def test_daterange_chunks():
 
     d0 = date(2026, 5, 2)
@@ -156,6 +183,7 @@ if __name__ == "__main__":
     test_tran_sanh_not_tran_ngoc_sanh()
     test_thi_thom_not_van_thom()
     test_exact_match_ok()
+    test_web_empty_phone_still_matches_name_year()
     test_daterange_chunks()
     from pipeline.parse_cycle_stats import parse as parse_stats
 

@@ -605,9 +605,18 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
         return rg == gender
 
     def _phone_ok(rec: dict) -> bool:
+        """PDF phone is required only when Medinet also has a usable SDT.
+
+        'Neu co' = both sides have digits. Empty web SDT must not block a
+        unique name+year+gender hit (that left thousands stuck in MISSING
+        with 0 folder moves).
+        """
         if not phone:
-            return True  # PDF no usable phone → do not block
-        return _phones_match(phone, str(rec.get("SDT") or ""))
+            return True
+        rec_p = _phone_digits(str(rec.get("SDT") or ""))
+        if not rec_p:
+            return True
+        return _phones_match(phone, rec_p)
 
     def _rec_ngaykham(rec: dict) -> date | None:
         return _parse_any_date(rec.get("NgayKham") or rec.get("KSKDK_NgayKham") or rec.get("NgayTao"))
@@ -722,13 +731,16 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
         else:
             return "WAITING_ADMIN", None
 
-    # HARD FILTER: SĐT khi PDF có số hợp lệ
+    # HARD FILTER: SĐT khi PDF có số VÀ web cũng có số
     if phone:
-        phoned = [c for c in uniq if _phone_ok(c)]
+        phoned = [c for c in uniq if _phones_match(phone, str(c.get("SDT") or ""))]
         if phoned:
             uniq = phoned
         else:
-            return "WAITING_ADMIN", None
+            web_has_phone = [c for c in uniq if _phone_digits(str(c.get("SDT") or ""))]
+            if web_has_phone:
+                return "WAITING_ADMIN", None
+            # web SDT trống — giữ ứng viên đã lọc tên+năm+giới tính
 
     def _score(c: dict) -> tuple:
         rn = str(c.get("HoTen") or "")
@@ -862,8 +874,10 @@ def search_patient_live(
                     rg = _rec_gender(r)
                     if rg and rg != gender:
                         continue
-                if phone and not _phones_match(phone, str(r.get("SDT") or "")):
-                    continue
+                if phone:
+                    rec_p = _phone_digits(str(r.get("SDT") or ""))
+                    if rec_p and not _phones_match(phone, rec_p):
+                        continue
                 hits.append({**r, "_mau": mau})
 
     seen = set()
