@@ -423,59 +423,70 @@ def fetch_unit_index(token: str, date_from: str, date_to: str, *, chunk_days: in
         for w0, w1 in chunks:
             dr = f"{w0.strftime('%d/%m/%Y')} - {w1.strftime('%d/%m/%Y')}"
             safe_print(f"  {mau} window {dr}", flush=True)
-            s, d = api(
-                token,
-                f"/api/services/app/DRViewer/ExecuteStoreWithParam_ByDatasource?dataSourceId={ds}&store={store}",
-                "POST",
-                to_fparams(
-                    {
-                        date_field: dr,
-                        "NgayTao": dr,
-                        "KSKDK_NgayKham": dr,
-                        "page": 1,
-                        "pageSize": 5000,
-                    }
-                ),
-            )
-            rows = ((d or {}).get("result") or {}).get("data") or []
-            for r in rows:
-                pid = r.get("phieukhamId") or r.get("Id")
-                index["all_ids"].add(pid)
-                phone = re.sub(r"\D", "", str(r.get("SDT") or ""))
-                name = (r.get("HoTen") or "").strip().upper()
-                year = _year_from_ngaysinh(r.get("NgaySinh"))
-                mp = str(r.get("MaPhieu") or "")
-                rec = {**r, "_mau": mau}
-                if phone:
-                    index["by_phone"].setdefault(phone, []).append(rec)
-                if name and year:
-                    index["by_name_year"].setdefault(f"{name}|{year}", []).append(rec)
-                    index["by_fold_year"].setdefault(f"{_fold_name(name)}|{year}", []).append(rec)
-                cccd = _cccd_of(r)
-                if cccd:
-                    index["by_cccd"][cccd] = rec
-                if mp:
-                    index["by_maphieu"][mp] = rec
-                if pid not in (None, ""):
-                    index["by_pid"][str(pid)] = rec
+            for page in range(1, 21):
+                s, d = api(
+                    token,
+                    f"/api/services/app/DRViewer/ExecuteStoreWithParam_ByDatasource?dataSourceId={ds}&store={store}",
+                    "POST",
+                    to_fparams(
+                        {
+                            date_field: dr,
+                            "NgayTao": dr,
+                            "KSKDK_NgayKham": dr,
+                            "page": page,
+                            "pageSize": 5000,
+                        }
+                    ),
+                )
+                rows = ((d or {}).get("result") or {}).get("data") or []
+                if not rows:
+                    break
+                for r in rows:
+                    pid = r.get("phieukhamId") or r.get("Id")
+                    index["all_ids"].add(pid)
+                    phone = re.sub(r"\D", "", str(r.get("SDT") or ""))
+                    name = (r.get("HoTen") or "").strip().upper()
+                    year = _year_from_ngaysinh(r.get("NgaySinh"))
+                    mp = str(r.get("MaPhieu") or "")
+                    rec = {**r, "_mau": mau}
+                    if phone:
+                        index["by_phone"].setdefault(phone, []).append(rec)
+                    if name and year:
+                        index["by_name_year"].setdefault(f"{name}|{year}", []).append(rec)
+                        index["by_fold_year"].setdefault(f"{_fold_name(name)}|{year}", []).append(rec)
+                    cccd = _cccd_of(r)
+                    if cccd:
+                        index["by_cccd"][cccd] = rec
+                    if mp:
+                        index["by_maphieu"][mp] = rec
+                    if pid not in (None, ""):
+                        index["by_pid"][str(pid)] = rec
+                if len(rows) < 5000:
+                    break
 
-            s, d = api(
-                token,
-                f"/api/services/app/DRViewer/ExecuteStoreWithParam_ByDatasource?dataSourceId={ds}&store={store}",
-                "POST",
-                to_fparams(
-                    {
-                        date_field: dr,
-                        "NgayTao": dr,
-                        "KSKDK_NgayKham": dr,
-                        "ChatLuongDuLieu": 4,
-                        "page": 1,
-                        "pageSize": 5000,
-                    }
-                ),
-            )
-            for r in ((d or {}).get("result") or {}).get("data") or []:
-                index["no_cls_ids"].add(r.get("phieukhamId") or r.get("Id"))
+            for page in range(1, 21):
+                s, d = api(
+                    token,
+                    f"/api/services/app/DRViewer/ExecuteStoreWithParam_ByDatasource?dataSourceId={ds}&store={store}",
+                    "POST",
+                    to_fparams(
+                        {
+                            date_field: dr,
+                            "NgayTao": dr,
+                            "KSKDK_NgayKham": dr,
+                            "ChatLuongDuLieu": 4,
+                            "page": page,
+                            "pageSize": 5000,
+                        }
+                    ),
+                )
+                rows_no = ((d or {}).get("result") or {}).get("data") or []
+                if not rows_no:
+                    break
+                for r in rows_no:
+                    index["no_cls_ids"].add(r.get("phieukhamId") or r.get("Id"))
+                if len(rows_no) < 5000:
+                    break
         safe_print(
             f"  {mau} indexed phones={len(index['by_phone'])} names={len(index['by_name_year'])} "
             f"fold={len(index['by_fold_year'])} cccd={len(index['by_cccd'])}",
@@ -508,8 +519,11 @@ def load_or_fetch_unit_index(
                 with path.open("rb") as f:
                     idx = pickle.load(f)
                 n = len(idx.get("all_ids") or [])
-                safe_print(f"  Index CACHE hit age={age_h:.1f}h ids={n} file={path.name}", flush=True)
-                return idx
+                if n < 50:
+                    safe_print(f"  Index CACHE skip (too small ids={n}) — rebuild", flush=True)
+                else:
+                    safe_print(f"  Index CACHE hit age={age_h:.1f}h ids={n} file={path.name}", flush=True)
+                    return idx
             except Exception as e:
                 safe_print(f"  Index cache unreadable: {e} — rebuild")
     idx = fetch_unit_index(token, date_from, date_to)

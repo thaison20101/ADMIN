@@ -161,4 +161,10 @@ if __name__ == "__main__":
 
     s = parse_stats("Done: {'imported': 103, 'queued': 0, 'imported_partial_to_error': 2}")
     assert s["imported"] == 103 and s["partial"] == 2
+
+    from pipeline.restore_processed_from_missing import should_restore
+
+    assert should_restore({"status": "IMPORTED", "notes": "imported_full:ok"})
+    assert should_restore({"status": "WAITING_ADMIN", "notes": "disk_processed_fullrematch:IMPORTED"})
+    assert not should_restore({"status": "WAITING_ADMIN", "notes": "no_tthc_match"})
     print("OK: all strict-match tests passed")

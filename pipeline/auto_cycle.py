@@ -588,6 +588,18 @@ def run_auto_cycle(
                 stats["live_name_match"] += 1
 
         if st == "WAITING_ADMIN":
+            # PROCESSED already imported: index miss (window/page/cache) must
+            # NOT move the PDF to MISSING. Hourly does not re-scan PROCESSED.
+            # True wrong-name cases (TRAN SANH vs TRAN NGOC SANH) only move
+            # when we *found* a record and name filter rejected it — that
+            # still returns WAITING_ADMIN with no rec, same as miss, so we
+            # keep PROCESSED to avoid mass false MISSING. Inbox/ERROR still
+            # go to MISSING as before.
+            if "/PROCESSED" in src_u:
+                row["status"] = "IMPORTED"
+                row["notes"] = "keep_processed_index_miss"
+                stats["keep_processed_index_miss"] += 1
+                continue
             row["status"] = "WAITING_ADMIN"
             row["has_admin_info"] = "NO"
             row["notes"] = "no_tthc_match"
@@ -596,7 +608,6 @@ def run_auto_cycle(
                 f"NO_TTHC\t{row.get('ho_ten') or data.get('ho_ten')}\t"
                 f"year={data.get('nam_sinh')}\tphone={data.get('sdt')}\t{pdf.name}"
             )
-            # Chưa có TTHC → chuyển sang MISSING (bao bo phan nhap TTHC)
             if "/MISSING" not in src_u:
                 moved = _move_pdf(pdf, missing)
                 if moved:
