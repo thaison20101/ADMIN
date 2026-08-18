@@ -30,8 +30,11 @@ if (Test-Path -LiteralPath (Join-Path $Repo ".git")) {
 
 Write-Host "==== 2/3 drain INBOX + MISSING + ERROR (khong full-scan PROCESSED) ===="
 & python ".\pipeline\ensure_config.py"
+& python ".\pipeline\drive_paths.py"
 & python -m pip install -q -r ".\pipeline\requirements.txt"
 Write-Host "KHONG click vao cua so. Co the mat lau."
+$cfgOut = & python ".\pipeline\print_drive_dirs.py"
+$cfgOut | ForEach-Object { Write-Host $_ }
 $code = 0
 for ($round = 1; $round -le 3; $round++) {
   Write-Host ("----- VONG {0}/3 -----" -f $round)
@@ -47,6 +50,7 @@ for ($round = 1; $round -le 3; $round++) {
     $queued = [int]$parts[1]
   }
   Write-Host ("Vong {0}: imported={1} queued={2}" -f $round, $imported, $queued)
+  & python ".\pipeline\print_drive_dirs.py" | Select-Object -Last 1 | ForEach-Object { Write-Host $_ }
   if (($imported -le 0) -and ($queued -le 0) -and $round -ge 2) { break }
 }
 

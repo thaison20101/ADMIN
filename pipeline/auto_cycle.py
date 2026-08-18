@@ -380,9 +380,14 @@ def run_auto_cycle(
     inbox_pdf_n = len(list(inbox.rglob("*.pdf"))) if inbox.exists() else 0
     error_pdf_n = len(list(error_dir.rglob("*.pdf"))) if error_dir.exists() else 0
     missing_pdf_n = len(list(missing.rglob("*.pdf"))) if missing.exists() else 0
+    processed_pdf_n = len(list(processed.rglob("*.pdf"))) if processed.exists() else 0
+    safe_print(f"SYNC ROOT: {sync}")
     safe_print(f"Inbox: {inbox} (pdfs_on_disk={inbox_pdf_n})")
     safe_print(f"Missing: {missing} (pdfs_on_disk={missing_pdf_n})")
     safe_print(f"Error: {error_dir} (pdfs_on_disk={error_pdf_n})")
+    safe_print(f"Processed: {processed} (pdfs_on_disk={processed_pdf_n})")
+    if inbox_pdf_n + missing_pdf_n + error_pdf_n + processed_pdf_n == 0:
+        safe_print("WARN: 0 PDF o 4 folder — sai o dia / Drive chua sync. Xem Explorer dung thu muc nay.")
     safe_print(
         f"New files registered: {added} total "
         f"(missing_folder={added_missing}, error={added_err})"

@@ -170,4 +170,22 @@ if __name__ == "__main__":
         {"status": "WAITING_ADMIN", "notes": "no_tthc_match", "source_file": r"G:\x\PROCESSED\a.pdf"}
     )
     assert not should_restore({"status": "WAITING_ADMIN", "notes": "no_tthc_match"})
+
+    def test_best_pipeline_picks_fat_tree():
+        import tempfile
+
+        from pipeline.drive_paths import STD_FOLDERS, _best_pipeline_dir
+
+        with tempfile.TemporaryDirectory() as td:
+            empty = Path(td) / "empty"
+            fat = Path(td) / "fat"
+            for root in (empty, fat):
+                for name in STD_FOLDERS:
+                    (root / name).mkdir(parents=True)
+            (fat / "MISSING" / "a.pdf").write_bytes(b"%PDF")
+            (fat / "INBOX_CLS" / "b.pdf").write_bytes(b"%PDF")
+            picked = _best_pipeline_dir([empty, fat])
+            assert picked.resolve() == fat.resolve(), picked
+
+    test_best_pipeline_picks_fat_tree()
     print("OK: all strict-match tests passed")

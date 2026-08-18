@@ -122,14 +122,37 @@ def _build_candidates(cfg: dict) -> list[Path]:
     return _unique(cands)
 
 
-def _first_existing_dir(cands: list[Path]) -> Path | None:
+def _pdf_count(root: Path) -> int:
+    n = 0
+    try:
+        if not root.exists():
+            return 0
+        for name in STD_FOLDERS:
+            p = root / name
+            if p.exists():
+                n += sum(1 for _ in p.rglob("*.pdf"))
+    except Exception:
+        return n
+    return n
+
+
+def _best_pipeline_dir(cands: list[Path]) -> Path | None:
+    """Prefer the tree that actually holds PDFs (D: empty mirror must not win)."""
+    existing: list[Path] = []
     for p in cands:
         try:
             if p.exists() and p.is_dir():
-                return p
+                existing.append(p)
         except Exception:
             continue
-    return None
+    if not existing:
+        return None
+    scored = [( _pdf_count(p), p) for p in existing]
+    scored.sort(key=lambda t: t[0], reverse=True)
+    best_n, best = scored[0]
+    if best_n == 0:
+        return existing[0]
+    return best
 
 
 def _create_under_existing_base(name: str) -> Path | None:
@@ -156,7 +179,7 @@ def _create_under_existing_base(name: str) -> Path | None:
 
 def discover_pipeline_root(cfg: dict | None = None) -> Path:
     cfg = cfg if cfg is not None else _load_cfg()
-    found = _first_existing_dir(_pipeline_candidates(cfg))
+    found = _best_pipeline_dir(_pipeline_candidates(cfg))
     if found:
         return found
     created = _create_under_existing_base(PIPELINE_NAME)
