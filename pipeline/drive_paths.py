@@ -33,8 +33,41 @@ DRIVE_MIDS = (
     "Drive của Tôi",
     "Drive cua toi",
 )
-DRIVE_LETTERS = ("G:", "H:", "D:", "E:", "F:", "I:", "J:")
+# D: is an empty mirror on may A — never pick it for PDFs.
+DRIVE_LETTERS = ("G:", "H:", "E:", "F:", "I:", "J:")
 STD_FOLDERS = ("INBOX_CLS", "MISSING", "ERROR", "PROCESSED")
+LOCAL_BUILD = ROOT / "pipeline" / "work" / "build"
+
+
+def is_forbidden_d_pipeline(path: Path | str) -> bool:
+    """True for D:\\PKDK_Thuankieu_Pipeline (empty mirror — never process)."""
+    u = str(path).replace("/", "\\").upper()
+    return u.startswith("D:") and "PKDK_THUANKIEU_PIPELINE" in u.replace(" ", "")
+
+
+def g_pipeline_live() -> Path | None:
+    """Return the G: pipeline folder if Google Drive Desktop has it mounted."""
+    for pinned in (
+        PINNED_PIPELINE,
+        Path(r"G:/Drive cua toi/PKDK_Thuankieu_Pipeline"),
+        Path(r"G:/My Drive/PKDK_Thuankieu_Pipeline"),
+        Path(r"G:/PKDK_Thuankieu_Pipeline"),
+    ):
+        try:
+            if pinned.exists() and pinned.is_dir():
+                return pinned
+        except Exception:
+            continue
+    return None
+
+
+def local_work_build() -> Path:
+    """Excel / heartbeat / snapshots — ALWAYS local. Writing these to G: unmounts Drive."""
+    dest = LOCAL_BUILD
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in ("logs", "excel_preview", "missing_or_updated", "cases_snapshot"):
+        (dest / name).mkdir(parents=True, exist_ok=True)
+    return dest
 
 
 def _unique(paths: list[Path]) -> list[Path]:
@@ -90,7 +123,7 @@ def _user_drive_bases() -> list[Path]:
 def _pipeline_candidates(cfg: dict) -> list[Path]:
     raw = str((cfg.get("drive") or {}).get("local_sync_root") or "").strip()
     cands: list[Path] = []
-    if raw:
+    if raw and not is_forbidden_d_pipeline(raw):
         cands.append(Path(raw))
     for letter in DRIVE_LETTERS:
         if not _drive_exists(letter):
@@ -155,13 +188,15 @@ def _best_pipeline_dir(cands: list[Path]) -> Path | None:
     existing: list[Path] = []
     for p in cands:
         try:
+            if is_forbidden_d_pipeline(p):
+                continue
             if p.exists() and p.is_dir():
                 existing.append(p)
         except Exception:
             continue
     if not existing:
         return None
-    scored = [( _pdf_count(p), p) for p in existing]
+    scored = [(_pdf_count(p), p) for p in existing]
     scored.sort(key=lambda t: t[0], reverse=True)
     best_n, best = scored[0]
     if best_n == 0:
@@ -193,59 +228,30 @@ def _create_under_existing_base(name: str) -> Path | None:
 
 def discover_pipeline_root(cfg: dict | None = None) -> Path:
     cfg = cfg if cfg is not None else _load_cfg()
-    # Hard pin: this PC only uses G:\Drive của tôi\...
-    for pinned in (
-        PINNED_PIPELINE,
-        Path(r"G:/Drive cua toi/PKDK_Thuankieu_Pipeline"),
-        Path(r"G:/My Drive/PKDK_Thuankieu_Pipeline"),
-        Path(r"G:/PKDK_Thuankieu_Pipeline"),
-    ):
-        try:
-            if pinned.exists() and pinned.is_dir():
-                return pinned
-        except Exception:
-            continue
+    live = g_pipeline_live()
+    if live is not None:
+        return live
     found = _best_pipeline_dir(_pipeline_candidates(cfg))
-    if found:
-        # Never keep an empty D: mirror if G: pin missed but G: has files
-        g_alt = Path(r"G:/Drive của tôi/PKDK_Thuankieu_Pipeline")
-        try:
-            if "D:" in str(found).upper() and _pdf_count(found) == 0 and g_alt.exists():
-                return g_alt
-        except Exception:
-            pass
+    if found and not is_forbidden_d_pipeline(found):
         return found
     created = _create_under_existing_base(PIPELINE_NAME)
-    if created:
+    if created and not is_forbidden_d_pipeline(created):
         return created
-    # Local fallback — never touch missing G:
+    # Local fallback — never touch missing G: and never D: empty mirror
     dest = ROOT / PIPELINE_NAME
     dest.mkdir(parents=True, exist_ok=True)
     return dest
 
 
 def discover_build_root(cfg: dict | None = None) -> Path:
-    cfg = cfg if cfg is not None else _load_cfg()
-    for pinned in (
-        PINNED_BUILD,
-        Path(r"G:/Drive cua toi/build for Supper Data"),
-        Path(r"G:/My Drive/build for Supper Data"),
-        Path(r"G:/build for Supper Data"),
-    ):
-        try:
-            if pinned.exists() and pinned.is_dir():
-                return pinned
-        except Exception:
-            continue
-    found = _first_existing_dir(_build_candidates(cfg))
-    if found:
-        return found
-    created = _create_under_existing_base(BUILD_NAME)
-    if created:
-        return created
-    dest = ROOT / "pipeline" / "work" / "build"
-    dest.mkdir(parents=True, exist_ok=True)
-    return dest
+    """Always local ADMIN/pipeline/work/build.
+
+    Writing Excel/heartbeat to G:\\build for Supper Data unmounts Google Drive
+    (WinError 3 on G:\\) and the next round then picks empty D:\\.
+    PDFs stay on G:; logs stay on C:.
+    """
+    del cfg  # config build_root on G: is ignored on purpose
+    return local_work_build()
 
 
 def ensure_standard_folders(pipeline: Path, build: Path) -> dict[str, Path]:
@@ -269,8 +275,11 @@ def write_resolved_into_config(pipeline: Path, build: Path) -> Path:
     else:
         cfg = {}
     drive = cfg.setdefault("drive", {})
-    drive["local_sync_root"] = str(pipeline).replace("\\", "/")
-    drive["build_root"] = str(build).replace("\\", "/")
+    if is_forbidden_d_pipeline(pipeline):
+        print("WARN: refuse to persist D: empty mirror into config.local.json")
+    else:
+        drive["local_sync_root"] = str(pipeline).replace("\\", "/")
+    drive["build_root"] = str(local_work_build()).replace("\\", "/")
     drive.setdefault("inbox_folder", "INBOX_CLS")
     drive.setdefault("processed_folder", "PROCESSED")
     drive.setdefault("error_folder", "ERROR")

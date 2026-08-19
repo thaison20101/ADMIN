@@ -12,7 +12,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from drive_paths import discover_pipeline_root, ensure_standard_folders, discover_build_root, write_resolved_into_config  # noqa: E402
+from drive_paths import (  # noqa: E402
+    discover_pipeline_root,
+    ensure_standard_folders,
+    discover_build_root,
+    write_resolved_into_config,
+    is_forbidden_d_pipeline,
+)
 
 
 def _n(p: Path) -> int:
@@ -35,7 +41,13 @@ def main() -> int:
     print(err)
     print(proc)
     print(miss)
+    print(f"BUILD {build}")
     print(f"COUNTS\tinbox={_n(inbox)}\tmissing={_n(miss)}\terror={_n(err)}\tprocessed={_n(proc)}")
+    if is_forbidden_d_pipeline(sync):
+        print("ABORT: D: empty mirror — mount G:\\Drive cua toi\\PKDK_Thuankieu_Pipeline")
+        return 2
+    if _n(inbox) + _n(miss) + _n(err) + _n(proc) == 0:
+        print("WARN: 0 PDFs in INBOX/MISSING/ERROR/PROCESSED")
     return 0
 
 

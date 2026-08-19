@@ -216,7 +216,38 @@ if __name__ == "__main__":
             assert picked.resolve() == fat.resolve(), picked
 
     test_best_pipeline_picks_fat_tree()
-    from pipeline.drive_paths import _first_existing_dir, PINNED_PIPELINE
+    from pipeline.drive_paths import _first_existing_dir, PINNED_PIPELINE, discover_build_root, is_forbidden_d_pipeline
     assert callable(_first_existing_dir)
     assert "PKDK_Thuankieu_Pipeline" in str(PINNED_PIPELINE)
+    assert is_forbidden_d_pipeline(r"D:\PKDK_Thuankieu_Pipeline")
+    assert is_forbidden_d_pipeline(r"D:/PKDK_Thuankieu_Pipeline/MISSING/x.pdf")
+    assert not is_forbidden_d_pipeline(r"G:\Drive của tôi\PKDK_Thuankieu_Pipeline")
+    build_dir = discover_build_root({})
+    bs = str(build_dir).replace("\\", "/")
+    assert bs.endswith("pipeline/work/build") or "/pipeline/work/build" in bs, build_dir
+    assert "Drive của tôi" not in str(build_dir)
+    assert "G:" not in str(build_dir).upper()
+
+    from pipeline.auto_cycle import _row_priority
+
+    def test_inbox_before_missing():
+        inbox = {
+            "status": "READY_IMPORT",
+            "source_file": r"G:\Drive của tôi\PKDK_Thuankieu_Pipeline\INBOX_CLS\a.pdf",
+        }
+        err = {
+            "status": "ERROR_IMPORT",
+            "source_file": r"G:\Drive của tôi\PKDK_Thuankieu_Pipeline\ERROR\b.pdf",
+        }
+        miss = {
+            "status": "WAITING_ADMIN",
+            "source_file": r"G:\Drive của tôi\PKDK_Thuankieu_Pipeline\MISSING\c.pdf",
+        }
+        # 11k MISSING rows first in CSV must still lose to INBOX
+        rows = [miss] * 20 + [inbox, err]
+        order = sorted(range(len(rows)), key=lambda i: (_row_priority(rows[i]), i))
+        assert rows[order[0]] is inbox
+        assert _row_priority(inbox) < _row_priority(err) < _row_priority(miss)
+
+    test_inbox_before_missing()
     print("OK: all strict-match tests passed")

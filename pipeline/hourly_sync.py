@@ -8,7 +8,7 @@ Flow each hour (laptop on + Task Scheduler + Google Drive sync):
 4) If TTHC found + FULL labs → import → PROCESSED
 5) If TTHC found + PARTIAL labs → import available fields → ERROR
 6) If no TTHC → move/keep MISSING (list for TTHC team)
-7) Write result Excel + heartbeat under build_root
+7) Write result Excel + heartbeat under local pipeline/work/build (never G:)
 
 Full catch-up (bat so BN cu): python hourly_sync.py --full-scan --repair
   → TOAN BO folder ke ca PROCESSED
@@ -196,6 +196,12 @@ def main() -> int:
         help="Repair false IMPORTED / ERROR_IMPORT (re-import if web empty)",
     )
     ap.add_argument(
+        "--missing-budget",
+        type=int,
+        default=0,
+        help="Cap MISSING rematch this run (0=400 hourly). INBOX is never capped.",
+    )
+    ap.add_argument(
         "--full-scan",
         action="store_true",
         help="Quet TOAN BO folder (ke ca PROCESSED) de bat so BN cu",
@@ -233,9 +239,11 @@ def main() -> int:
         repair=args.repair,
         full_scan=args.full_scan,
         audit_processed=args.audit_processed,
+        missing_budget=args.missing_budget,
     )
     safe_print(f"Done: {summary}")
-    # Non-zero if hard import errors dominated? keep 0 for scheduler stability
+    if summary.get("abort"):
+        return 2
     return 0
 
 

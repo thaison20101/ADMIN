@@ -6,7 +6,7 @@
     "error_folder": "ERROR",
     "missing_folder": "MISSING",
     "local_sync_root": "G:/Drive của tôi/PKDK_Thuankieu_Pipeline",
-    "build_root": "G:/Drive của tôi/build for Supper Data",
+    "build_root": "pipeline/work/build",
     "note": "Full-scan: TOAN BO folder (ke ca PROCESSED). Hourly: chi INBOX_CLS + MISSING. No TTHC → MISSING. Match: ten+nam_sinh+ngay_in_KQ."
   },
   "tracking": {

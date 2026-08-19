@@ -130,45 +130,49 @@ def _move_pdf(pdf: Path, dest_dir: Path, pid: str = "") -> Path | None:
     """Move PDF into dest_dir; return new path or None."""
     if not pdf or not pdf.exists():
         return None
-    try:
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / pdf.name
-        if dest.exists() and dest.resolve() != pdf.resolve():
-            dest = dest_dir / f"{pdf.stem}_{pid or 'x'}{pdf.suffix}"
-        if dest.resolve() == pdf.resolve():
-            return pdf
-        shutil.move(str(pdf), str(dest))
-        return dest
-    except Exception:
-        return None
+    last_err = None
+    for attempt in range(3):
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / pdf.name
+            if dest.exists() and dest.resolve() != pdf.resolve():
+                dest = dest_dir / f"{pdf.stem}_{pid or 'x'}{pdf.suffix}"
+            if dest.resolve() == pdf.resolve():
+                return pdf
+            shutil.move(str(pdf), str(dest))
+            return dest
+        except Exception as e:
+            last_err = e
+            time.sleep(0.4 * (attempt + 1))
+    safe_print(f"  MOVE FAIL {pdf.name} -> {dest_dir}: {last_err}")
+    return None
 
 
 def _row_priority(row: dict) -> int:
-    """Lower = import sooner. Prefer INBOX/MISSING; PROCESSED audit last."""
+    """Lower = import sooner. INBOX first, then ERROR, then MISSING.
+
+    Never tie INBOX with MISSING — extracting 11k MISSING first kills G: Drive
+    before any INBOX file is moved (folder counts look unchanged).
+    """
     st = (row.get("status") or "").upper()
     src = (row.get("source_file") or "").replace("\\", "/").upper()
-    in_inbox = "INBOX" in src
-    in_missing = "/MISSING" in src or src.endswith("/MISSING")
-    in_hot = in_inbox or in_missing
-    in_error = "/ERROR" in src or src.endswith("/ERROR")
+    in_inbox = "/INBOX" in src or src.endswith("/INBOX_CLS") or "INBOX_CLS" in src
+    in_missing = "/MISSING/" in f"/{src}/" or src.endswith("/MISSING")
+    in_error = "/ERROR/" in f"/{src}/" or src.endswith("/ERROR")
     in_processed = "/PROCESSED" in src
-    if st in {"NEW_LAB", "READY_IMPORT"} and in_hot:
+    if in_inbox:
         return 0
-    if st in {"ERROR_IMPORT", "ERROR"} and in_hot:
+    if in_error:
         return 1
-    if st == "WAITING_ADMIN" and in_missing:
+    if in_missing:
         return 2
-    if st in {"NEW_LAB", "READY_IMPORT", "ERROR_IMPORT", "ERROR"} and in_error:
-        return 3
-    if st in {"NEW_LAB", "READY_IMPORT", "ERROR_IMPORT", "ERROR"} and not in_processed:
-        return 4
     if st == "WAITING_ADMIN":
         return 5
     if in_processed:
-        return 6  # ra soat PROCESSED sau cung (BN cu / sai TTHC)
+        return 6
     if st in {"IMPORTED", "SKIP_ALREADY_CLS"}:
         return 7
-    return 8
+    return 4
 
 
 def _route_after_import(
@@ -222,6 +226,7 @@ def run_auto_cycle(
     repair: bool = False,
     full_scan: bool = False,
     audit_processed: bool = False,
+    missing_budget: int = 0,
     sleep_s: float = 0.05,
 ) -> dict:
     """Process PDFs. Hourly = INBOX+MISSING; full_scan = TOAN BO (ke ca PROCESSED)."""
@@ -230,6 +235,19 @@ def run_auto_cycle(
     sync, inbox, processed, error_dir, missing = _drive_dirs(cfg)
     for p in (inbox, processed, error_dir, missing):
         p.mkdir(parents=True, exist_ok=True)
+
+    from drive_paths import g_pipeline_live, is_forbidden_d_pipeline, local_work_build
+
+    # Logs always local (G: excel writes unmount Drive → next round picks empty D:)
+    build = local_work_build()
+    if is_forbidden_d_pipeline(sync):
+        safe_print(f"ABORT: D: empty mirror forbidden. sync={sync}")
+        safe_print("Mount G:\\Drive cua toi\\PKDK_Thuankieu_Pipeline. Khong dung D:\\.")
+        return {"abort": "d_drive_forbidden", "sync": str(sync)}
+    if sys.platform.startswith("win") and g_pipeline_live() is None:
+        safe_print("ABORT: G:\\Drive cua toi\\PKDK_Thuankieu_Pipeline chua mount.")
+        safe_print("Mo Google Drive Desktop, doi G: hien lai, roi chay lai. KHONG click cua so.")
+        return {"abort": "g_drive_missing", "sync": str(sync)}
 
     # full-scan luon kem audit PROCESSED de bat BN cu bi sai / thieu TTHC
     if full_scan:
@@ -335,6 +353,9 @@ def run_auto_cycle(
                     r["import_attempts"] = "0"
                     r["notes"] = f"disk_{tag}_fullrematch:{old}"[:200]
                     requeued_disk += 1
+            elif (not full_scan) and tag == "missing" and old == "WAITING_ADMIN":
+                # Do not re-extract 11k parked MISSING every hour — G: Drive dies.
+                r["status"] = "WAITING_ADMIN"
             elif old in {"IMPORTED", "SKIP_ALREADY_CLS"}:
                 if (r.get("notes") or "") != f"disk_{tag}_done:{old}":
                     r["status"] = old
@@ -388,6 +409,15 @@ def run_auto_cycle(
     safe_print(f"Processed: {processed} (pdfs_on_disk={processed_pdf_n})")
     if inbox_pdf_n + missing_pdf_n + error_pdf_n + processed_pdf_n == 0:
         safe_print("WARN: 0 PDF o 4 folder — sai o dia / Drive chua sync. Xem Explorer dung thu muc nay.")
+
+    if missing_budget <= 0:
+        missing_budget = 100000 if (full_scan or repair) else 400
+    missing_left = int(missing_budget)
+    safe_print(f"Logs (local, not G:): {build}")
+    safe_print(
+        f"INBOX-first | missing_extract_budget={missing_budget} "
+        f"(INBOX+ERROR unlimited; MISSING rematch capped so G: stays mounted)"
+    )
     safe_print(
         f"New files registered: {added} total "
         f"(missing_folder={added_missing}, error={added_err})"
@@ -511,6 +541,11 @@ def run_auto_cycle(
             ("/INBOX" in src_u) or ("/MISSING" in src_u) or ("/ERROR" in src_u)
         ):
             continue
+        if (not full_scan) and ("/MISSING" in src_u):
+            if missing_left <= 0:
+                stats["skipped_missing_budget"] += 1
+                continue
+            missing_left -= 1
         stuck_in_work = (
             full_scan
             or ("/INBOX" in src_u)
@@ -937,6 +972,8 @@ def run_auto_cycle(
     summary["missing_pdfs"] = missing_pdf_n
     summary["error_pdfs"] = error_pdf_n
     summary["requeued_disk"] = requeued_disk
+    summary["skipped_missing_budget"] = stats["skipped_missing_budget"]
+    summary["missing_extract_budget"] = missing_budget
     safe_print(f"Auto cycle stats: {summary}")
     # Always refresh MISSING list for TTHC team (even when 0)
     try:
@@ -983,16 +1020,23 @@ def main() -> int:
         action="store_true",
         help="Ra soat PROCESSED: khong khop TTHC (ten+nam sinh+ngay in KQ) → MISSING",
     )
+    ap.add_argument(
+        "--missing-budget",
+        type=int,
+        default=0,
+        help="Hourly cap for MISSING PDF rematch (0=400 hourly / unlimited full-scan). INBOX is never capped.",
+    )
     args = ap.parse_args()
-    run_auto_cycle(
+    summary = run_auto_cycle(
         dry_run=args.dry_run,
         limit=args.limit,
         force=args.force,
         repair=args.repair,
         full_scan=args.full_scan,
         audit_processed=args.audit_processed,
+        missing_budget=args.missing_budget,
     )
-    return 0
+    return 2 if summary.get("abort") else 0
 
 
 if __name__ == "__main__":

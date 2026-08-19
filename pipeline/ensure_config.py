@@ -13,7 +13,8 @@ EXAMPLE = Path(__file__).resolve().parent / "config.example.json"
 
 # ASCII-only path literals; drive_paths resolves real Drive folder names.
 DEFAULT_SYNC = r"G:/Drive cua toi/PKDK_Thuankieu_Pipeline"
-DEFAULT_BUILD = r"G:/Drive cua toi/build for Supper Data"
+# Excel/heartbeat MUST stay local — writing them to G: unmounts Drive (WinError 3).
+DEFAULT_BUILD = str((Path(__file__).resolve().parent / "work" / "build")).replace("\\", "/")
 
 
 def main() -> int:
@@ -27,19 +28,22 @@ def main() -> int:
     drive = cfg.setdefault("drive", {})
     # Keep existing paths if already set (may contain Vietnamese folder names)
     drive.setdefault("local_sync_root", DEFAULT_SYNC)
-    drive.setdefault("build_root", DEFAULT_BUILD)
     drive.setdefault("inbox_folder", "INBOX_CLS")
     drive.setdefault("processed_folder", "PROCESSED")
     drive.setdefault("error_folder", "ERROR")
     drive.setdefault("missing_folder", "MISSING")
-    # May nay: luon G:\Drive cua toi (khong dung D:\ trong)
+    # Always local logs — never G:\build for Supper Data (that unmounts Drive)
+    drive["build_root"] = DEFAULT_BUILD
+    # May A: luon G:\Drive cua toi. D:\PKDK_Thuankieu_Pipeline la mirror rong.
     g_pipe = Path(r"G:/Drive của tôi/PKDK_Thuankieu_Pipeline")
-    g_build = Path(r"G:/Drive của tôi/build for Supper Data")
     try:
         if g_pipe.exists():
             drive["local_sync_root"] = str(g_pipe).replace("\\", "/")
-        if g_build.exists():
-            drive["build_root"] = str(g_build).replace("\\", "/")
+        else:
+            cur = str(drive.get("local_sync_root") or "")
+            if cur.replace("/", "\\").upper().startswith("D:") and "PKDK" in cur.upper():
+                print("WARN: config D: empty mirror ignored; mount G:\\Drive cua toi\\PKDK_Thuankieu_Pipeline")
+                drive["local_sync_root"] = str(g_pipe).replace("\\", "/")
     except Exception:
         pass
 
