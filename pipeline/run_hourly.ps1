@@ -62,7 +62,7 @@ Write-Host "BuildRoot: $BuildRoot"
 Write-Host "Hourly: INBOX_CLS + MISSING + ERROR (khong rematch PROCESSED)"
 Write-Host "  FULL -> PROCESSED | PARTIAL -> ERROR (nhap phan co) | no TTHC -> MISSING"
 Write-Host "Ngay kham index: 01/07/2026 -> hom nay (rolling)"
-Write-Host "Khop: ho ten day du + nam sinh + gioi tinh + SDT (neu PDF co)"
+Write-Host "Khop TTHC (rule cu): ho + ten (token cuoi) + nam sinh"
 $started = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 $out = & python ".\pipeline\hourly_sync.py" 2>&1
 $code = $LASTEXITCODE

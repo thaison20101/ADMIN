@@ -86,7 +86,7 @@ Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Format-Lis
 Write-Host ""
 Write-Host "XONG. Hourly moi 1 gio: INBOX truoc, roi ERROR, roi MISSING (toi da 400 file/gio)."
 Write-Host "PDF nam G:\Drive cua toi\PKDK_Thuankieu_Pipeline - log nam C:\Users\thais\ADMIN\pipeline\work\build"
-Write-Host "Khop: ho ten day du + nam sinh + gioi tinh + SDT (neu 2 ben deu co)."
+Write-Host "Khop TTHC (rule cu): ho + ten (token cuoi) + nam sinh. SDT/gioi tinh chi ho tro cham diem."
 Write-Host "Ky Medinet: 01/07/2026 -> hom nay."
 Write-Host "FULL -> PROCESSED | PARTIAL -> ERROR | chua TTHC: INBOX -> MISSING (MISSING giu nguyen)."
 Write-Host ("Exit={0}" -f $code)

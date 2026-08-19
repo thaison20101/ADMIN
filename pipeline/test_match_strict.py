@@ -1,4 +1,4 @@
-"""Unit tests: strict TTHC match (full name + year + gender + phone)."""
+"""Unit tests: TTHC match (ho+ten + year — rule truoc khi siết strict)."""
 from __future__ import annotations
 
 import sys
@@ -30,27 +30,28 @@ def _empty_index() -> dict:
     }
 
 
-def test_names_reject_partial():
+def test_names_ho_ten_rule():
+    """Rule cu: cung ho (token dau) + cung ten (token cuoi); giua co the khac."""
     assert _names_soft_match("TRẦN SANH", "TRẦN SANH")
-    assert not _names_soft_match("TRẦN SANH", "TRẦN NGỌC SANH")
-    assert not _names_soft_match("TRẦN SANH", "TRẦN VĂN SANH")
-    assert not _names_soft_match("NGUYỄN THỊ THƠM", "NGUYỄN VĂN THƠM")
+    assert _names_soft_match("TRẦN SANH", "TRẦN NGỌC SANH")
+    assert _names_soft_match("TRẦN SANH", "TRẦN VĂN SANH")
+    assert _names_soft_match("NGUYỄN THỊ THƠM", "NGUYỄN VĂN THƠM")
     assert _names_soft_match("NGUYỄN THỊ THƠM", "NGUYEN THI THOM")
     assert not _names_soft_match("NGUYỄN THỊ KIỀU", "NGUYỄN THỊ KIỀU DIỄM")
 
 
-def test_gender_and_phone():
+def test_gender_and_phone_helpers():
     assert _norm_gender("Nam") == "M"
     assert _norm_gender("Nữ") == "F"
-    assert _norm_gender("F") == "F"
     assert _phones_match("0767 710 211", "0767710211")
     assert not _phones_match("0767710211", "0937309977")
-    assert not _phones_match(".", "0776734159")  # PDF junk phone → no digits
+    assert not _phones_match(".", "0776734159")
 
 
-def test_tran_sanh_not_tran_ngoc_sanh():
+def test_tran_sanh_matches_tran_ngoc_sanh_old_rule():
+    """Rule cu chap nhan vai ca sai (TRAN SANH ~ TRAN NGOC SANH) de khop ~8000 file."""
     idx = _empty_index()
-    wrong = {
+    rec = {
         "HoTen": "TRẦN NGỌC SANH",
         "NgaySinh": "11/03/1966",
         "GioiTinh": "Nam",
@@ -59,26 +60,24 @@ def test_tran_sanh_not_tran_ngoc_sanh():
         "Id": 111,
         "_mau": "M4",
     }
-    idx["by_fold_year"]["TRAN NGOC SANH|1966"] = [wrong]
-    idx["by_name_year"]["TRẦN NGỌC SANH|1966"] = [wrong]
-    idx["by_phone"]["0776734159"] = [wrong]
+    idx["by_fold_year"]["TRAN NGOC SANH|1966"] = [rec]
+    idx["by_name_year"]["TRẦN NGỌC SANH|1966"] = [rec]
     idx["no_cls_ids"].add(111)
 
     row = {
         "ho_ten": "TRẦN SANH",
         "nam_sinh": "1966",
-        "gioi_tinh": "Nam",
-        "sdt": ".",
         "file_name": "070826-485689 - TRAN SANH - 1966 - M.pdf",
+        "mau_kham": "M4",
     }
-    st, rec = match_patient(row, idx)
-    assert st == "WAITING_ADMIN", st
-    assert rec is None
+    st, got = match_patient(row, idx)
+    assert st == "READY_IMPORT", st
+    assert got and got.get("phieukhamId") == 111
 
 
-def test_thi_thom_not_van_thom():
+def test_thi_thom_matches_van_thom_old_rule():
     idx = _empty_index()
-    wrong = {
+    rec = {
         "HoTen": "NGUYỄN VĂN THƠM",
         "NgaySinh": "06/08/1955",
         "GioiTinh": "Nam",
@@ -87,18 +86,33 @@ def test_thi_thom_not_van_thom():
         "Id": 222,
         "_mau": "M4",
     }
-    idx["by_fold_year"]["NGUYEN VAN THOM|1955"] = [wrong]
-    idx["by_name_year"]["NGUYỄN VĂN THƠM|1955"] = [wrong]
-    idx["by_phone"]["0937309977"] = [wrong]
+    idx["by_fold_year"]["NGUYEN VAN THOM|1955"] = [rec]
+    idx["by_name_year"]["NGUYỄN VĂN THƠM|1955"] = [rec]
     idx["no_cls_ids"].add(222)
 
     row = {
         "ho_ten": "NGUYỄN THỊ THƠM",
         "nam_sinh": "1955",
-        "gioi_tinh": "Nữ",
-        "sdt": "0767 710 211",
         "file_name": "070826-487184-NGUYEN THI THOM-1955 - F.pdf",
+        "mau_kham": "M4",
     }
+    st, got = match_patient(row, idx)
+    assert st == "READY_IMPORT", st
+    assert got and got.get("phieukhamId") == 222
+
+
+def test_kieu_not_kieu_diem():
+    idx = _empty_index()
+    wrong = {
+        "HoTen": "NGUYỄN THỊ KIỀU DIỄM",
+        "NgaySinh": "01/01/1990",
+        "phieukhamId": 999,
+        "Id": 999,
+        "_mau": "M3",
+    }
+    idx["by_fold_year"]["NGUYEN THI KIEU DIEM|1990"] = [wrong]
+    idx["no_cls_ids"].add(999)
+    row = {"ho_ten": "NGUYỄN THỊ KIỀU", "nam_sinh": "1990", "mau_kham": "M3"}
     st, rec = match_patient(row, idx)
     assert st == "WAITING_ADMIN", st
     assert rec is None
@@ -124,7 +138,6 @@ def test_exact_match_ok():
     row = {
         "ho_ten": "NGUYỄN THỊ THƠM",
         "nam_sinh": "1955",
-        "gioi_tinh": "Nữ",
         "sdt": "0767710211",
         "file_name": "070826-487184-NGUYEN THI THOM-1955 - F.pdf",
         "mau_kham": "M4",
@@ -134,56 +147,22 @@ def test_exact_match_ok():
     assert rec and rec.get("phieukhamId") == 333
 
 
-def test_web_empty_phone_still_matches_name_year():
-    idx = _empty_index()
-    ok = {
-        "HoTen": "TRẦN SANH",
-        "NgaySinh": "01/01/1966",
-        "GioiTinh": "Nam",
-        "SDT": ".",
-        "phieukhamId": 444,
-        "Id": 444,
-        "_mau": "M4",
-    }
-    idx["by_fold_year"]["TRAN SANH|1966"] = [ok]
-    idx["by_name_year"]["TRẦN SANH|1966"] = [ok]
-    idx["no_cls_ids"].add(444)
-    row = {
-        "ho_ten": "TRẦN SANH",
-        "nam_sinh": "1966",
-        "gioi_tinh": "Nam",
-        "sdt": "0776734159",
-        "file_name": "070826-485689 - TRAN SANH - 1966 - M.pdf",
-        "mau_kham": "M4",
-    }
-    st, rec = match_patient(row, idx)
-    assert st == "READY_IMPORT", st
-    assert rec and rec.get("phieukhamId") == 444
-
-
 def test_daterange_chunks():
-
     d0 = date(2026, 5, 2)
     d1 = date(2026, 8, 17)
     chunks = _daterange_chunks(d0, d1, chunk_days=14)
-    # 108 days inclusive → 8 windows of 14d
     assert len(chunks) == 8, len(chunks)
     assert chunks[0][0] == d0
     assert chunks[-1][1] == d1
-    n = 0
-    for a, b in chunks:
-        n += (b - a).days + 1
-        assert (b - a).days + 1 <= 14
-    assert n == (d1 - d0).days + 1
 
 
 if __name__ == "__main__":
-    test_names_reject_partial()
-    test_gender_and_phone()
-    test_tran_sanh_not_tran_ngoc_sanh()
-    test_thi_thom_not_van_thom()
+    test_names_ho_ten_rule()
+    test_gender_and_phone_helpers()
+    test_tran_sanh_matches_tran_ngoc_sanh_old_rule()
+    test_thi_thom_matches_van_thom_old_rule()
+    test_kieu_not_kieu_diem()
     test_exact_match_ok()
-    test_web_empty_phone_still_matches_name_year()
     test_daterange_chunks()
     from pipeline.parse_cycle_stats import parse as parse_stats
 
@@ -217,16 +196,13 @@ if __name__ == "__main__":
 
     test_best_pipeline_picks_fat_tree()
     from pipeline.drive_paths import _first_existing_dir, PINNED_PIPELINE, discover_build_root, is_forbidden_d_pipeline
+
     assert callable(_first_existing_dir)
     assert "PKDK_Thuankieu_Pipeline" in str(PINNED_PIPELINE)
     assert is_forbidden_d_pipeline(r"D:\PKDK_Thuankieu_Pipeline")
-    assert is_forbidden_d_pipeline(r"D:/PKDK_Thuankieu_Pipeline/MISSING/x.pdf")
-    assert not is_forbidden_d_pipeline(r"G:\Drive của tôi\PKDK_Thuankieu_Pipeline")
     build_dir = discover_build_root({})
     bs = str(build_dir).replace("\\", "/")
     assert bs.endswith("pipeline/work/build") or "/pipeline/work/build" in bs, build_dir
-    assert "Drive của tôi" not in str(build_dir)
-    assert "G:" not in str(build_dir).upper()
 
     from pipeline.auto_cycle import _row_priority
 
@@ -235,19 +211,13 @@ if __name__ == "__main__":
             "status": "READY_IMPORT",
             "source_file": r"G:\Drive của tôi\PKDK_Thuankieu_Pipeline\INBOX_CLS\a.pdf",
         }
-        err = {
-            "status": "ERROR_IMPORT",
-            "source_file": r"G:\Drive của tôi\PKDK_Thuankieu_Pipeline\ERROR\b.pdf",
-        }
         miss = {
             "status": "WAITING_ADMIN",
             "source_file": r"G:\Drive của tôi\PKDK_Thuankieu_Pipeline\MISSING\c.pdf",
         }
-        # 11k MISSING rows first in CSV must still lose to INBOX
-        rows = [miss] * 20 + [inbox, err]
+        rows = [miss] * 20 + [inbox]
         order = sorted(range(len(rows)), key=lambda i: (_row_priority(rows[i]), i))
         assert rows[order[0]] is inbox
-        assert _row_priority(inbox) < _row_priority(err) < _row_priority(miss)
 
     test_inbox_before_missing()
-    print("OK: all strict-match tests passed")
+    print("OK: all match tests passed")

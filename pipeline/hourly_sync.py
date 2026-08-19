@@ -3,7 +3,7 @@
 
 Flow each hour (laptop on + Task Scheduler + Google Drive sync):
 1) Scan local Drive INBOX_CLS + MISSING + ERROR PDFs (not PROCESSED)
-2) Re-match TTHC by full name + nam_sinh + gender + phone (if PDF has phone)
+2) Re-match TTHC by ho+ten (token cuoi) + nam_sinh (rule cu ~8000 file dung)
 3) Date index: 01/07/2026 → today (rolling)
 4) If TTHC found + FULL labs → import → PROCESSED
 5) If TTHC found + PARTIAL labs → import available fields → ERROR
