@@ -100,6 +100,9 @@ for ($round = 1; $round -le 3; $round++) {
   }
 }
 
+Write-Host "==== 3/3 BO SUNG THIEU FIELD (full scan, neu thieu Ure se dien) ===="
+& powershell -ExecutionPolicy Bypass -File ".\pipeline\CHAY_BO_SUNG_THIEU.ps1"
+
 Write-Host "==== 3/3 BAT hourly PKDK_Hourly_Sync ===="
 if ($code -eq 2) {
   Write-Host "Khong bat hourly vi G: loi. Mo Google Drive Desktop roi chay lai."

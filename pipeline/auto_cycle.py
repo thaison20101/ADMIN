@@ -703,9 +703,11 @@ def run_auto_cycle(
                 miss_e = [
                     k
                     for k in cls_missing_lab_fields(existing_early, payload_early)
-                    if k != "SinhHoaMau_Ure"
                 ]
-                if miss_e:
+                missing_wo_urea = [k for k in miss_e if k != "SinhHoaMau_Ure"]
+                payload_has_urea = payload_early.get("SinhHoaMau_Ure") not in (None, "")
+                urea_missing_only = ("SinhHoaMau_Ure" in miss_e) and (not missing_wo_urea)
+                if missing_wo_urea or (urea_missing_only and payload_has_urea):
                     st = "READY_IMPORT"
                 else:
                     _route_after_import(
@@ -769,11 +771,18 @@ def run_auto_cycle(
 
         if has_cls and not force_this:
             # Web already has all PDF fields (Ure ignored) — route by PDF coverage
-            still = cls_missing_lab_fields(existing, payload)
-            still = [k for k in still if k != "SinhHoaMau_Ure"]
-            if still:
+            missing_all = cls_missing_lab_fields(existing, payload)
+            missing_wo_urea = [k for k in missing_all if k != "SinhHoaMau_Ure"]
+            payload_has_urea = payload.get("SinhHoaMau_Ure") not in (None, "")
+            urea_missing_only = ("SinhHoaMau_Ure" in missing_all) and (not missing_wo_urea)
+            if missing_wo_urea or (urea_missing_only and payload_has_urea):
+                # If web thiếu đúng Urea mà PDF có Urea → vẫn ép import để fill Urea.
                 row["status"] = "READY_IMPORT"
-                row["notes"] = f"incomplete_keep_work:{','.join(still[:8])}"[:200]
+                if missing_wo_urea:
+                    row["notes"] = f"incomplete_keep_work:{','.join(missing_wo_urea[:8])}"[:200]
+                else:
+                    row["notes"] = "force_urea_missing_only"
+                stats["force_urea_repair"] += 1
                 stats["incomplete_block_move"] += 1
                 if "/PROCESSED" in src_u:
                     moved_back = _move_pdf(pdf, inbox, pid=pid)
