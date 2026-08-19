@@ -185,6 +185,7 @@ def _route_after_import(
     error_dir: Path,
     stats: Counter,
     note: str,
+    moves: list[str],
 ) -> None:
     """FULL → PROCESSED; URINE_ONLY/PARTIAL/EMPTY → ERROR (đã nhập phần có trên PDF)."""
     if coverage == "FULL":
@@ -213,8 +214,10 @@ def _route_after_import(
                             dup.unlink(missing_ok=True)
             except Exception:
                 pass
+        moves.append(f"{tag}\t{row.get('ho_ten')}\t{pdf.name}\t->\t{dest.name}/{moved.name}")
     elif pdf.exists():
         row["notes"] = f"{row['notes']};move_failed"[:200]
+        moves.append(f"{tag}_MOVE_FAIL\t{row.get('ho_ten')}\t{pdf.name}\t->\t{dest.name}")
     safe_print(f"  {tag} coverage={coverage} {row.get('ho_ten')} pid={pid}")
 
 
@@ -463,6 +466,7 @@ def run_auto_cycle(
     stats = Counter()
     results = []
     unmatched_lines = []
+    moves: list[str] = []
     imported_n = 0
     incomplete_n = 0
 
@@ -661,6 +665,7 @@ def run_auto_cycle(
                     row["source_file"] = str(moved)
                     row["file_name"] = moved.name
                     stats["moved_missing"] += 1
+                    moves.append(f"NO_TTHC\t{row.get('ho_ten')}\t{pdf.name}\t->\tMISSING/{moved.name}")
             continue
 
         # IMPORTANT: UI opens by phieukhamId — never use cdId as save key
@@ -712,6 +717,7 @@ def run_auto_cycle(
                         error_dir=error_dir,
                         stats=stats,
                         note="already_has_cls",
+                        moves=moves,
                     )
                     continue
 
@@ -785,6 +791,7 @@ def run_auto_cycle(
                 error_dir=error_dir,
                 stats=stats,
                 note="already_on_web",
+                moves=moves,
             )
             continue
         if not has_cls or needs_urine_fix:
@@ -891,6 +898,7 @@ def run_auto_cycle(
                 error_dir=error_dir,
                 stats=stats,
                 note=msg or "imported",
+                        moves=moves,
             )
             safe_print(f"  SAVED {data.get('ho_ten')} pid={pid} fields={fields_sent} coverage={coverage}")
         else:
@@ -915,6 +923,7 @@ def run_auto_cycle(
                 moved = _move_pdf(pdf, error_dir, pid=pid)
                 if moved:
                     row["source_file"] = str(moved)
+                    moves.append(f"IMPORT_FAIL\t{data.get('ho_ten')}\t{pdf.name}\t->\tERROR/{moved.name}")
             safe_print(f"  ERROR {data.get('ho_ten')} pid={pid} msg={msg}")
 
         results.append(result_row)
@@ -956,6 +965,19 @@ def run_auto_cycle(
             f.write(hb_line)
     except Exception as e:
         safe_print(f"WARN: heartbeat write failed: {e}")
+
+    # Per-run move log: track which PDFs were actually moved this run.
+    try:
+        hb_dir = build / "logs"
+        hb_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        p = hb_dir / "last_moves.txt"
+        header = f"# last_moves | {stamp} | mode={mode} | imported={dict(stats).get('imported', 0)} partial={dict(stats).get('imported_partial_to_error', 0)} moved_missing={dict(stats).get('moved_missing', 0)}"
+        body = "\n".join(moves[:5000])
+        p.write_text(header + ("\n" + body if body else "\n# 0 moves"), encoding="utf-8")
+        safe_print(f"Moves log: {p} (lines={len(moves)})")
+    except Exception as e:
+        safe_print(f"WARN: moves log write failed: {e}")
 
     # snapshot ledger
     snap = build / "cases_snapshot" / f"cases-{stamp}.csv"
