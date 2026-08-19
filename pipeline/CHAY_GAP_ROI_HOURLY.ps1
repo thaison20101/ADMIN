@@ -43,7 +43,11 @@ if ($LASTEXITCODE -ne 0) {
 $code = 0
 for ($round = 1; $round -le 3; $round++) {
   Write-Host ("----- VONG {0}/3 -----" -f $round)
-  $out = & python ".\pipeline\hourly_sync.py" --missing-budget 2500 2>&1
+  # Round 1: chi INBOX (missing-budget=0) de tranh mat thoi gian/IO voi MISSING
+  # Round 2-3: rematch MISSING theo cap (may A chi, logs local)
+  $mb = 0
+  if ($round -ge 2) { $mb = 2500 }
+  $out = & python ".\pipeline\hourly_sync.py" --missing-budget $mb 2>&1
   $code = $LASTEXITCODE
   $out | ForEach-Object { Write-Host $_ }
   $text = ($out | Out-String)
@@ -54,14 +58,19 @@ for ($round = 1; $round -le 3; $round++) {
   }
   $statLine = $text | & python ".\pipeline\parse_cycle_stats.py"
   $parts = @($statLine -split "\s+")
-  $imported = 0; $queued = 0
-  if ($parts.Count -ge 2) {
+  $imported = 0; $queued = 0; $partial = 0; $moved_missing = 0
+  if ($parts.Count -ge 4) {
     $imported = [int]$parts[0]
     $queued = [int]$parts[1]
+    $partial = [int]$parts[2]
+    $moved_missing = [int]$parts[3]
   }
-  Write-Host ("Vong {0}: imported={1} queued={2}" -f $round, $imported, $queued)
+  Write-Host ("Vong {0}: imported={1} partial={2} moved_missing={3} queued={4}" -f $round, $imported, $partial, $moved_missing, $queued)
   & python ".\pipeline\print_drive_dirs.py" | Select-Object -Last 3 | ForEach-Object { Write-Host $_ }
-  if (($imported -le 0) -and ($queued -le 0) -and $round -ge 2) { break }
+  # Khong stop neu co partial hoặc moved_missing — vi imported chỉ tinh FULL
+  if (($imported -le 0) -and ($partial -le 0) -and ($moved_missing -le 0) -and ($queued -le 0) -and $round -ge 2) {
+    break
+  }
 }
 
 Write-Host "==== 3/3 BAT hourly PKDK_Hourly_Sync ===="
