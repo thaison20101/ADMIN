@@ -92,7 +92,7 @@ for ($round = 1; $round -le 3; $round++) {
   $dProcessed = $aProcessed - $bProcessed
 
   Write-Host ("COUNTS delta (after-before): inbox={0} missing={1} error={2} processed={3}" -f $dInbox, $dMissing, $dError, $dProcessed)
-  Write-Host ("DONE_FULL(ΔPROCESSED)={0} | DONE_ANY(ΔPROCESSED+ΔERROR)={1}" -f $dProcessed, ($dProcessed + $dError))
+  Write-Host ("DONE_FULL(DELTA_PROCESSED)={0} | DONE_ANY(DELTA_PROCESSED+DELTA_ERROR)={1}" -f $dProcessed, ($dProcessed + $dError))
   $afterOut | Select-Object -Last 3 | ForEach-Object { Write-Host $_ }
   # Khong stop neu co partial hoặc moved_missing — vi imported chỉ tinh FULL
   if (($imported -le 0) -and ($partial -le 0) -and ($moved_missing -le 0) -and ($queued -le 0) -and $round -ge 2) {
