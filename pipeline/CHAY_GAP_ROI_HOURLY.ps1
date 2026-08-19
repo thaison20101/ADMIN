@@ -47,6 +47,16 @@ for ($round = 1; $round -le 3; $round++) {
   # Round 2-3: rematch MISSING theo cap (may A chi, logs local)
   $mb = 0
   if ($round -ge 2) { $mb = 2500 }
+
+  # Snapshot COUNTS truoc khi chay hour
+  $beforeOut = & python ".\pipeline\print_drive_dirs.py"
+  $beforeCountsLine = ($beforeOut | Select-Object -Last 1)
+  $bParts = @($beforeCountsLine -split "\t")
+  $bInbox = [int]($bParts[1] -split "=")[1]
+  $bMissing = [int]($bParts[2] -split "=")[1]
+  $bError = [int]($bParts[3] -split "=")[1]
+  $bProcessed = [int]($bParts[4] -split "=")[1]
+
   $out = & python ".\pipeline\hourly_sync.py" --missing-budget $mb 2>&1
   $code = $LASTEXITCODE
   $out | ForEach-Object { Write-Host $_ }
@@ -66,7 +76,23 @@ for ($round = 1; $round -le 3; $round++) {
     $moved_missing = [int]$parts[3]
   }
   Write-Host ("Vong {0}: imported={1} partial={2} moved_missing={3} queued={4}" -f $round, $imported, $partial, $moved_missing, $queued)
-  & python ".\pipeline\print_drive_dirs.py" | Select-Object -Last 3 | ForEach-Object { Write-Host $_ }
+  
+  # Snapshot COUNTS sau khi chay hour → tinh delta
+  $afterOut = & python ".\pipeline\print_drive_dirs.py"
+  $afterCountsLine = ($afterOut | Select-Object -Last 1)
+  $aParts = @($afterCountsLine -split "\t")
+  $aInbox = [int]($aParts[1] -split "=")[1]
+  $aMissing = [int]($aParts[2] -split "=")[1]
+  $aError = [int]($aParts[3] -split "=")[1]
+  $aProcessed = [int]($aParts[4] -split "=")[1]
+
+  $dInbox = $aInbox - $bInbox
+  $dMissing = $aMissing - $bMissing
+  $dError = $aError - $bError
+  $dProcessed = $aProcessed - $bProcessed
+
+  Write-Host ("COUNTS delta (after-before): inbox={0} missing={1} error={2} processed={3}" -f $dInbox, $dMissing, $dError, $dProcessed)
+  $afterOut | Select-Object -Last 3 | ForEach-Object { Write-Host $_ }
   # Khong stop neu co partial hoặc moved_missing — vi imported chỉ tinh FULL
   if (($imported -le 0) -and ($partial -le 0) -and ($moved_missing -le 0) -and ($queued -le 0) -and $round -ge 2) {
     break
