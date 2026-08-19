@@ -83,7 +83,7 @@ def _resolve_existing_build(raw: str) -> Path:
     if raw:
         candidates.append(Path(raw))
     # Common Google Drive Desktop folder names on Windows
-    for drive in ("G:", "H:", "D:"):
+    for drive in ("G:",):
         for mid in (
             "Drive của tôi",
             "Drive của Tôi",

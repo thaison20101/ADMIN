@@ -1,7 +1,6 @@
 # ============================================================
-# GAP: pull + INBOX-first drain + BAT hourly
-# ASCII-only. KHONG rematch PROCESSED. KHONG --repair (repair quet 11k MISSING truoc).
-# Logs: C:\Users\thais\ADMIN\pipeline\work\build  (khong ghi G: - G: bi unmount)
+# GAP: pull + INBOX-first drain + BAT hourly — CHI MAY A (G: Drive)
+# May B / o D: KHONG dung. May A: git pull roi chay script nay.
 #
 #   cd C:\Users\thais\ADMIN
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_GAP_ROI_HOURLY.ps1
@@ -38,8 +37,7 @@ $cfgOut = & python ".\pipeline\print_drive_dirs.py"
 $cfgOut | ForEach-Object { Write-Host $_ }
 & python ".\pipeline\assert_g_pipeline.py"
 if ($LASTEXITCODE -ne 0) {
-  Write-Host "DUNG: G: Drive chua san. Bat Google Drive Desktop, doi G: hien, roi chay lai."
-  Write-Host "KHONG dung D:\PKDK_Thuankieu_Pipeline (mirror rong)."
+  Write-Host "DUNG: G: Drive chua san tren may A. Bat Google Drive Desktop, doi G: hien, roi chay lai."
   exit 2
 }
 $code = 0
@@ -50,7 +48,7 @@ for ($round = 1; $round -le 3; $round++) {
   $out | ForEach-Object { Write-Host $_ }
   $text = ($out | Out-String)
   if ($text -match "ABORT:") {
-    Write-Host "DUNG: G: mat ket noi. Mo Google Drive Desktop roi chay lai. KHONG dung D:."
+    Write-Host "DUNG: G: mat ket noi tren may A. Mo Google Drive Desktop roi chay lai."
     $code = 2
     break
   }

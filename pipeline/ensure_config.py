@@ -34,18 +34,12 @@ def main() -> int:
     drive.setdefault("missing_folder", "MISSING")
     # Always local logs — never G:\build for Supper Data (that unmounts Drive)
     drive["build_root"] = DEFAULT_BUILD
-    # May A: luon G:\Drive cua toi. D:\PKDK_Thuankieu_Pipeline la mirror rong.
+    # May A only: luon G:\Drive cua toi (khong may B / o D:)
     g_pipe = Path(r"G:/Drive của tôi/PKDK_Thuankieu_Pipeline")
-    try:
-        if g_pipe.exists():
-            drive["local_sync_root"] = str(g_pipe).replace("\\", "/")
-        else:
-            cur = str(drive.get("local_sync_root") or "")
-            if cur.replace("/", "\\").upper().startswith("D:") and "PKDK" in cur.upper():
-                print("WARN: config D: empty mirror ignored; mount G:\\Drive cua toi\\PKDK_Thuankieu_Pipeline")
-                drive["local_sync_root"] = str(g_pipe).replace("\\", "/")
-    except Exception:
-        pass
+    old_sync = str(drive.get("local_sync_root") or "")
+    if old_sync and not old_sync.replace("/", "\\").upper().startswith("G:"):
+        print("WARN: config cu khong phai G: — da ghi de bang duong dan may A")
+    drive["local_sync_root"] = str(g_pipe).replace("\\", "/")
 
     med = cfg.setdefault("medinet", {})
     # Always: 01/07/2026 -> today (rolling; empty date_to = hôm nay)

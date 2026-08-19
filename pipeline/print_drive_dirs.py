@@ -17,7 +17,8 @@ from drive_paths import (  # noqa: E402
     ensure_standard_folders,
     discover_build_root,
     write_resolved_into_config,
-    is_forbidden_d_pipeline,
+    is_non_g_pipeline,
+    require_g_on_windows,
 )
 
 
@@ -43,8 +44,12 @@ def main() -> int:
     print(miss)
     print(f"BUILD {build}")
     print(f"COUNTS\tinbox={_n(inbox)}\tmissing={_n(miss)}\terror={_n(err)}\tprocessed={_n(proc)}")
-    if is_forbidden_d_pipeline(sync):
-        print("ABORT: D: empty mirror — mount G:\\Drive cua toi\\PKDK_Thuankieu_Pipeline")
+    if is_non_g_pipeline(sync):
+        print("ABORT: o D: mirror may B — chi may A G:")
+        return 2
+    import sys as _sys
+    if _sys.platform.startswith("win") and not require_g_on_windows(sync):
+        print("ABORT: chi G:\\Drive cua toi\\PKDK_Thuankieu_Pipeline (may A)")
         return 2
     if _n(inbox) + _n(miss) + _n(err) + _n(proc) == 0:
         print("WARN: 0 PDFs in INBOX/MISSING/ERROR/PROCESSED")

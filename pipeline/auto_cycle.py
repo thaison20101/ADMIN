@@ -236,17 +236,18 @@ def run_auto_cycle(
     for p in (inbox, processed, error_dir, missing):
         p.mkdir(parents=True, exist_ok=True)
 
-    from drive_paths import g_pipeline_live, is_forbidden_d_pipeline, local_work_build
+    from drive_paths import g_pipeline_live, is_non_g_pipeline, local_work_build, require_g_on_windows
 
-    # Logs always local (G: excel writes unmount Drive → next round picks empty D:)
     build = local_work_build()
-    if is_forbidden_d_pipeline(sync):
-        safe_print(f"ABORT: D: empty mirror forbidden. sync={sync}")
-        safe_print("Mount G:\\Drive cua toi\\PKDK_Thuankieu_Pipeline. Khong dung D:\\.")
+    if is_non_g_pipeline(sync):
+        safe_print(f"ABORT: o D: mirror may B — chi may A G:. sync={sync}")
         return {"abort": "d_drive_forbidden", "sync": str(sync)}
+    if sys.platform.startswith("win") and not require_g_on_windows(sync):
+        safe_print(f"ABORT: chi G:\\Drive cua toi\\PKDK_Thuankieu_Pipeline (may A). sync={sync}")
+        return {"abort": "not_g_drive", "sync": str(sync)}
     if sys.platform.startswith("win") and g_pipeline_live() is None:
-        safe_print("ABORT: G:\\Drive cua toi\\PKDK_Thuankieu_Pipeline chua mount.")
-        safe_print("Mo Google Drive Desktop, doi G: hien lai, roi chay lai. KHONG click cua so.")
+        safe_print("ABORT: G:\\Drive cua toi\\PKDK_Thuankieu_Pipeline chua mount (may A).")
+        safe_print("Mo Google Drive Desktop, doi G: hien lai. Khong dung may B / o D:.")
         return {"abort": "g_drive_missing", "sync": str(sync)}
 
     # full-scan luon kem audit PROCESSED de bat BN cu bi sai / thieu TTHC

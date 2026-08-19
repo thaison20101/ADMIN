@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Exit 2 if pipeline root is missing G: or is the empty D: mirror.
+"""May A only: exit 2 unless G:\\Drive cua toi\\PKDK_Thuankieu_Pipeline is live.
 
-Usage (Windows): python pipeline/assert_g_pipeline.py
-Non-Windows: exit 0 (dev/CI).
+Usage: python pipeline/assert_g_pipeline.py
 """
 from __future__ import annotations
 
@@ -12,11 +11,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from drive_paths import (  # noqa: E402
+    PINNED_PIPELINE,
     _pdf_count,
     discover_build_root,
     discover_pipeline_root,
     g_pipeline_live,
-    is_forbidden_d_pipeline,
+    is_non_g_pipeline,
+    require_g_on_windows,
 )
 
 
@@ -25,23 +26,32 @@ def main() -> int:
     build = discover_build_root()
     print(f"SYNC={sync}")
     print(f"BUILD={build}")
-    if is_forbidden_d_pipeline(sync):
-        print("ABORT: D:\\PKDK_Thuankieu_Pipeline is empty mirror. Mount G: Drive.")
+    print(f"PIN={PINNED_PIPELINE}")
+
+    if is_non_g_pipeline(sync):
+        print("ABORT: o D: mirror may B — chi may A G:\\Drive cua toi\\PKDK_Thuankieu_Pipeline")
         return 2
+
     if not sys.platform.startswith("win"):
-        print("SKIP: not Windows")
+        print("SKIP: not Windows (dev)")
         return 0
+
+    if not require_g_on_windows(sync):
+        print(f"ABORT: sync khong phai G: — {sync}")
+        return 2
+
     live = g_pipeline_live()
     if live is None:
-        print("ABORT: G:\\Drive cua toi\\PKDK_Thuankieu_Pipeline not mounted.")
-        print("Open Google Drive Desktop, wait for G:, then rerun. Do not click this window.")
+        print("ABORT: G: chua mount. Mo Google Drive Desktop tren may A.")
         return 2
+
     n = _pdf_count(live)
     print(f"G_PDFS={n}")
     if n == 0:
-        print("ABORT: G: folder exists but 0 PDFs. Wait for Drive sync.")
+        print("ABORT: G: co folder nhung 0 PDF — doi Drive sync.")
         return 2
-    print("OK: G: pipeline live")
+
+    print("OK: may A G: pipeline live")
     return 0
 
 

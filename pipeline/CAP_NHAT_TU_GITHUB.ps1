@@ -1,19 +1,27 @@
 # ============================================================
-# CAP NHAT CODE TU GITHUB (khong can .git)
+# CAP NHAT CODE TU GITHUB (ZIP) — CHI MAY B / PC KHONG CO .git
 #
-# Dung khi: "fatal: not a git repository" / thieu file .ps1 moi
-# Tai ZIP nhanh cursor/drive-hourly-pipeline-df0f, ghi de pipeline/
+# MAY A (C:\Users\thais\ADMIN co .git): KHONG CHAY SCRIPT NAY.
+#   cd C:\Users\thais\ADMIN
+#   git pull origin cursor/drive-hourly-pipeline-df0f
+#   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_GAP_ROI_HOURLY.ps1
+#
+# Script nay chi cho may khac khong co git (ZIP giai nen).
 # GIU nguyen pipeline\config.local.json
-#
-#   cd C:\Users\Administrator\ADMIN
-#   powershell -ExecutionPolicy Bypass -File .\pipeline\CAP_NHAT_TU_GITHUB.ps1
-#
-# Neu CHUA co file nay: copy-paste toan bo lenh trong comment cuoi file,
-# hoac chay block "BOOTSTRAP" ben duoi bang tay.
 # ============================================================
 
 $ErrorActionPreference = "Stop"
 $Repo = Split-Path -Parent $PSScriptRoot
+if (-not (Test-Path -LiteralPath (Join-Path $Repo ".git"))) {
+  Write-Host "Khong co .git — tiep tuc cap nhat tu ZIP (may B / bootstrap)."
+} else {
+  Write-Host "PHAT HIEN .git — day la may A. KHONG dung CAP_NHAT_TU_GITHUB.ps1."
+  Write-Host "Chay thay:"
+  Write-Host "  git pull origin cursor/drive-hourly-pipeline-df0f"
+  Write-Host "  powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_GAP_ROI_HOURLY.ps1"
+  exit 0
+}
+
 if (-not (Test-Path -LiteralPath (Join-Path $Repo "pipeline"))) {
   $Repo = "C:\Users\Administrator\ADMIN"
 }
@@ -23,54 +31,36 @@ $Branch = "cursor/drive-hourly-pipeline-df0f"
 $ZipUrl = "https://github.com/thaison20101/ADMIN/archive/refs/heads/$Branch.zip"
 $Tmp = Join-Path $env:TEMP "ADMIN_pipeline_update"
 $Zip = Join-Path $env:TEMP "ADMIN_$Branch.zip"
-$CfgKeep = Join-Path $Repo "pipeline\config.local.json"
-$CfgBak = Join-Path $env:TEMP "config.local.json.bak_pkdk"
-
-Write-Host "Repo: $Repo"
-Write-Host "Tai:  $ZipUrl"
-
-if (Test-Path -LiteralPath $CfgKeep) {
-  Copy-Item -LiteralPath $CfgKeep -Destination $CfgBak -Force
-  Write-Host "Backup config -> $CfgBak"
-}
-
-if (Test-Path -LiteralPath $Tmp) { Remove-Item -LiteralPath $Tmp -Recurse -Force }
-New-Item -ItemType Directory -Force -Path $Tmp | Out-Null
 
 Write-Host "Downloading ZIP (co the mat 1-2 phut)..."
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+if (Test-Path -LiteralPath $Tmp) { Remove-Item -LiteralPath $Tmp -Recurse -Force -ErrorAction SilentlyContinue }
+if (Test-Path -LiteralPath $Zip) { Remove-Item -LiteralPath $Zip -Force -ErrorAction SilentlyContinue }
 Invoke-WebRequest -Uri $ZipUrl -OutFile $Zip -UseBasicParsing
-
-Write-Host "Expand..."
 Expand-Archive -LiteralPath $Zip -DestinationPath $Tmp -Force
 $Inner = Get-ChildItem -LiteralPath $Tmp -Directory | Select-Object -First 1
 if (-not $Inner) { throw "ZIP empty" }
-
-Write-Host "Copy pipeline + tracking scripts tu: $($Inner.FullName)"
 $SrcPipe = Join-Path $Inner.FullName "pipeline"
 if (-not (Test-Path -LiteralPath $SrcPipe)) { throw "No pipeline/ in ZIP" }
 
-# Ghi de toan bo file trong pipeline (tru config.local.json)
-Get-ChildItem -LiteralPath $SrcPipe -File | ForEach-Object {
-  if ($_.Name -ieq "config.local.json") { return }
-  Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $Repo "pipeline\$($_.Name)") -Force
-}
-# subfolders neu co
-Get-ChildItem -LiteralPath $SrcPipe -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-  $dest = Join-Path $Repo "pipeline\$($_.Name)"
-  if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
-  Copy-Item -LiteralPath $_.FullName -Destination $dest -Recurse -Force
+$DestPipe = Join-Path $Repo "pipeline"
+$CfgLocal = Join-Path $DestPipe "config.local.json"
+$CfgBackup = Join-Path $env:TEMP "config.local.json.bak"
+if (Test-Path -LiteralPath $CfgLocal) {
+  Copy-Item -LiteralPath $CfgLocal -Destination $CfgBackup -Force
+  Write-Host "Backed up config.local.json"
 }
 
-if (Test-Path -LiteralPath $CfgBak) {
-  Copy-Item -LiteralPath $CfgBak -Destination $CfgKeep -Force
-  Write-Host "Restore config.local.json"
+Write-Host "Copy pipeline/ ..."
+Remove-Item -LiteralPath $DestPipe -Recurse -Force -ErrorAction SilentlyContinue
+Copy-Item -LiteralPath $SrcPipe -Destination $DestPipe -Recurse -Force
+
+if (Test-Path -LiteralPath $CfgBackup) {
+  Copy-Item -LiteralPath $CfgBackup -Destination $CfgLocal -Force
+  Write-Host "Restored config.local.json"
 }
 
-Write-Host "Kiem tra file moi:"
-Get-Item -LiteralPath (Join-Path $Repo "pipeline\CHAY_KIEM_1_LAN_TOAN_BO.ps1") | Format-List Name, Length, LastWriteTime
-
-Write-Host ""
-Write-Host "OK. Tiep theo chay:"
-Write-Host "  powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_KIEM_1_LAN_TOAN_BO.ps1"
-Write-Host "  (script do se git pull - neu khong co .git thi bo qua loi git, van full-scan duoc)"
+Write-Host "OK: pipeline updated from $Branch"
+Write-Host "May B: cau hinh G:\Drive cua toi\PKDK_Thuankieu_Pipeline trong config.local.json neu can."
+Remove-Item -LiteralPath $Tmp -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $Zip -Force -ErrorAction SilentlyContinue
+exit 0
