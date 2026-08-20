@@ -112,7 +112,9 @@ def _collect_scan_dirs(
             # Urea/field fill: INBOX+ERROR+PROCESSED only. MISSING has no TTHC
             # → cannot fill web; walking 11k PDFs also unmounts G:.
             return [inbox, error_dir, processed]
-        return [inbox, missing, error_dir]
+        # Hourly/rematch: NEVER rglob the 10k MISSING folder on G:.
+        # Rematch uses tracking CSV (see run_auto_cycle).
+        return [inbox, error_dir]
     roots: list[Path] = []
     skip = {".git"}
     if sync.exists():
@@ -127,15 +129,33 @@ def _collect_scan_dirs(
 
 def _resolve_pdf(row: dict, inbox: Path, *extra_dirs: Path) -> Path | None:
     src = Path(row.get("source_file") or "")
-    if src.exists():
-        return src
+    try:
+        if src.exists():
+            return src
+    except Exception:
+        pass
     name = src.name or row.get("file_name") or ""
     if not name:
         return None
     for base in (inbox, *extra_dirs):
-        if not base or not Path(base).exists():
+        if not base:
             continue
-        hits = list(Path(base).rglob(name))
+        base_p = Path(base)
+        direct = base_p / name
+        try:
+            if direct.exists():
+                return direct
+        except Exception:
+            pass
+        # Never rglob MISSING/PROCESSED (10k+ files hydrates G: Drive).
+        if base_p.name.upper() in {"MISSING", "PROCESSED"}:
+            continue
+        try:
+            if not base_p.exists():
+                continue
+            hits = list(base_p.rglob(name))
+        except Exception:
+            hits = []
         if hits:
             return hits[0]
     return None
@@ -244,7 +264,7 @@ def run_auto_cycle(
     repair: bool = False,
     full_scan: bool = False,
     audit_processed: bool = False,
-    missing_budget: int = 0,
+    missing_budget: int = -1,
     sleep_s: float = 0.05,
 ) -> dict:
     """Process PDFs. Hourly = INBOX+MISSING; full_scan = TOAN BO (ke ca PROCESSED)."""
@@ -275,15 +295,16 @@ def run_auto_cycle(
             return {"abort": "g_mkdir_failed", "sync": str(sync)}
 
     # Plan MISSING rematch budget early (TTHC often added after park in MISSING)
+    # <0 (default): hourly 1500 / repair 0 / full-scan all
+    # 0: no MISSING rematch (INBOX-only round)
+    # >0: that cap
     if missing_budget < 0:
-        mb_plan = 100000 if (full_scan or repair) else 400
-    elif missing_budget == 0:
         if full_scan:
             mb_plan = 100000
         elif repair:
             mb_plan = 0
         else:
-            mb_plan = 1500  # hourly/GAP: rematch MISSING (web often already has TTHC)
+            mb_plan = 1500
     else:
         mb_plan = int(missing_budget)
     missing_budget = mb_plan
@@ -306,6 +327,7 @@ def run_auto_cycle(
     )
     safe_print(f"Mode: {mode} | scan dirs ({len(scan_dirs)}): {[d.name for d in scan_dirs]}")
     safe_print(f"MISSING rematch budget this run: {missing_budget}")
+    safe_print("START: inbox/error walk only — MISSING rematch from tracking CSV (no 10k G: listing)")
 
     cases_path = ROOT / cfg.get("tracking", {}).get("cases_csv", "tracking/cases.csv")
     from hourly_sync import read_cases, register_new_files, write_cases  # local import
@@ -428,6 +450,39 @@ def run_auto_cycle(
     if requeued_disk:
         safe_print(f"Re-queued from disk scan dirs: {requeued_disk}")
 
+    # Rematch MISSING from tracking CSV — do NOT list 10k files on G:.
+    # Oldest last_checked first so 8 rounds of 2500 rotate through the backlog.
+    csv_missing_queued = 0
+    csv_missing_total = 0
+    if (not full_scan) and (not repair) and missing_budget > 0:
+        miss_rows = []
+        for r in rows:
+            src_u = (r.get("source_file") or "").replace("\\", "/").upper()
+            if "/MISSING/" in src_u or src_u.endswith("/MISSING"):
+                miss_rows.append(r)
+        csv_missing_total = len(miss_rows)
+        miss_rows.sort(
+            key=lambda r: (
+                r.get("last_checked_at") or "",
+                r.get("file_name") or r.get("source_file") or "",
+            )
+        )
+        for r in miss_rows:
+            if rematch_missing_left <= 0:
+                break
+            old = (r.get("status") or "").upper()
+            if old not in {"WAITING_ADMIN", "READY_IMPORT", "NEW_LAB", "PARSE_ERROR"}:
+                continue
+            r["status"] = "READY_IMPORT"
+            r["import_attempts"] = "0"
+            r["notes"] = f"csv_missing_rematch:{old}"[:200]
+            rematch_missing_left -= 1
+            csv_missing_queued += 1
+        safe_print(
+            f"MISSING rematch from CSV (no G: walk): queued={csv_missing_queued} "
+            f"tracked={csv_missing_total} budget={missing_budget}"
+        )
+
     requeued_err = 0
     for r in rows:
         src = (r.get("source_file") or "").replace("\\", "/")
@@ -454,17 +509,29 @@ def run_auto_cycle(
     if requeued_err:
         safe_print(f"Re-queued from ERROR / failed status: {requeued_err}")
 
-    inbox_pdf_n = len(list(inbox.rglob("*.pdf"))) if inbox.exists() else 0
-    error_pdf_n = len(list(error_dir.rglob("*.pdf"))) if error_dir.exists() else 0
-    missing_pdf_n = len(list(missing.rglob("*.pdf"))) if missing.exists() else 0
-    processed_pdf_n = len(list(processed.rglob("*.pdf"))) if processed.exists() else 0
+    from drive_paths import count_pdfs_fast
+
+    inbox_pdf_n = count_pdfs_fast(inbox) if inbox.exists() else 0
+    error_pdf_n = count_pdfs_fast(error_dir) if error_dir.exists() else 0
+    # Skip listing 10k MISSING / PROCESSED on hourly rematch (G: hang).
+    if full_scan or repair:
+        missing_pdf_n = count_pdfs_fast(missing) if missing.exists() else 0
+        processed_pdf_n = count_pdfs_fast(processed) if processed.exists() else 0
+    else:
+        missing_pdf_n = csv_missing_total
+        processed_pdf_n = -1
     safe_print(f"SYNC ROOT: {sync}")
     safe_print(f"Inbox: {inbox} (pdfs_on_disk={inbox_pdf_n})")
-    safe_print(f"Missing: {missing} (pdfs_on_disk={missing_pdf_n})")
-    safe_print(f"Error: {error_dir} (pdfs_on_disk={error_pdf_n})")
-    safe_print(f"Processed: {processed} (pdfs_on_disk={processed_pdf_n})")
-    if inbox_pdf_n + missing_pdf_n + error_pdf_n + processed_pdf_n == 0:
-        safe_print("WARN: 0 PDF o 4 folder — sai o dia / Drive chua sync. Xem Explorer dung thu muc nay.")
+    if full_scan or repair:
+        safe_print(f"Missing: {missing} (pdfs_on_disk={missing_pdf_n})")
+        safe_print(f"Error: {error_dir} (pdfs_on_disk={error_pdf_n})")
+        safe_print(f"Processed: {processed} (pdfs_on_disk={processed_pdf_n})")
+    else:
+        safe_print(f"Missing: {missing} (tracked_csv={missing_pdf_n}, skip 10k G: listing)")
+        safe_print(f"Error: {error_dir} (pdfs_on_disk={error_pdf_n})")
+        safe_print("Processed: (skip listing on rematch)")
+    if inbox_pdf_n + error_pdf_n == 0 and csv_missing_queued == 0 and csv_missing_total == 0:
+        safe_print("WARN: 0 PDF inbox/error and 0 MISSING in tracking. Xem Explorer dung thu muc G:.")
 
     safe_print(f"Logs (local, not G:): {build}")
     safe_print(
@@ -604,6 +671,11 @@ def run_auto_cycle(
                 stats["skipped_missing_budget"] += 1
                 continue
             missing_left -= 1
+            attempted = missing_budget - missing_left
+            if attempted == 1 or attempted % 25 == 0:
+                safe_print(
+                    f"  rematch MISSING {attempted}/{missing_budget} {row.get('ho_ten') or pdf.name}"
+                )
         stuck_in_work = (
             full_scan
             or ("/INBOX" in src_u)
@@ -1108,8 +1180,8 @@ def main() -> int:
     ap.add_argument(
         "--missing-budget",
         type=int,
-        default=0,
-        help="Hourly cap for MISSING PDF rematch (0=400 hourly / unlimited full-scan). INBOX is never capped.",
+        default=-1,
+        help="Cap MISSING rematch (-1=hourly 1500; 0=none; >0=cap). INBOX unlimited.",
     )
     args = ap.parse_args()
     summary = run_auto_cycle(

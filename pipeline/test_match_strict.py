@@ -255,6 +255,34 @@ if __name__ == "__main__":
 
     test_repair_skips_missing()
 
+    def test_hourly_scan_skips_missing_walk():
+        inbox, miss, err, proc = _P("INBOX_CLS"), _P("MISSING"), _P("ERROR"), _P("PROCESSED")
+        dirs = _collect_scan_dirs(
+            _P("sync"), inbox, miss, err, proc, full_scan=False, repair=False
+        )
+        assert miss not in dirs, dirs
+        assert inbox in dirs and err in dirs
+        assert proc not in dirs
+
+    test_hourly_scan_skips_missing_walk()
+
+    def test_count_pdfs_fast_top_level(tmp_path=None):
+        import tempfile
+        from pipeline.drive_paths import count_pdfs_fast
+
+        with tempfile.TemporaryDirectory() as d:
+            root = _P(d)
+            (root / "a.pdf").write_bytes(b"%PDF")
+            (root / "b.PDF").write_bytes(b"%PDF")
+            (root / "note.txt").write_text("x")
+            sub = root / "sub"
+            sub.mkdir()
+            (sub / "c.pdf").write_bytes(b"%PDF")
+            n = count_pdfs_fast(root)
+            assert n == 3, n  # top-level 2 + one extra folder 1
+
+    test_count_pdfs_fast_top_level()
+
     def test_inbox_before_missing():
         inbox = {
             "status": "READY_IMPORT",

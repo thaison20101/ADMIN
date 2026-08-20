@@ -11,7 +11,7 @@ $Repo = Split-Path -Parent $PSScriptRoot
 Set-Location $Repo
 
 $env:PYTHONIOENCODING = "utf-8"
-$env:PYTHONUTF8 = "1"
+$env:PYTHONUNBUFFERED = "1"
 if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdk_Thuankieu" }
 if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "pkdk_Thuankieu#2026" }
 try {
@@ -48,11 +48,14 @@ for ($round = 1; $round -le 3; $round++) {
     Write-Host "DUNG: G: mat ket noi giua vong. Mo Drive roi chay lai."
     exit 2
   }
-  # --repair: dien thieu field (Ure...). --missing-budget 0: khong rematch MISSING
-  $out = & python ".\pipeline\hourly_sync.py" --repair --missing-budget 0 2>&1
+  Write-Host ("hourly_sync --repair --missing-budget 0 (log live)")
+  $outLines = New-Object System.Collections.Generic.List[string]
+  & python -u ".\pipeline\hourly_sync.py" --repair --missing-budget 0 2>&1 | ForEach-Object {
+    Write-Host $_
+    [void]$outLines.Add("$_")
+  }
   $code = $LASTEXITCODE
-  $out | ForEach-Object { Write-Host $_ }
-  $text = ($out | Out-String)
+  $text = ($outLines -join "`n")
   if ($text -match "ABORT:") {
     Write-Host "DUNG: ABORT G:. Khong bat hourly."
     exit 2

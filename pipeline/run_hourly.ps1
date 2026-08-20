@@ -6,7 +6,7 @@ $Repo = Split-Path -Parent $PSScriptRoot
 Set-Location $Repo
 
 $env:PYTHONIOENCODING = "utf-8"
-$env:PYTHONUTF8 = "1"
+$env:PYTHONUNBUFFERED = "1"
 try {
   [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
   $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -59,19 +59,13 @@ if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdk_Thuankieu" }
 if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "pkdk_Thuankieu#2026" }
 
 Write-Host "BuildRoot: $BuildRoot"
-Write-Host "Hourly: INBOX_CLS + MISSING + ERROR (khong rematch PROCESSED)"
+Write-Host "Hourly: INBOX_CLS + ERROR; MISSING rematch from CSV (khong list 10k G:)"
 Write-Host "  FULL -> PROCESSED | PARTIAL -> ERROR (nhap phan co) | no TTHC -> MISSING"
 Write-Host "Ngay kham index: 01/07/2026 -> hom nay (rolling)"
 Write-Host "Khop TTHC (rule cu): ho + ten (token cuoi) + nam sinh"
 $started = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-$out = & python ".\pipeline\hourly_sync.py" 2>&1
+& python -u ".\pipeline\hourly_sync.py" 2>&1 | Tee-Object -FilePath $log
 $code = $LASTEXITCODE
-$out | ForEach-Object { Write-Host $_ }
-try { $out | Out-File -FilePath $log -Encoding utf8 } catch {
-  $fallback = Join-Path $LocalLogDir ("hourly-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
-  try { $out | Out-File -FilePath $fallback -Encoding utf8 } catch {}
-  Write-Host "WARN: log fallback -> $fallback"
-}
 
 # Heartbeat o 2 cho: Drive build + local (de biet task co fire khi G:\ loi)
 $ended = Get-Date -Format "yyyy-MM-dd HH:mm:ss"

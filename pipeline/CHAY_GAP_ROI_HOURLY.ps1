@@ -14,11 +14,15 @@ Set-Location $Repo
 
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUTF8 = "1"
+$env:PYTHONUNBUFFERED = "1"
 if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdk_Thuankieu" }
 if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "pkdk_Thuankieu#2026" }
 
 function Get-Counts {
-  $lines = @(& python ".\pipeline\print_drive_dirs.py" 2>$null)
+  param([switch]$Quick)
+  $argsPy = @(".\pipeline\print_drive_dirs.py")
+  if ($Quick) { $argsPy += "--quick" }
+  $lines = @(& python @argsPy 2>$null)
   $counts = ($lines | Select-Object -Last 1)
   $parts = @($counts -split "\t")
   $o = @{ inbox = 0; missing = 0; error = 0; processed = 0; raw = $counts }
@@ -29,6 +33,16 @@ function Get-Counts {
     $o.processed = [int](($parts[4] -split "=")[1])
   } catch {}
   return $o
+}
+
+function Invoke-PythonLive {
+  param([string[]]$PyArgs)
+  $script:LastPyLines = New-Object System.Collections.Generic.List[string]
+  & python -u @PyArgs 2>&1 | ForEach-Object {
+    Write-Host $_
+    [void]$script:LastPyLines.Add("$_")
+  }
+  return $LASTEXITCODE
 }
 
 Write-Host ""
@@ -47,7 +61,8 @@ Write-Host "==== 2/4 assert G: + config ===="
 & python ".\pipeline\ensure_config.py"
 & python ".\pipeline\drive_paths.py"
 & python -m pip install -q -r ".\pipeline\requirements.txt"
-Write-Host "KHONG click vao cua so (Select-pause lam dung)."
+Write-Host "KHONG click vao cua so (Select-pause lam dung). Log Python in lien tuc."
+Write-Host "COUNTS 1 lan (list MISSING cham). Vong sau --quick."
 & python ".\pipeline\print_drive_dirs.py" | ForEach-Object { Write-Host $_ }
 & python ".\pipeline\assert_g_pipeline.py"
 if ($LASTEXITCODE -ne 0) {
@@ -66,13 +81,13 @@ for ($round = 1; $round -le 6; $round++) {
     Write-Host "DUNG: G: mat ket noi. Mo Drive, chay lai. KHONG bat hourly."
     exit 2
   }
-  $before = Get-Counts
+  $before = Get-Counts -Quick
+  Write-Host ("COUNTS before (quick): {0}" -f $before.raw)
   $mb = 0
   if ($round -ge 2) { $mb = 2500 }
-  $out = & python ".\pipeline\hourly_sync.py" --missing-budget $mb 2>&1
-  $code = $LASTEXITCODE
-  $out | ForEach-Object { Write-Host $_ }
-  $text = ($out | Out-String)
+  Write-Host ("hourly_sync --missing-budget {0} (0=INBOX only; log live)" -f $mb)
+  $code = Invoke-PythonLive @(".\pipeline\hourly_sync.py", "--missing-budget", "$mb")
+  $text = ($script:LastPyLines -join "`n")
   if ($text -match "ABORT:") {
     Write-Host "DUNG: ABORT G:. KHONG bat hourly."
     exit 2
@@ -86,7 +101,7 @@ for ($round = 1; $round -le 6; $round++) {
     $partial = [int]$parts[2]
     $moved_missing = [int]$parts[3]
   }
-  $after = Get-Counts
+  $after = Get-Counts -Quick
   $dInbox = $after.inbox - $before.inbox
   $dMissing = $after.missing - $before.missing
   $dError = $after.error - $before.error
@@ -123,9 +138,10 @@ if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) 
 }
 Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Format-List TaskName, State
 
-$final = Get-Counts
+$final = Get-Counts -Quick
 Write-Host ""
-Write-Host "XONG. COUNTS cuoi: $($final.raw)"
+Write-Host "XONG. COUNTS cuoi (quick, missing=-1 = skip list 10k): $($final.raw)"
+Write-Host "MISSING: mo Explorer G:\\Drive cua toi\\PKDK_Thuankieu_Pipeline\\MISSING"
 Write-Host "MISSING cao? Chay them: powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_REMATCH_MISSING.ps1"
 Write-Host "MISSING chi giam khi Medinet da co TTHC (ho+ten+nam sinh)."
 Write-Host "FULL -> PROCESSED | PARTIAL -> ERROR | chua TTHC: INBOX -> MISSING."

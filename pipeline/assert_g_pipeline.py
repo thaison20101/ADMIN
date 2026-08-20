@@ -12,7 +12,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from drive_paths import (  # noqa: E402
     PINNED_PIPELINE,
-    _pdf_count,
     discover_build_root,
     discover_pipeline_root,
     g_pipeline_live,
@@ -45,9 +44,16 @@ def main() -> int:
         print("ABORT: G: chua mount. Mo Google Drive Desktop tren may A.")
         return 2
 
-    n = _pdf_count(live)
-    print(f"G_PDFS={n}")
-    if n == 0:
+    # Do NOT count 10k MISSING (Drive listing hang). Light count = INBOX+ERROR+PROCESSED.
+    from drive_paths import count_pdfs_fast
+
+    light = 0
+    for name in ("INBOX_CLS", "ERROR", "PROCESSED"):
+        light += count_pdfs_fast(live / name)
+    miss_dir = live / "MISSING"
+    miss_exists = miss_dir.exists()
+    print(f"G_PDFS_LIGHT={light} (INBOX+ERROR+PROCESSED; skip listing MISSING)")
+    if light == 0 and not miss_exists:
         print("ABORT: G: co folder nhung 0 PDF — doi Drive sync.")
         return 2
 

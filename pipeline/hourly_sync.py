@@ -198,8 +198,8 @@ def main() -> int:
     ap.add_argument(
         "--missing-budget",
         type=int,
-        default=0,
-        help="Cap MISSING rematch this run (0=400 hourly). INBOX is never capped.",
+        default=-1,
+        help="Cap MISSING rematch this run (-1=hourly 1500; 0=none; >0=cap). INBOX unlimited.",
     )
     ap.add_argument(
         "--full-scan",

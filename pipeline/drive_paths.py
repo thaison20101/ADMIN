@@ -79,6 +79,39 @@ def _load_cfg() -> dict:
     return {}
 
 
+def count_pdfs_fast(root: Path) -> int:
+    """Count *.pdf via scandir (top-level + 1 extra folder). No rglob/stat-all.
+
+    Pipeline folders are almost always flat. Walking 10k MISSING with rglob
+    hydrates Google Drive File Stream and looks like a hang.
+    """
+    n = 0
+    try:
+        if not root.exists():
+            return 0
+        extra: list[Path] = []
+        with os.scandir(root) as it:
+            for ent in it:
+                name = ent.name
+                if name.startswith("."):
+                    continue
+                if name.lower().endswith(".pdf"):
+                    n += 1
+                elif ent.is_dir(follow_symlinks=False):
+                    extra.append(Path(ent.path))
+        for sub in extra:
+            try:
+                with os.scandir(sub) as it:
+                    for ent in it:
+                        if ent.name.lower().endswith(".pdf"):
+                            n += 1
+            except Exception:
+                continue
+    except Exception:
+        return n
+    return n
+
+
 def _pdf_count(root: Path) -> int:
     n = 0
     try:
@@ -87,7 +120,7 @@ def _pdf_count(root: Path) -> int:
         for name in STD_FOLDERS:
             p = root / name
             if p.exists():
-                n += sum(1 for _ in p.rglob("*.pdf"))
+                n += count_pdfs_fast(p)
     except Exception:
         return n
     return n
@@ -204,7 +237,7 @@ def sync_drive_layout(cfg: dict | None = None) -> dict:
     counts = {}
     for name in STD_FOLDERS:
         p = folders[name]
-        counts[name] = len(list(p.rglob("*.pdf"))) if p.exists() else 0
+        counts[name] = count_pdfs_fast(p) if p.exists() else 0
     on_g = str(pipeline).replace("/", "\\").upper().startswith("G:")
     return {
         "pipeline_root": str(pipeline),
