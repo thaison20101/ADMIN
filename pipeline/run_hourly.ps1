@@ -18,7 +18,7 @@ if (-not (Test-Path ".\pipeline\config.local.json")) {
 
 & python ".\pipeline\ensure_config.py" | Out-Null
 
-# Load Medinet login: env → config.local.json → defaults
+# Load Medinet login: env -> config.local.json -> defaults
 try {
   $credLines = @(& python ".\pipeline\medinet_creds.py" 2>$null)
   if ($credLines.Count -ge 2) {

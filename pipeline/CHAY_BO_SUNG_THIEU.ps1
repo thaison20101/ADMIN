@@ -1,5 +1,5 @@
 # ============================================================
-# BO SUNG FIELD TU PDF LEN WEB — CHI INBOX + ERROR + PROCESSED
+# BO SUNG FIELD TU PDF LEN WEB - CHI INBOX + ERROR + PROCESSED
 # (MISSING = chua TTHC -> khong dien duoc Ure/field; quet 10k MISSING lam G: chet)
 #
 #   cd C:\Users\thais\ADMIN

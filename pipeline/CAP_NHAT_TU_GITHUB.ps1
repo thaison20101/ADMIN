@@ -1,5 +1,5 @@
 # ============================================================
-# CAP NHAT CODE TU GITHUB (ZIP) — CHI MAY B / PC KHONG CO .git
+# CAP NHAT CODE TU GITHUB (ZIP) - CHI MAY B / PC KHONG CO .git
 #
 # MAY A (C:\Users\thais\ADMIN co .git): KHONG CHAY SCRIPT NAY.
 #   cd C:\Users\thais\ADMIN
@@ -13,9 +13,9 @@
 $ErrorActionPreference = "Stop"
 $Repo = Split-Path -Parent $PSScriptRoot
 if (-not (Test-Path -LiteralPath (Join-Path $Repo ".git"))) {
-  Write-Host "Khong co .git — tiep tuc cap nhat tu ZIP (may B / bootstrap)."
+  Write-Host "Khong co .git - tiep tuc cap nhat tu ZIP (may B / bootstrap)."
 } else {
-  Write-Host "PHAT HIEN .git — day la may A. KHONG dung CAP_NHAT_TU_GITHUB.ps1."
+  Write-Host "PHAT HIEN .git - day la may A. KHONG dung CAP_NHAT_TU_GITHUB.ps1."
   Write-Host "Chay thay:"
   Write-Host "  git pull origin cursor/drive-hourly-pipeline-df0f"
   Write-Host "  powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_GAP_ROI_HOURLY.ps1"

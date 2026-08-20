@@ -42,7 +42,7 @@ Write-Host "==== 2/6 config + pip ===="
 & python ".\pipeline\ensure_config.py"
 & python -m pip install -q -r ".\pipeline\requirements.txt"
 
-# Resolve Drive folders for before/after counts (print_drive_dirs — never ADMIN)
+# Resolve Drive folders for before/after counts (print_drive_dirs - never ADMIN)
 $cfgOut = & python ".\pipeline\print_drive_dirs.py"
 $lines = @($cfgOut)
 $SyncRoot = if ($lines.Count -ge 1) { $lines[0] } else { "G:\Drive cua toi\PKDK_Thuankieu_Pipeline" }

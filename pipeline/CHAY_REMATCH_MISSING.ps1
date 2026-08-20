@@ -1,7 +1,7 @@
 # ============================================================
 # REMATCH MISSING: nhieu file MISSING da co TTHC tren web
 # Rematch tu tracking CSV (KHONG list 10k file tren G:), 2500/vong
-# ASCII-only. Chi may A — G:\Drive cua toi\PKDK_Thuankieu_Pipeline
+# ASCII-only. Chi may A - G:\Drive cua toi\PKDK_Thuankieu_Pipeline
 #
 #   cd C:\Users\thais\ADMIN
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_REMATCH_MISSING.ps1
@@ -44,7 +44,7 @@ function Invoke-PythonLive {
 
 Write-Host ""
 Write-Host "############################################################"
-Write-Host "#  REMATCH MISSING (TTHC da co tren web) — may A G: only   #"
+Write-Host "#  REMATCH MISSING (TTHC da co tren web) - may A G: only   #"
 Write-Host "############################################################"
 Write-Host "Log Python in LIEN TUC. KHONG click cua so (Select-pause)."
 Write-Host "Neu cua so cu dang im sau COUNTS before: Ctrl+C, git pull, chay lai."
@@ -60,7 +60,7 @@ if ($LASTEXITCODE -ne 0) {
   exit 2
 }
 
-Write-Host "COUNTS tu tracking CSV (inbox/missing/error/processed) — in tren cua so, khong can Explorer."
+Write-Host "COUNTS tu tracking CSV (inbox/missing/error/processed) - in tren cua so, khong can Explorer."
 
 $code = 0
 for ($round = 1; $round -le 8; $round++) {

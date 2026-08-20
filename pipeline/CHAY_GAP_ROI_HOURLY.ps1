@@ -141,7 +141,7 @@ Write-Host "XONG. COUNTS cuoi: $($final.raw)"
 Write-Host "MISSING cao? Chay them: powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_REMATCH_MISSING.ps1"
 Write-Host "MISSING chi giam khi Medinet da co TTHC (ho+ten+nam sinh)."
 Write-Host "FULL -> PROCESSED | PARTIAL -> ERROR | chua TTHC: INBOX -> MISSING."
-Write-Host "KHONG fallback C:\Users\thais\ADMIN — chi G:\Drive cua toi\PKDK_Thuankieu_Pipeline."
+Write-Host "KHONG fallback C:\Users\thais\ADMIN - chi G:\Drive cua toi\PKDK_Thuankieu_Pipeline."
 Write-Host ("Exit={0}" -f $code)
 if ($code -ne 0) { exit $code }
 exit 0

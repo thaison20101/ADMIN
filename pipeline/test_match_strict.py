@@ -314,4 +314,16 @@ if __name__ == "__main__":
         assert rows[order[0]] is inbox
 
     test_inbox_before_missing()
+
+    def test_runner_ps1_ascii():
+        root = Path(__file__).resolve().parent
+        for name in (
+            "CHAY_REMATCH_MISSING.ps1",
+            "CHAY_GAP_ROI_HOURLY.ps1",
+            "CHAY_BO_SUNG_THIEU.ps1",
+            "run_hourly.ps1",
+        ):
+            (root / name).read_bytes().decode("ascii")
+
+    test_runner_ps1_ascii()
     print("OK: all match tests passed")
