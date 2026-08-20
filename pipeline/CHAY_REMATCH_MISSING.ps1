@@ -46,8 +46,17 @@ Write-Host ""
 Write-Host "############################################################"
 Write-Host "#  REMATCH MISSING (TTHC da co tren web) - may A G: only   #"
 Write-Host "############################################################"
+Write-Host "CHI 1 CUA SO. Neu dang mo 2 PowerShell rematch: Ctrl+C het, chi chay 1."
 Write-Host "Log Python in LIEN TUC. KHONG click cua so (Select-pause)."
 Write-Host "Neu cua so cu dang im sau COUNTS before: Ctrl+C, git pull, chay lai."
+
+$lockFile = Join-Path $Repo "pipeline\work\locks\auto_cycle.lock"
+if (Test-Path -LiteralPath $lockFile) {
+  Write-Host "WARN: thay auto_cycle.lock - co the bot khac dang chay. Doc file:"
+  Get-Content -LiteralPath $lockFile -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+  Write-Host "Neu chac bot cu da chet: xoa lock roi chay lai."
+  Write-Host ("  Remove-Item -LiteralPath '{0}'" -f $lockFile)
+}
 
 if (Test-Path -LiteralPath (Join-Path $Repo ".git")) {
   git pull origin cursor/drive-hourly-pipeline-df0f

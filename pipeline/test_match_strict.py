@@ -315,6 +315,29 @@ if __name__ == "__main__":
 
     test_inbox_before_missing()
 
+    def test_resolve_name_year_from_filename():
+        from pipeline.phase_b_preview import resolve_name_year
+
+        n, y = resolve_name_year(
+            {
+                "ho_ten": "",
+                "nam_sinh": "",
+                "file_name": "010725-12 - VO MINH TAM - 1966 - M.pdf",
+            }
+        )
+        assert y == "1966" and "TAM" in n, (n, y)
+        n2, y2 = resolve_name_year(
+            {
+                "ho_ten": "NGUYEN VAN A",
+                "nam_sinh": "1950",
+                "file_name": "010725-12 - VO MINH TAM - 1966 - M.pdf",
+            }
+        )
+        # filename year preferred
+        assert y2 == "1966", y2
+
+    test_resolve_name_year_from_filename()
+
     def test_runner_ps1_ascii():
         root = Path(__file__).resolve().parent
         for name in (

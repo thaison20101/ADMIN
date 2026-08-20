@@ -539,30 +539,16 @@ def load_or_fetch_unit_index(
     return idx
 
 
-def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
-    """Return (status, medinet_row).
+def resolve_name_year(row: dict) -> tuple[str, str]:
+    """Return (ho_ten, nam_sinh) using PDF fields + filename hints.
 
-    Hard keys:
-      - nam_sinh (năm sinh) MUST match
-      - họ + tên (strict soft: same first+last token; no subset names)
-    Soft key:
-      - ngày có kết quả (PDF) vs NgayKham (Medinet): may differ because lab
-        can be printed BEFORE khám — allow exam up to ~45 days after print.
+    Filename pattern: DDMMYY-SID - NAME - YEAR - M/F
+    Prefer filename year when present (stable).
     """
-    phone = re.sub(r"\D", "", str(row.get("sdt") or ""))
     name = (row.get("ho_ten") or "").strip().upper()
     year = str(row.get("nam_sinh") or "").strip()
-    sid = str(row.get("sid") or row.get("ma_phieu") or "")
-    cccd = re.sub(r"\D", "", str(row.get("cccd") or ""))
     fname = str(row.get("file_name") or row.get("source_file") or "")
     stem = Path(fname).stem if fname else ""
-
-    # PDF result-print date: header "Ngày có kết quả" or filename DDMMYY
-    pdf_result_d = _parse_any_date(row.get("ngay_co_kq"))
-    if not pdf_result_d:
-        pdf_result_d = _parse_any_date(stem[:6] if re.match(r"^\d{6}-", stem) else "")
-
-    fn_name, fn_year = "", ""
     m_fn = re.search(
         r"^\d{6}-\d+\s*-\s*(.+?)\s*-\s*(19\d{2}|20\d{2})\s*-\s*[MF](?:_|\.|$)",
         stem,
@@ -579,11 +565,43 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
         fn_year = m_fn.group(2)
         if not name:
             name = fn_name
-        # Prefer filename year when present (stable on INBOX names)
         if fn_year:
             year = fn_year
-        elif not year:
-            year = fn_year
+    return name, year
+
+
+def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
+    """Return (status, medinet_row).
+
+    Hard keys:
+      - nam_sinh (năm sinh) MUST match
+      - họ + tên (strict soft: same first+last token; no subset names)
+    Soft key:
+      - ngày có kết quả (PDF) vs NgayKham (Medinet): may differ because lab
+        can be printed BEFORE khám — allow exam up to ~45 days after print.
+    """
+    phone = re.sub(r"\D", "", str(row.get("sdt") or ""))
+    name, year = resolve_name_year(row)
+    sid = str(row.get("sid") or row.get("ma_phieu") or "")
+    cccd = re.sub(r"\D", "", str(row.get("cccd") or ""))
+    fname = str(row.get("file_name") or row.get("source_file") or "")
+    stem = Path(fname).stem if fname else ""
+
+    # PDF result-print date: header "Ngày có kết quả" or filename DDMMYY
+    pdf_result_d = _parse_any_date(row.get("ngay_co_kq"))
+    if not pdf_result_d:
+        pdf_result_d = _parse_any_date(stem[:6] if re.match(r"^\d{6}-", stem) else "")
+
+    fn_name, fn_year = "", ""
+    # Keep aliases used below for soft name from filename when PDF name empty
+    m_fn = re.search(
+        r"^\d{6}-\d+\s*-\s*(.+?)\s*-\s*(19\d{2}|20\d{2})\s*-\s*[MF]",
+        stem,
+        re.I,
+    )
+    if m_fn:
+        fn_name = m_fn.group(1).strip().upper()
+        fn_year = m_fn.group(2)
 
     yr_target = year or fn_year
 

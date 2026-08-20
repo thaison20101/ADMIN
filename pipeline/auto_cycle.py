@@ -49,6 +49,7 @@ from phase_b_preview import (  # noqa: E402
     load_config,
     load_or_fetch_unit_index,
     match_patient,
+    resolve_name_year,
     search_patient_live,
 )
 from win_console import safe_print, setup_utf8_stdio  # noqa: E402
@@ -296,6 +297,40 @@ def _route_after_import(
 
 
 def run_auto_cycle(
+    *,
+    dry_run: bool = False,
+    limit: int = 0,
+    force: bool = False,
+    repair: bool = False,
+    full_scan: bool = False,
+    audit_processed: bool = False,
+    missing_budget: int = -1,
+    sleep_s: float = 0.05,
+) -> dict:
+    """Process PDFs. Hourly = INBOX+MISSING; full_scan = TOAN BO (ke ca PROCESSED)."""
+    from single_instance import acquire_lock, release_lock
+
+    lock = acquire_lock("auto_cycle")
+    if lock is None:
+        safe_print("ABORT: da co bot khac dang chay (pipeline/work/locks/auto_cycle.lock).")
+        safe_print("Chi 1 cua so! Dong bot thu 2 (ghi de cases.csv, DELTA=0 / sai so).")
+        return {"abort": "another_instance_running"}
+    try:
+        return _run_auto_cycle_inner(
+            dry_run=dry_run,
+            limit=limit,
+            force=force,
+            repair=repair,
+            full_scan=full_scan,
+            audit_processed=audit_processed,
+            missing_budget=missing_budget,
+            sleep_s=sleep_s,
+        )
+    finally:
+        release_lock(lock)
+
+
+def _run_auto_cycle_inner(
     *,
     dry_run: bool = False,
     limit: int = 0,
@@ -765,6 +800,21 @@ def run_auto_cycle(
         data["source_file"] = str(pdf)
         if row.get("ma_phieu"):
             data["ma_phieu"] = row.get("ma_phieu")
+        # Sync name/year from filename when PDF body omits nam_sinh
+        # (live search previously skipped year="" → mass WAITING_ADMIN).
+        resolved_name, resolved_year = resolve_name_year(
+            {
+                "ho_ten": data.get("ho_ten") or row.get("ho_ten") or "",
+                "nam_sinh": data.get("nam_sinh") or "",
+                "file_name": pdf.name,
+                "source_file": str(pdf),
+            }
+        )
+        if resolved_name:
+            data["ho_ten"] = resolved_name
+            row["ho_ten"] = resolved_name
+        if resolved_year:
+            data["nam_sinh"] = resolved_year
         coverage = data.get("pdf_coverage") or classify_pdf_coverage(data.get("labs") or {})
         data["pdf_coverage"] = coverage
         st, rec = match_patient(data, index)
@@ -773,10 +823,16 @@ def run_auto_cycle(
         # Live name+year search when day-index missed (common if NgaySinh format
         # or paging skipped the patient). Fixes cases like TRỊNH THẾ NỮ.
         if st == "WAITING_ADMIN":
+            live_name = str(data.get("ho_ten") or row.get("ho_ten") or "")
+            live_year = str(data.get("nam_sinh") or resolved_year or "")
+            if not live_year:
+                stats["unmatched_no_year"] += 1
+            else:
+                stats["live_search_attempted"] += 1
             live_st, live_rec, token_box["t"] = search_patient_live(
                 token_box["t"],
-                name=str(data.get("ho_ten") or row.get("ho_ten") or ""),
-                year=str(data.get("nam_sinh") or ""),
+                name=live_name,
+                year=live_year,
                 date_from=date_from,
                 date_to=date_to,
                 ngay_co_kq=str(data.get("ngay_co_kq") or ""),
@@ -814,7 +870,8 @@ def run_auto_cycle(
             stats["waiting_admin"] += 1
             unmatched_lines.append(
                 f"NO_TTHC\t{row.get('ho_ten') or data.get('ho_ten')}\t"
-                f"year={data.get('nam_sinh')}\tphone={data.get('sdt')}\t{pdf.name}"
+                f"year={data.get('nam_sinh') or resolved_year}\t"
+                f"phone={data.get('sdt')}\t{pdf.name}"
             )
             if "/MISSING" not in src_u:
                 moved = _move_pdf(pdf, missing)
@@ -1181,7 +1238,22 @@ def run_auto_cycle(
     summary["requeued_disk"] = requeued_disk
     summary["skipped_missing_budget"] = stats["skipped_missing_budget"]
     summary["missing_extract_budget"] = missing_budget
+    summary["live_name_match"] = stats["live_name_match"]
+    summary["live_search_attempted"] = stats["live_search_attempted"]
+    summary["unmatched_no_year"] = stats["unmatched_no_year"]
     safe_print(f"Auto cycle stats: {summary}")
+    safe_print(
+        f"MATCH DIAG: waiting_admin={stats['waiting_admin']} "
+        f"live_ok={stats['live_name_match']} live_tried={stats['live_search_attempted']} "
+        f"no_year={stats['unmatched_no_year']} imported={stats['imported']} "
+        f"partial={stats['imported_partial_to_error']}"
+    )
+    if stats["waiting_admin"] and stats["live_name_match"] == 0:
+        safe_print(
+            "HINT: 0 TTHC match. Mo Medinet thu 1 ten trong missing_can_tthc.txt. "
+            "Neu web da co TTHC ma bot miss: gui 1 dong NO_TTHC + screenshot form."
+        )
+        safe_print("HINT: CHI 1 bot. 2 cua so ghi de cases.csv -> DELTA=0 / so sai.")
     # Always refresh MISSING list for TTHC team (even when 0)
     try:
         uout = build / "excel_preview" / "missing_can_tthc.txt"
