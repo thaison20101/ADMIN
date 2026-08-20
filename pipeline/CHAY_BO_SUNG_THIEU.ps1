@@ -1,15 +1,9 @@
 # ============================================================
-# BO SUNG TOAN BO FIELD TU PDF LEN WEB (binh thuong + bat thuong)
-#
-# - Doc LAI moi PDF trong toan bo pipeline (INBOX/MISSING/ERROR/PROCESSED/...)
-# - Lay TAT CA truong co tren PDF (ca cot Ket qua lan Ghi chu bat thuong)
-# - Dien len web; Ure bo qua neu PDF khong co
-# - Ky quet: 01/07/2026 -> hom nay
+# BO SUNG FIELD TU PDF LEN WEB — CHI INBOX + ERROR + PROCESSED
+# (MISSING = chua TTHC -> khong dien duoc Ure/field; quet 10k MISSING lam G: chet)
 #
 #   cd C:\Users\thais\ADMIN
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_BO_SUNG_THIEU.ps1
-#
-# KHONG click vao cua so khi dang chay.
 # ============================================================
 
 $ErrorActionPreference = "Continue"
@@ -27,46 +21,58 @@ try {
 
 Write-Host ""
 Write-Host "############################################################"
-Write-Host "#  BO SUNG FIELD TU PDF (ALL folders) - binh thuong+bat thuong #"
+Write-Host "#  BO SUNG Ure/field: INBOX+ERROR+PROCESSED (khong MISSING) #"
 Write-Host "############################################################"
-Write-Host ""
 
 Write-Host "==== 1/3 git pull ===="
-git pull origin cursor/drive-hourly-pipeline-df0f
+if (Test-Path -LiteralPath (Join-Path $Repo ".git")) {
+  git pull origin cursor/drive-hourly-pipeline-df0f
+}
 
-Write-Host "==== 2/3 config ===="
+Write-Host "==== 2/3 config + assert G: ===="
 & python ".\pipeline\ensure_config.py"
 & python -m pip install -q -r ".\pipeline\requirements.txt"
+& python ".\pipeline\assert_g_pipeline.py"
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "DUNG: G: chua san. Mo Google Drive Desktop roi chay lai."
+  exit 2
+}
 
-Write-Host "==== 3/3 FULL SCAN + REPAIR (nhieu vong) ===="
-Write-Host "Quet TOAN BO G:\Drive cua toi\PKDK_Thuankieu_Pipeline"
-Write-Host "Dien moi truong PDF len web (MCV/MCH/MCHC/Hb/... ke ca Ghi chu bat thuong)"
-Write-Host "Ure: chi dien neu PDF co; khong block."
+Write-Host "==== 3/3 REPAIR INBOX+ERROR+PROCESSED (Ure neu PDF co) ===="
+Write-Host "Khong full-scan MISSING (11k file lam G: unmount)."
 $code = 0
-for ($round = 1; $round -le 4; $round++) {
-  Write-Host ("----- VONG {0}/4 -----" -f $round)
-  $out = & python ".\pipeline\hourly_sync.py" --full-scan --repair 2>&1
+for ($round = 1; $round -le 3; $round++) {
+  Write-Host ("----- VONG {0}/3 -----" -f $round)
+  & python ".\pipeline\assert_g_pipeline.py"
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "DUNG: G: mat ket noi giua vong. Mo Drive roi chay lai."
+    exit 2
+  }
+  # --repair: dien thieu field (Ure...). --missing-budget 0: khong rematch MISSING
+  $out = & python ".\pipeline\hourly_sync.py" --repair --missing-budget 0 2>&1
   $code = $LASTEXITCODE
   $out | ForEach-Object { Write-Host $_ }
   $text = ($out | Out-String)
+  if ($text -match "ABORT:") {
+    Write-Host "DUNG: ABORT G:. Khong bat hourly."
+    exit 2
+  }
   $statLine = $text | & python ".\pipeline\parse_cycle_stats.py"
   $parts = @($statLine -split "\s+")
-  $imported = 0
-  $incomplete = 0
-  $queued = 0
+  $imported = 0; $queued = 0; $repair = 0
   if ($parts.Count -ge 6) {
     $imported = [int]$parts[0]
     $queued = [int]$parts[1]
-    $incomplete = [int]$parts[5]
+    $repair = [int]$parts[5]
   }
-  Write-Host ("Vong {0}: imported={1} repair={2} queued={3}" -f $round, $imported, $incomplete, $queued)
-  if (($incomplete -le 0) -and ($queued -le 0) -and $round -ge 2) { break }
+  Write-Host ("Vong {0}: imported={1} repair={2} queued={3}" -f $round, $imported, $repair, $queued)
+  & python ".\pipeline\print_drive_dirs.py" | Select-Object -Last 1 | ForEach-Object { Write-Host $_ }
+  if (($repair -le 0) -and ($queued -le 0) -and ($imported -le 0) -and $round -ge 2) { break }
 }
 
 Write-Host ""
-Write-Host "========== XONG =========="
-Write-Host "Vi du TRAN THI KIM OANH: MCV=76.7 MCH=22.4 MCHC=292 Hb=96.8 (tu PDF, ca bat thuong)."
-Write-Host "Ctrl+F5 form CLS de xem lai."
-Write-Host "=========================="
+Write-Host "========== XONG BO SUNG =========="
+Write-Host "Ure: chi dien khi PDF co Urea. MISSING van cho TTHC (khong dien duoc)."
+Write-Host "=================================="
 if ($code -ne 0) { exit $code }
 exit 0

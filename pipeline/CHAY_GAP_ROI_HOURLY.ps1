@@ -1,6 +1,7 @@
 # ============================================================
-# GAP: pull + INBOX-first drain + BAT hourly — CHI MAY A (G: Drive)
-# May B / o D: KHONG dung. May A: git pull roi chay script nay.
+# GAP may A: INBOX -> rematch MISSING theo vong -> bo sung Ure -> BAT hourly
+# ASCII-only. PDF: G:\Drive cua toi\PKDK_Thuankieu_Pipeline
+# Log: C:\Users\thais\ADMIN\pipeline\work\build
 #
 #   cd C:\Users\thais\ADMIN
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_GAP_ROI_HOURLY.ps1
@@ -16,55 +17,65 @@ $env:PYTHONUTF8 = "1"
 if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdk_Thuankieu" }
 if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "pkdk_Thuankieu#2026" }
 
+function Get-Counts {
+  $lines = @(& python ".\pipeline\print_drive_dirs.py" 2>$null)
+  $counts = ($lines | Select-Object -Last 1)
+  $parts = @($counts -split "\t")
+  $o = @{ inbox = 0; missing = 0; error = 0; processed = 0; raw = $counts }
+  try {
+    $o.inbox = [int](($parts[1] -split "=")[1])
+    $o.missing = [int](($parts[2] -split "=")[1])
+    $o.error = [int](($parts[3] -split "=")[1])
+    $o.processed = [int](($parts[4] -split "=")[1])
+  } catch {}
+  return $o
+}
+
 Write-Host ""
 Write-Host "############################################################"
-Write-Host "#  GAP: INBOX truoc, roi MISSING/ERROR, roi hourly 1 gio   #"
+Write-Host "#  GAP may A: INBOX + MISSING rematch + Ure + hourly       #"
 Write-Host "############################################################"
 
-Write-Host "==== 1/3 git pull ===="
+Write-Host "==== 1/4 git pull ===="
 if (Test-Path -LiteralPath (Join-Path $Repo ".git")) {
   git fetch origin
   git checkout cursor/drive-hourly-pipeline-df0f
   git pull origin cursor/drive-hourly-pipeline-df0f
 }
 
-Write-Host "==== 2/3 drain INBOX first, then MISSING/ERROR (khong full-scan PROCESSED) ===="
+Write-Host "==== 2/4 assert G: + config ===="
 & python ".\pipeline\ensure_config.py"
 & python ".\pipeline\drive_paths.py"
 & python -m pip install -q -r ".\pipeline\requirements.txt"
-Write-Host "KHONG click vao cua so (Select-pause lam dung). Co the mat lau."
-$cfgOut = & python ".\pipeline\print_drive_dirs.py"
-$cfgOut | ForEach-Object { Write-Host $_ }
+Write-Host "KHONG click vao cua so (Select-pause lam dung)."
+& python ".\pipeline\print_drive_dirs.py" | ForEach-Object { Write-Host $_ }
 & python ".\pipeline\assert_g_pipeline.py"
 if ($LASTEXITCODE -ne 0) {
-  Write-Host "DUNG: G: Drive chua san tren may A. Bat Google Drive Desktop, doi G: hien, roi chay lai."
+  Write-Host "DUNG: G: chua san. Mo Google Drive Desktop roi chay lai. KHONG bat hourly."
   exit 2
 }
+
 $code = 0
-for ($round = 1; $round -le 3; $round++) {
-  Write-Host ("----- VONG {0}/3 -----" -f $round)
-  # Round 1: chi INBOX (missing-budget=0) de tranh mat thoi gian/IO voi MISSING
-  # Round 2-3: rematch MISSING theo cap (may A chi, logs local)
+
+Write-Host "==== 3/4 drain INBOX roi rematch MISSING (nhieu vong, G: song) ===="
+# Round 1: INBOX only. Round 2+: MISSING budget 2000/vong (tranh G: chet)
+for ($round = 1; $round -le 6; $round++) {
+  Write-Host ("----- VONG {0}/6 -----" -f $round)
+  & python ".\pipeline\assert_g_pipeline.py"
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "DUNG: G: mat ket noi. Mo Drive, chay lai. KHONG bat hourly."
+    exit 2
+  }
+  $before = Get-Counts
   $mb = 0
-  if ($round -ge 2) { $mb = 2500 }
-
-  # Snapshot COUNTS truoc khi chay hour
-  $beforeOut = & python ".\pipeline\print_drive_dirs.py"
-  $beforeCountsLine = ($beforeOut | Select-Object -Last 1)
-  $bParts = @($beforeCountsLine -split "\t")
-  $bInbox = [int]($bParts[1] -split "=")[1]
-  $bMissing = [int]($bParts[2] -split "=")[1]
-  $bError = [int]($bParts[3] -split "=")[1]
-  $bProcessed = [int]($bParts[4] -split "=")[1]
-
+  if ($round -ge 2) { $mb = 2000 }
   $out = & python ".\pipeline\hourly_sync.py" --missing-budget $mb 2>&1
   $code = $LASTEXITCODE
   $out | ForEach-Object { Write-Host $_ }
   $text = ($out | Out-String)
   if ($text -match "ABORT:") {
-    Write-Host "DUNG: G: mat ket noi tren may A. Mo Google Drive Desktop roi chay lai."
-    $code = 2
-    break
+    Write-Host "DUNG: ABORT G:. KHONG bat hourly."
+    exit 2
   }
   $statLine = $text | & python ".\pipeline\parse_cycle_stats.py"
   $parts = @($statLine -split "\s+")
@@ -75,39 +86,31 @@ for ($round = 1; $round -le 3; $round++) {
     $partial = [int]$parts[2]
     $moved_missing = [int]$parts[3]
   }
+  $after = Get-Counts
+  $dInbox = $after.inbox - $before.inbox
+  $dMissing = $after.missing - $before.missing
+  $dError = $after.error - $before.error
+  $dProcessed = $after.processed - $before.processed
   Write-Host ("Vong {0}: imported={1} partial={2} moved_missing={3} queued={4}" -f $round, $imported, $partial, $moved_missing, $queued)
-  
-  # Snapshot COUNTS sau khi chay hour → tinh delta
-  $afterOut = & python ".\pipeline\print_drive_dirs.py"
-  $afterCountsLine = ($afterOut | Select-Object -Last 1)
-  $aParts = @($afterCountsLine -split "\t")
-  $aInbox = [int]($aParts[1] -split "=")[1]
-  $aMissing = [int]($aParts[2] -split "=")[1]
-  $aError = [int]($aParts[3] -split "=")[1]
-  $aProcessed = [int]($aParts[4] -split "=")[1]
-
-  $dInbox = $aInbox - $bInbox
-  $dMissing = $aMissing - $bMissing
-  $dError = $aError - $bError
-  $dProcessed = $aProcessed - $bProcessed
-
-  Write-Host ("COUNTS delta (after-before): inbox={0} missing={1} error={2} processed={3}" -f $dInbox, $dMissing, $dError, $dProcessed)
+  Write-Host ("COUNTS before: {0}" -f $before.raw)
+  Write-Host ("COUNTS after : {0}" -f $after.raw)
+  Write-Host ("COUNTS delta : inbox={0} missing={1} error={2} processed={3}" -f $dInbox, $dMissing, $dError, $dProcessed)
   Write-Host ("DONE_FULL(DELTA_PROCESSED)={0} | DONE_ANY(DELTA_PROCESSED+DELTA_ERROR)={1}" -f $dProcessed, ($dProcessed + $dError))
-  $afterOut | Select-Object -Last 3 | ForEach-Object { Write-Host $_ }
-  # Khong stop neu co partial hoặc moved_missing — vi imported chỉ tinh FULL
-  if (($imported -le 0) -and ($partial -le 0) -and ($moved_missing -le 0) -and ($queued -le 0) -and $round -ge 2) {
+  # Round 1 xong INBOX; round 2+ dung khi khong con tien do
+  if ($round -ge 3 -and ($imported -le 0) -and ($partial -le 0) -and ($moved_missing -le 0) -and ($queued -le 0) -and ($dProcessed -eq 0) -and ($dError -eq 0)) {
     break
   }
 }
 
-Write-Host "==== 3/3 BO SUNG THIEU FIELD (full scan, neu thieu Ure se dien) ===="
+Write-Host "==== 4/4 BO SUNG Ure (INBOX+ERROR+PROCESSED) roi BAT hourly ===="
 & powershell -ExecutionPolicy Bypass -File ".\pipeline\CHAY_BO_SUNG_THIEU.ps1"
-
-Write-Host "==== 3/3 BAT hourly PKDK_Hourly_Sync ===="
-if ($code -eq 2) {
-  Write-Host "Khong bat hourly vi G: loi. Mo Google Drive Desktop roi chay lai."
-  exit 2
+$bs = $LASTEXITCODE
+if ($bs -ne 0) {
+  Write-Host "BO SUNG that bai / G: loi. KHONG bat hourly. Exit=$bs"
+  exit $bs
 }
+
+Write-Host "==== BAT hourly PKDK_Hourly_Sync ===="
 $TaskName = "PKDK_Hourly_Sync"
 try {
   Enable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null
@@ -120,12 +123,11 @@ if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) 
 }
 Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Format-List TaskName, State
 
+$final = Get-Counts
 Write-Host ""
-Write-Host "XONG. Hourly moi 1 gio: INBOX truoc, roi ERROR, roi MISSING (toi da 400 file/gio)."
-Write-Host "PDF nam G:\Drive cua toi\PKDK_Thuankieu_Pipeline - log nam C:\Users\thais\ADMIN\pipeline\work\build"
-Write-Host "Khop TTHC (rule cu): ho + ten (token cuoi) + nam sinh. SDT/gioi tinh chi ho tro cham diem."
-Write-Host "Ky Medinet: 01/07/2026 -> hom nay."
-Write-Host "FULL -> PROCESSED | PARTIAL -> ERROR | chua TTHC: INBOX -> MISSING (MISSING giu nguyen)."
+Write-Host "XONG. COUNTS cuoi: $($final.raw)"
+Write-Host "MISSING cao = chua co TTHC tren Medinet (dung). Hourly moi gio rematch toi da 400 MISSING."
+Write-Host "FULL -> PROCESSED | PARTIAL -> ERROR | chua TTHC: INBOX -> MISSING."
 Write-Host ("Exit={0}" -f $code)
 if ($code -ne 0) { exit $code }
 exit 0

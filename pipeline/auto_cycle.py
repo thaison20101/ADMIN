@@ -64,17 +64,37 @@ def _today_dmy() -> str:
 
 
 def _drive_dirs(cfg: dict) -> tuple[Path, Path, Path, Path, Path]:
-    """Return (sync_root, inbox, processed, error, missing)."""
-    try:
-        from drive_paths import discover_pipeline_root, ensure_standard_folders, discover_build_root
+    """Return (sync_root, inbox, processed, error, missing).
 
-        sync = discover_pipeline_root(cfg)
+    Never fall back to ADMIN repo root — that caused
+    ABORT sync=C:\\Users\\thais\\ADMIN after G: died mid full-scan.
+    """
+    from drive_paths import (
+        discover_pipeline_root,
+        ensure_standard_folders,
+        discover_build_root,
+        g_pipeline_live,
+        PINNED_PIPELINE,
+    )
+
+    live = g_pipeline_live()
+    if live is not None:
+        sync = live
+    else:
+        # Keep pinned G: path for abort messaging; do NOT mkdir / use ROOT
+        sync = PINNED_PIPELINE
+        try:
+            raw = str((cfg.get("drive") or {}).get("local_sync_root") or "").strip()
+            if raw.replace("/", "\\").upper().startswith("G:"):
+                sync = Path(raw)
+        except Exception:
+            pass
+    try:
         build = discover_build_root(cfg)
-        ensure_standard_folders(sync, build)
-    except Exception:
-        sync = Path(cfg.get("drive", {}).get("local_sync_root") or "")
-        if not sync.exists():
-            sync = ROOT
+        if g_pipeline_live() is not None:
+            ensure_standard_folders(sync, build)
+    except Exception as e:
+        safe_print(f"WARN ensure folders: {e}")
     inbox = sync / cfg["drive"].get("inbox_folder", "INBOX_CLS")
     processed = sync / cfg["drive"].get("processed_folder", "PROCESSED")
     error_dir = sync / cfg["drive"].get("error_folder", "ERROR")
@@ -414,8 +434,18 @@ def run_auto_cycle(
     if inbox_pdf_n + missing_pdf_n + error_pdf_n + processed_pdf_n == 0:
         safe_print("WARN: 0 PDF o 4 folder — sai o dia / Drive chua sync. Xem Explorer dung thu muc nay.")
 
-    if missing_budget <= 0:
+    if missing_budget < 0:
+        # sentinel: unlimited / auto-large
         missing_budget = 100000 if (full_scan or repair) else 400
+    elif missing_budget == 0:
+        # CLI default 0: hourly auto=400; full-scan auto=unlimited;
+        # repair + explicit 0 (CHAY_BO_SUNG) = skip MISSING rematch (G: stay alive)
+        if full_scan:
+            missing_budget = 100000
+        elif repair:
+            missing_budget = 0
+        else:
+            missing_budget = 400
     missing_left = int(missing_budget)
     safe_print(f"Logs (local, not G:): {build}")
     safe_print(
