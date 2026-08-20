@@ -68,7 +68,7 @@ for ($round = 1; $round -le 6; $round++) {
   }
   $before = Get-Counts
   $mb = 0
-  if ($round -ge 2) { $mb = 2000 }
+  if ($round -ge 2) { $mb = 2500 }
   $out = & python ".\pipeline\hourly_sync.py" --missing-budget $mb 2>&1
   $code = $LASTEXITCODE
   $out | ForEach-Object { Write-Host $_ }
@@ -126,8 +126,10 @@ Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Format-Lis
 $final = Get-Counts
 Write-Host ""
 Write-Host "XONG. COUNTS cuoi: $($final.raw)"
-Write-Host "MISSING cao = chua co TTHC tren Medinet (dung). Hourly moi gio rematch toi da 400 MISSING."
+Write-Host "MISSING cao? Chay them: powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_REMATCH_MISSING.ps1"
+Write-Host "MISSING chi giam khi Medinet da co TTHC (ho+ten+nam sinh)."
 Write-Host "FULL -> PROCESSED | PARTIAL -> ERROR | chua TTHC: INBOX -> MISSING."
+Write-Host "KHONG fallback C:\Users\thais\ADMIN — chi G:\Drive cua toi\PKDK_Thuankieu_Pipeline."
 Write-Host ("Exit={0}" -f $code)
 if ($code -ne 0) { exit $code }
 exit 0

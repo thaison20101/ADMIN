@@ -126,15 +126,17 @@ def build_root(cfg: dict) -> Path:
 
 def inbox_dir(cfg: dict) -> Path:
     try:
-        from drive_paths import discover_pipeline_root
+        from drive_paths import discover_pipeline_root, PINNED_PIPELINE, g_pipeline_live
 
-        sync = discover_pipeline_root(cfg)
-        return sync / cfg["drive"].get("inbox_folder", "INBOX_CLS")
+        live = g_pipeline_live()
+        sync = live if live is not None else discover_pipeline_root(cfg)
+        if str(sync).replace("/", "\\").upper().startswith("G:") or not sys.platform.startswith("win"):
+            return sync / cfg["drive"].get("inbox_folder", "INBOX_CLS")
+        return PINNED_PIPELINE / cfg["drive"].get("inbox_folder", "INBOX_CLS")
     except Exception:
-        sync = Path(cfg.get("drive", {}).get("local_sync_root") or "")
-        if sync.exists():
-            return sync / cfg["drive"]["inbox_folder"]
-        return ROOT / "INBOX_CLS"
+        from drive_paths import PINNED_PIPELINE
+
+        return PINNED_PIPELINE / "INBOX_CLS"
 
 
 def list_pdfs(inbox: Path, limit: int | None) -> list[Path]:

@@ -218,10 +218,14 @@ def main() -> int:
     safe_print(f"Config: {cfg['_config_path']}")
 
     if args.register_only:
-        from pathlib import Path as P
+        from drive_paths import g_pipeline_live, PINNED_PIPELINE
 
-        sync = P(cfg.get("drive", {}).get("local_sync_root") or "")
-        inbox = sync / cfg["drive"]["inbox_folder"] if sync.exists() else ROOT / "INBOX_CLS"
+        live = g_pipeline_live()
+        sync = live if live is not None else PINNED_PIPELINE
+        if sys.platform.startswith("win") and live is None:
+            safe_print("ABORT: G: chua mount — khong register vao ADMIN local")
+            return 2
+        inbox = sync / cfg["drive"].get("inbox_folder", "INBOX_CLS")
         inbox.mkdir(parents=True, exist_ok=True)
         rows = read_cases(CASES_CSV)
         added = register_new_files(inbox, rows)

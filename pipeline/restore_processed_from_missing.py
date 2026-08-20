@@ -41,12 +41,12 @@ KEEP_MARKERS = (
 
 
 def _drive_dirs(cfg: dict) -> tuple[Path, Path]:
-    try:
-        from drive_paths import discover_pipeline_root
+    from drive_paths import discover_pipeline_root, g_pipeline_live, PINNED_PIPELINE
 
-        sync = discover_pipeline_root(cfg)
-    except Exception:
-        sync = Path(cfg.get("drive", {}).get("local_sync_root") or "")
+    live = g_pipeline_live()
+    sync = live if live is not None else discover_pipeline_root(cfg)
+    if not str(sync).replace("/", "\\").upper().startswith("G:"):
+        sync = PINNED_PIPELINE
     processed = sync / cfg["drive"].get("processed_folder", "PROCESSED")
     missing = sync / cfg["drive"].get("missing_folder", "MISSING")
     return processed, missing

@@ -94,24 +94,27 @@ def _pdf_count(root: Path) -> int:
 
 
 def discover_pipeline_root(cfg: dict | None = None) -> Path:
-    """Always G:\\Drive của tôi\\PKDK_Thuankieu_Pipeline. Never D: / may B."""
+    """Always G:\\Drive của tôi\\PKDK_Thuankieu_Pipeline. Never D: / ADMIN / may B."""
     live = g_pipeline_live()
     if live is not None:
         return live
 
     cfg = cfg if cfg is not None else _load_cfg()
     raw = str((cfg.get("drive") or {}).get("local_sync_root") or "").strip()
-    if raw and not is_non_g_pipeline(raw):
-        p = Path(raw)
-        if str(p).replace("/", "\\").upper().startswith("G:"):
-            return p
+    if raw:
+        u = raw.replace("/", "\\").upper()
+        # Refuse ADMIN repo / D: / anything not G:
+        if u.startswith("G:") and not is_non_g_pipeline(raw):
+            return Path(raw)
 
-    # Dev/CI without G: — local folder only (not D:)
+    # Dev/CI without G: — local folder only (not D:, not used on Windows prod)
     if not sys.platform.startswith("win"):
         dest = ROOT / PIPELINE_NAME
         dest.mkdir(parents=True, exist_ok=True)
         return dest
 
+    # Windows + G: unmounted: still return pin (caller must abort if not live).
+    # NEVER return ROOT / ADMIN — that caused sync=C:\Users\thais\ADMIN.
     return PINNED_PIPELINE
 
 
@@ -121,11 +124,23 @@ def discover_build_root(cfg: dict | None = None) -> Path:
 
 
 def ensure_standard_folders(pipeline: Path, build: Path) -> dict[str, Path]:
+    """Create folder layout. Never mkdir on G: when Drive is unmounted."""
     folders = {}
-    for name in STD_FOLDERS:
-        p = pipeline / name
-        p.mkdir(parents=True, exist_ok=True)
-        folders[name] = p
+    can_touch_pipeline = True
+    if sys.platform.startswith("win"):
+        # Only create PDF folders when G: is actually live
+        can_touch_pipeline = g_pipeline_live() is not None and str(pipeline).replace("/", "\\").upper().startswith("G:")
+    if can_touch_pipeline:
+        for name in STD_FOLDERS:
+            p = pipeline / name
+            try:
+                p.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                print(f"WARN mkdir {p}: {e}")
+            folders[name] = p
+    else:
+        for name in STD_FOLDERS:
+            folders[name] = pipeline / name
     for name in ("logs", "excel_preview", "missing_or_updated", "cases_snapshot"):
         p = build / name
         p.mkdir(parents=True, exist_ok=True)
@@ -141,9 +156,15 @@ def write_resolved_into_config(pipeline: Path, build: Path) -> Path:
     else:
         cfg = {}
     drive = cfg.setdefault("drive", {})
-    if is_non_g_pipeline(pipeline):
-        print("WARN: refuse non-G: path; forcing G:\\Drive cua toi\\PKDK_Thuankieu_Pipeline")
-        pipeline = PINNED_PIPELINE
+    # Never persist ADMIN repo / D: / non-G as sync root on Windows
+    if sys.platform.startswith("win"):
+        if is_non_g_pipeline(pipeline) or not str(pipeline).replace("/", "\\").upper().startswith("G:"):
+            print("WARN: refuse non-G: path; forcing G:\\Drive cua toi\\PKDK_Thuankieu_Pipeline")
+            pipeline = PINNED_PIPELINE
+        # Prefer live G: if mounted
+        live = g_pipeline_live()
+        if live is not None:
+            pipeline = live
     drive["local_sync_root"] = str(pipeline).replace("\\", "/")
     drive["build_root"] = str(local_work_build()).replace("\\", "/")
     drive.setdefault("inbox_folder", "INBOX_CLS")

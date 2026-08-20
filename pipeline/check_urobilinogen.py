@@ -32,9 +32,13 @@ setup_utf8_stdio()
 
 
 def _folders(cfg: dict, which: str) -> list[Path]:
-    sync = Path(cfg.get("drive", {}).get("local_sync_root") or "")
-    if not sync.exists():
-        sync = ROOT
+    from drive_paths import g_pipeline_live, PINNED_PIPELINE
+
+    live = g_pipeline_live()
+    sync = live if live is not None else PINNED_PIPELINE
+    raw = str(cfg.get("drive", {}).get("local_sync_root") or "")
+    if raw.replace("/", "\\").upper().startswith("G:") and Path(raw).exists():
+        sync = Path(raw)
     mapping = {
         "PROCESSED": sync / cfg["drive"].get("processed_folder", "PROCESSED"),
         "ERROR": sync / cfg["drive"].get("error_folder", "ERROR"),

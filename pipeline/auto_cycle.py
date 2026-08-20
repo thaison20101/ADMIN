@@ -117,6 +117,10 @@ def _collect_scan_dirs(
     hourly → INBOX + MISSING + ERROR (khong rematch PROCESSED).
     """
     if not full_scan:
+        if repair:
+            # Urea/field fill: INBOX+ERROR+PROCESSED only. MISSING has no TTHC
+            # → cannot fill web; walking 11k PDFs also unmounts G:.
+            return [inbox, error_dir, processed]
         return [inbox, missing, error_dir]
     roots: list[Path] = []
     skip = {".git"}
@@ -256,8 +260,6 @@ def run_auto_cycle(
     cfg = load_config()
     build = build_root(cfg)
     sync, inbox, processed, error_dir, missing = _drive_dirs(cfg)
-    for p in (inbox, processed, error_dir, missing):
-        p.mkdir(parents=True, exist_ok=True)
 
     from drive_paths import g_pipeline_live, is_non_g_pipeline, local_work_build, require_g_on_windows
 
@@ -273,6 +275,30 @@ def run_auto_cycle(
         safe_print("Mo Google Drive Desktop, doi G: hien lai. Khong dung may B / o D:.")
         return {"abort": "g_drive_missing", "sync": str(sync)}
 
+    # Only mkdir after G: confirmed live — never create under ADMIN fallback
+    for p in (inbox, processed, error_dir, missing):
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            safe_print(f"ABORT: khong tao folder tren G: ({e}). sync={sync}")
+            return {"abort": "g_mkdir_failed", "sync": str(sync)}
+
+    # Plan MISSING rematch budget early (TTHC often added after park in MISSING)
+    if missing_budget < 0:
+        mb_plan = 100000 if (full_scan or repair) else 400
+    elif missing_budget == 0:
+        if full_scan:
+            mb_plan = 100000
+        elif repair:
+            mb_plan = 0
+        else:
+            mb_plan = 1500  # hourly/GAP: rematch MISSING (web often already has TTHC)
+    else:
+        mb_plan = int(missing_budget)
+    missing_budget = mb_plan
+    rematch_missing_left = mb_plan
+    missing_left = mb_plan
+
     # full-scan luon kem audit PROCESSED de bat BN cu bi sai / thieu TTHC
     if full_scan:
         audit_processed = True
@@ -282,6 +308,7 @@ def run_auto_cycle(
         sync, inbox, missing, error_dir, processed, full_scan=full_scan
     )
     safe_print(f"Mode: {mode} | scan dirs ({len(scan_dirs)}): {[d.name for d in scan_dirs]}")
+    safe_print(f"MISSING rematch budget this run: {missing_budget}")
 
     cases_path = ROOT / cfg.get("tracking", {}).get("cases_csv", "tracking/cases.csv")
     from hourly_sync import read_cases, register_new_files, write_cases  # local import
@@ -377,9 +404,17 @@ def run_auto_cycle(
                     r["import_attempts"] = "0"
                     r["notes"] = f"disk_{tag}_fullrematch:{old}"[:200]
                     requeued_disk += 1
-            elif (not full_scan) and tag == "missing" and old == "WAITING_ADMIN":
-                # Do not re-extract 11k parked MISSING every hour — G: Drive dies.
-                r["status"] = "WAITING_ADMIN"
+            elif (not full_scan) and tag == "missing" and old in {"WAITING_ADMIN", "READY_IMPORT", "NEW_LAB"}:
+                # Rematch MISSING: many already have TTHC on Medinet now.
+                # Cap by rematch_missing_left so G: Drive stays mounted.
+                if rematch_missing_left > 0:
+                    r["status"] = "READY_IMPORT"
+                    r["import_attempts"] = "0"
+                    r["notes"] = f"disk_missing_rematch:{old}"[:200]
+                    requeued_disk += 1
+                    rematch_missing_left -= 1
+                else:
+                    r["status"] = "WAITING_ADMIN"
             elif old in {"IMPORTED", "SKIP_ALREADY_CLS"}:
                 if (r.get("notes") or "") != f"disk_{tag}_done:{old}":
                     r["status"] = old
@@ -434,19 +469,6 @@ def run_auto_cycle(
     if inbox_pdf_n + missing_pdf_n + error_pdf_n + processed_pdf_n == 0:
         safe_print("WARN: 0 PDF o 4 folder — sai o dia / Drive chua sync. Xem Explorer dung thu muc nay.")
 
-    if missing_budget < 0:
-        # sentinel: unlimited / auto-large
-        missing_budget = 100000 if (full_scan or repair) else 400
-    elif missing_budget == 0:
-        # CLI default 0: hourly auto=400; full-scan auto=unlimited;
-        # repair + explicit 0 (CHAY_BO_SUNG) = skip MISSING rematch (G: stay alive)
-        if full_scan:
-            missing_budget = 100000
-        elif repair:
-            missing_budget = 0
-        else:
-            missing_budget = 400
-    missing_left = int(missing_budget)
     safe_print(f"Logs (local, not G:): {build}")
     safe_print(
         f"INBOX-first | missing_extract_budget={missing_budget} "
@@ -461,7 +483,7 @@ def run_auto_cycle(
     if full_scan or repair:
         max_per_run = max(max_per_run, 5000)  # bat so BN cu — khong gioi han thap
     else:
-        # Hourly: drain INBOX/MISSING/ERROR quickly
+        # Hourly/GAP: drain INBOX + rematched MISSING
         max_per_run = max(max_per_run, 2000)
     if limit:
         max_per_run = min(max_per_run, limit)
@@ -484,12 +506,16 @@ def run_auto_cycle(
     date_to = (cfg.get("medinet", {}).get("date_to") or "").strip() or _today_dmy()
     safe_print(f"Indexing Medinet NgayKham {date_from} -> {date_to} (rolling today) ...")
     cache_dir = ROOT / "pipeline" / "work" / "index_cache"
+    # Fresh index when rematching MISSING — TTHC often entered after last cache
+    index_max_age = 0.0 if (full_scan or missing_budget > 0) else 2.0
+    if index_max_age == 0.0:
+        safe_print("Index: FORCE REFRESH (MISSING rematch — web may have new TTHC)")
     index = load_or_fetch_unit_index(
         token_box["t"],
         date_from,
         date_to,
         cache_dir=cache_dir,
-        max_age_hours=6 if (full_scan or repair) else 2,
+        max_age_hours=index_max_age,
     )
     token_box["t"] = authenticate(user, password)
 
