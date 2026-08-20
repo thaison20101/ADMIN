@@ -19,10 +19,7 @@ if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdk_Thuankieu" }
 if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "pkdk_Thuankieu#2026" }
 
 function Get-Counts {
-  param([switch]$Quick)
-  $argsPy = @(".\pipeline\print_drive_dirs.py")
-  if ($Quick) { $argsPy += "--quick" }
-  $lines = @(& python @argsPy 2>$null)
+  $lines = @(& python ".\pipeline\print_counts.py" 2>$null)
   $counts = ($lines | Select-Object -Last 1)
   $parts = @($counts -split "\t")
   $o = @{ inbox = 0; missing = 0; error = 0; processed = 0; raw = $counts }
@@ -63,10 +60,7 @@ if ($LASTEXITCODE -ne 0) {
   exit 2
 }
 
-Write-Host "COUNTS 1 lan (list MISSING co the cham). Cac vong sau dung --quick."
-$first = Get-Counts
-Write-Host ("COUNTS start: {0}" -f $first.raw)
-Write-Host "Mo Explorer MISSING/PROCESSED de theo doi so muc."
+Write-Host "COUNTS tu tracking CSV (inbox/missing/error/processed) — in tren cua so, khong can Explorer."
 
 $code = 0
 for ($round = 1; $round -le 8; $round++) {
@@ -76,8 +70,8 @@ for ($round = 1; $round -le 8; $round++) {
     Write-Host "DUNG: G: mat ket noi. Mo Drive roi chay lai. Exit=2"
     exit 2
   }
-  $before = Get-Counts -Quick
-  Write-Host ("COUNTS before (quick, missing=-1 skip list): {0}" -f $before.raw)
+  $before = Get-Counts
+  Write-Host ("COUNTS before: {0}" -f $before.raw)
   Write-Host "Chay hourly_sync --missing-budget 2500 (CSV rematch, log live) ..."
   $code = Invoke-PythonLive @(".\pipeline\hourly_sync.py", "--missing-budget", "2500")
   $text = ($script:LastPyLines -join "`n")
@@ -94,24 +88,24 @@ for ($round = 1; $round -le 8; $round++) {
     $partial = [int]$parts[2]
     $moved_missing = [int]$parts[3]
   }
-  $after = Get-Counts -Quick
+  $after = Get-Counts
+  $dMissing = $after.missing - $before.missing
   $dProcessed = $after.processed - $before.processed
   $dError = $after.error - $before.error
   $dInbox = $after.inbox - $before.inbox
   Write-Host ("Vong {0}: imported={1} partial={2} queued={3}" -f $round, $imported, $partial, $queued)
-  Write-Host ("COUNTS after (quick): {0}" -f $after.raw)
-  Write-Host ("DELTA inbox={0} processed={1} error={2} (MISSING xem Explorer)" -f $dInbox, $dProcessed, $dError)
+  Write-Host ("COUNTS after : {0}" -f $after.raw)
+  Write-Host ("DELTA inbox={0} missing={1} error={2} processed={3}" -f $dInbox, $dMissing, $dError, $dProcessed)
   Write-Host ("DONE_FULL={0} DONE_ANY={1}" -f $dProcessed, ($dProcessed + $dError))
-  if ($round -ge 2 -and ($imported -le 0) -and ($partial -le 0) -and ($dProcessed -eq 0) -and ($dError -eq 0)) {
+  if ($round -ge 2 -and ($imported -le 0) -and ($partial -le 0) -and ($dProcessed -eq 0) -and ($dError -eq 0) -and ($dMissing -eq 0)) {
     Write-Host "Het tien do rematch (con lai trong MISSING = chua co TTHC that)."
     break
   }
 }
 
-$final = Get-Counts -Quick
+$final = Get-Counts
 Write-Host ""
-Write-Host "XONG REMATCH. COUNTS quick: $($final.raw)"
-Write-Host "MISSING con lai = chua khop TTHC (can admin nhap). Da khop se o PROCESSED/ERROR."
-Write-Host "Xem Explorer: G:\Drive cua toi\PKDK_Thuankieu_Pipeline\MISSING"
+Write-Host "XONG REMATCH. COUNTS: $($final.raw)"
+Write-Host "MISSING giam = da khop TTHC (chuyen PROCESSED/ERROR). Con lai = chua co TTHC."
 if ($code -ne 0) { exit $code }
 exit 0

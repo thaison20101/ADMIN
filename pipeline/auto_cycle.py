@@ -183,6 +183,45 @@ def _move_pdf(pdf: Path, dest_dir: Path, pid: str = "") -> Path | None:
     return None
 
 
+def _src_bucket(src: str) -> str:
+    u = (src or "").replace("\\", "/").upper()
+    if "/INBOX" in u or u.endswith("/INBOX_CLS") or "INBOX_CLS" in u:
+        return "inbox"
+    if "/MISSING/" in f"/{u}/" or u.endswith("/MISSING"):
+        return "missing"
+    if "/ERROR/" in f"/{u}/" or u.endswith("/ERROR"):
+        return "error"
+    if "/PROCESSED" in u:
+        return "processed"
+    return "other"
+
+
+def counts_from_rows(rows: list[dict]) -> dict[str, int]:
+    """Folder counts from tracking CSV (no G: listing)."""
+    out = {"inbox": 0, "missing": 0, "error": 0, "processed": 0, "other": 0}
+    for r in rows:
+        b = _src_bucket(r.get("source_file") or "")
+        out[b] = out.get(b, 0) + 1
+    return out
+
+
+def format_counts_line(c: dict[str, int], *, tag: str = "COUNTS") -> str:
+    return (
+        f"{tag}\tinbox={c.get('inbox', 0)}\tmissing={c.get('missing', 0)}\t"
+        f"error={c.get('error', 0)}\tprocessed={c.get('processed', 0)}"
+    )
+
+
+def write_last_counts(build: Path, c: dict[str, int], extra: str = "") -> Path | None:
+    try:
+        dest = build / "last_counts.txt"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(format_counts_line(c) + (("\n" + extra) if extra else "") + "\n", encoding="utf-8")
+        return dest
+    except Exception:
+        return None
+
+
 def _row_priority(row: dict) -> int:
     """Lower = import sooner. INBOX first, then ERROR, then MISSING.
 
@@ -333,6 +372,9 @@ def run_auto_cycle(
     from hourly_sync import read_cases, register_new_files, write_cases  # local import
 
     rows = read_cases(cases_path)
+    counts0 = counts_from_rows(rows)
+    safe_print(format_counts_line(counts0, tag="COUNTS_BEFORE"))
+    write_last_counts(build, counts0, extra="phase=before")
     added = 0
     added_err = 0
     added_missing = 0
@@ -513,25 +555,15 @@ def run_auto_cycle(
 
     inbox_pdf_n = count_pdfs_fast(inbox) if inbox.exists() else 0
     error_pdf_n = count_pdfs_fast(error_dir) if error_dir.exists() else 0
-    # Skip listing 10k MISSING / PROCESSED on hourly rematch (G: hang).
-    if full_scan or repair:
-        missing_pdf_n = count_pdfs_fast(missing) if missing.exists() else 0
-        processed_pdf_n = count_pdfs_fast(processed) if processed.exists() else 0
-    else:
-        missing_pdf_n = csv_missing_total
-        processed_pdf_n = -1
+    missing_pdf_n = counts0.get("missing", csv_missing_total)
+    processed_pdf_n = counts0.get("processed", 0)
     safe_print(f"SYNC ROOT: {sync}")
-    safe_print(f"Inbox: {inbox} (pdfs_on_disk={inbox_pdf_n})")
-    if full_scan or repair:
-        safe_print(f"Missing: {missing} (pdfs_on_disk={missing_pdf_n})")
-        safe_print(f"Error: {error_dir} (pdfs_on_disk={error_pdf_n})")
-        safe_print(f"Processed: {processed} (pdfs_on_disk={processed_pdf_n})")
-    else:
-        safe_print(f"Missing: {missing} (tracked_csv={missing_pdf_n}, skip 10k G: listing)")
-        safe_print(f"Error: {error_dir} (pdfs_on_disk={error_pdf_n})")
-        safe_print("Processed: (skip listing on rematch)")
-    if inbox_pdf_n + error_pdf_n == 0 and csv_missing_queued == 0 and csv_missing_total == 0:
-        safe_print("WARN: 0 PDF inbox/error and 0 MISSING in tracking. Xem Explorer dung thu muc G:.")
+    safe_print(f"Inbox disk: {inbox} (pdfs={inbox_pdf_n}) csv={counts0.get('inbox', 0)}")
+    safe_print(f"Missing csv: {missing_pdf_n} (khong list 10k G:; so nay giam khi rematch xong)")
+    safe_print(f"Error disk: {error_dir} (pdfs={error_pdf_n}) csv={counts0.get('error', 0)}")
+    safe_print(f"Processed csv: {processed_pdf_n}")
+    if inbox_pdf_n + error_pdf_n == 0 and missing_pdf_n == 0:
+        safe_print("WARN: 0 PDF inbox/error and 0 MISSING in tracking.")
 
     safe_print(f"Logs (local, not G:): {build}")
     safe_print(
@@ -1119,6 +1151,24 @@ def run_auto_cycle(
         shutil.copy2(cases_path, snap)
     except Exception:
         pass
+
+    counts1 = counts_from_rows(rows)
+    d_miss = counts1.get("missing", 0) - counts0.get("missing", 0)
+    d_proc = counts1.get("processed", 0) - counts0.get("processed", 0)
+    d_err = counts1.get("error", 0) - counts0.get("error", 0)
+    d_in = counts1.get("inbox", 0) - counts0.get("inbox", 0)
+    safe_print(format_counts_line(counts0, tag="COUNTS_BEFORE"))
+    safe_print(format_counts_line(counts1, tag="COUNTS_AFTER"))
+    safe_print(
+        f"COUNTS_DELTA\tinbox={d_in}\tmissing={d_miss}\terror={d_err}\tprocessed={d_proc}"
+    )
+    write_last_counts(
+        build,
+        counts1,
+        extra=f"phase=after delta_missing={d_miss} delta_processed={d_proc} delta_error={d_err}",
+    )
+    missing_pdf_n = counts1.get("missing", missing_pdf_n)
+    error_pdf_n = counts1.get("error", error_pdf_n)
 
     summary = dict(stats)
     summary["mode"] = mode

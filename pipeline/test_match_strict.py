@@ -283,6 +283,23 @@ if __name__ == "__main__":
 
     test_count_pdfs_fast_top_level()
 
+    from pipeline.auto_cycle import counts_from_rows, format_counts_line
+
+    def test_counts_from_rows():
+        rows = [
+            {"source_file": r"G:\Drive của tôi\PKDK_Thuankieu_Pipeline\INBOX_CLS\a.pdf"},
+            {"source_file": r"G:\x\MISSING\b.pdf"},
+            {"source_file": r"G:\x\MISSING\c.pdf"},
+            {"source_file": r"G:\x\ERROR\d.pdf"},
+            {"source_file": r"G:\x\PROCESSED\e.pdf"},
+        ]
+        c = counts_from_rows(rows)
+        assert c["inbox"] == 1 and c["missing"] == 2 and c["error"] == 1 and c["processed"] == 1, c
+        line = format_counts_line(c)
+        assert "missing=2" in line and line.startswith("COUNTS\t"), line
+
+    test_counts_from_rows()
+
     def test_inbox_before_missing():
         inbox = {
             "status": "READY_IMPORT",

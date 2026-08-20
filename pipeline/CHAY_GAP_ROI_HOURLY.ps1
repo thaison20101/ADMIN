@@ -19,10 +19,7 @@ if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdk_Thuankieu" }
 if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "pkdk_Thuankieu#2026" }
 
 function Get-Counts {
-  param([switch]$Quick)
-  $argsPy = @(".\pipeline\print_drive_dirs.py")
-  if ($Quick) { $argsPy += "--quick" }
-  $lines = @(& python @argsPy 2>$null)
+  $lines = @(& python ".\pipeline\print_counts.py" 2>$null)
   $counts = ($lines | Select-Object -Last 1)
   $parts = @($counts -split "\t")
   $o = @{ inbox = 0; missing = 0; error = 0; processed = 0; raw = $counts }
@@ -62,8 +59,8 @@ Write-Host "==== 2/4 assert G: + config ===="
 & python ".\pipeline\drive_paths.py"
 & python -m pip install -q -r ".\pipeline\requirements.txt"
 Write-Host "KHONG click vao cua so (Select-pause lam dung). Log Python in lien tuc."
-Write-Host "COUNTS 1 lan (list MISSING cham). Vong sau --quick."
-& python ".\pipeline\print_drive_dirs.py" | ForEach-Object { Write-Host $_ }
+Write-Host "COUNTS tu tracking CSV (inbox/missing/error/processed) in tren cua so."
+& python ".\pipeline\print_counts.py" | ForEach-Object { Write-Host $_ }
 & python ".\pipeline\assert_g_pipeline.py"
 if ($LASTEXITCODE -ne 0) {
   Write-Host "DUNG: G: chua san. Mo Google Drive Desktop roi chay lai. KHONG bat hourly."
@@ -81,8 +78,8 @@ for ($round = 1; $round -le 6; $round++) {
     Write-Host "DUNG: G: mat ket noi. Mo Drive, chay lai. KHONG bat hourly."
     exit 2
   }
-  $before = Get-Counts -Quick
-  Write-Host ("COUNTS before (quick): {0}" -f $before.raw)
+  $before = Get-Counts
+  Write-Host ("COUNTS before: {0}" -f $before.raw)
   $mb = 0
   if ($round -ge 2) { $mb = 2500 }
   Write-Host ("hourly_sync --missing-budget {0} (0=INBOX only; log live)" -f $mb)
@@ -101,7 +98,7 @@ for ($round = 1; $round -le 6; $round++) {
     $partial = [int]$parts[2]
     $moved_missing = [int]$parts[3]
   }
-  $after = Get-Counts -Quick
+  $after = Get-Counts
   $dInbox = $after.inbox - $before.inbox
   $dMissing = $after.missing - $before.missing
   $dError = $after.error - $before.error
@@ -138,10 +135,9 @@ if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) 
 }
 Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Format-List TaskName, State
 
-$final = Get-Counts -Quick
+$final = Get-Counts
 Write-Host ""
-Write-Host "XONG. COUNTS cuoi (quick, missing=-1 = skip list 10k): $($final.raw)"
-Write-Host "MISSING: mo Explorer G:\\Drive cua toi\\PKDK_Thuankieu_Pipeline\\MISSING"
+Write-Host "XONG. COUNTS cuoi: $($final.raw)"
 Write-Host "MISSING cao? Chay them: powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_REMATCH_MISSING.ps1"
 Write-Host "MISSING chi giam khi Medinet da co TTHC (ho+ten+nam sinh)."
 Write-Host "FULL -> PROCESSED | PARTIAL -> ERROR | chua TTHC: INBOX -> MISSING."
