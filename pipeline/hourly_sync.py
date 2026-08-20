@@ -218,17 +218,17 @@ def main() -> int:
     safe_print(f"Config: {cfg['_config_path']}")
 
     if args.register_only:
-        from drive_paths import g_pipeline_live, PINNED_PIPELINE
+        from drive_paths import g_pipeline_live, resolve_g_sync
 
-        live = g_pipeline_live()
-        sync = live if live is not None else PINNED_PIPELINE
-        if sys.platform.startswith("win") and live is None:
+        if sys.platform.startswith("win") and g_pipeline_live() is None:
             safe_print("ABORT: G: chua mount — khong register vao ADMIN local")
             return 2
+        sync = resolve_g_sync(cfg)
         inbox = sync / cfg["drive"].get("inbox_folder", "INBOX_CLS")
-        inbox.mkdir(parents=True, exist_ok=True)
+        if g_pipeline_live() is not None:
+            inbox.mkdir(parents=True, exist_ok=True)
         rows = read_cases(CASES_CSV)
-        added = register_new_files(inbox, rows)
+        added = register_new_files(inbox, rows) if inbox.exists() else 0
         write_cases(CASES_CSV, rows)
         safe_print(f"Registered {added}; ledger {CASES_CSV}")
         return 0

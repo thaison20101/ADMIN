@@ -42,16 +42,22 @@ Write-Host "==== 2/6 config + pip ===="
 & python ".\pipeline\ensure_config.py"
 & python -m pip install -q -r ".\pipeline\requirements.txt"
 
-# Resolve Drive folders for before/after counts
-$cfgOut = & python -c "import json; from pathlib import Path; p=Path('pipeline/config.local.json');
-c=json.loads(p.read_text(encoding='utf-8-sig'));
-s=c['drive']['local_sync_root'];
-print(s); print(s+'\\'+c['drive']['inbox_folder']); print(s+'\\'+c['drive']['error_folder']); print(s+'\\'+c['drive']['processed_folder'])"
+# Resolve Drive folders for before/after counts (print_drive_dirs — never ADMIN)
+$cfgOut = & python ".\pipeline\print_drive_dirs.py"
 $lines = @($cfgOut)
-$SyncRoot = if ($lines.Count -ge 1) { $lines[0] } else { "G:\Drive của tôi\PKDK_Thuankieu_Pipeline" }
+$SyncRoot = if ($lines.Count -ge 1) { $lines[0] } else { "G:\Drive cua toi\PKDK_Thuankieu_Pipeline" }
 $Inbox = if ($lines.Count -ge 2) { $lines[1] } else { Join-Path $SyncRoot "INBOX_CLS" }
 $ErrorDir = if ($lines.Count -ge 3) { $lines[2] } else { Join-Path $SyncRoot "ERROR" }
 $Processed = if ($lines.Count -ge 4) { $lines[3] } else { Join-Path $SyncRoot "PROCESSED" }
+if ($SyncRoot -match '(?i)^[CD]:\\' -or $SyncRoot -notmatch '(?i)^G:') {
+  Write-Host "DUNG: sync khong phai G: ($SyncRoot). KHONG fallback ADMIN."
+  exit 2
+}
+& python ".\pipeline\assert_g_pipeline.py"
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "DUNG: G: chua san. Mo Google Drive Desktop roi chay lai."
+  exit 2
+}
 
 $nIn0 = Count-Pdf $Inbox
 $nEr0 = Count-Pdf $ErrorDir

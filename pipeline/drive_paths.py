@@ -93,8 +93,12 @@ def _pdf_count(root: Path) -> int:
     return n
 
 
-def discover_pipeline_root(cfg: dict | None = None) -> Path:
-    """Always G:\\Drive của tôi\\PKDK_Thuankieu_Pipeline. Never D: / ADMIN / may B."""
+def resolve_g_sync(cfg: dict | None = None) -> Path:
+    """PDF sync root: live G: if mounted, else pinned G: path.
+
+    Never returns ADMIN repo, D:, or any non-G path on Windows.
+    Callers on Windows must abort when g_pipeline_live() is None.
+    """
     live = g_pipeline_live()
     if live is not None:
         return live
@@ -103,7 +107,7 @@ def discover_pipeline_root(cfg: dict | None = None) -> Path:
     raw = str((cfg.get("drive") or {}).get("local_sync_root") or "").strip()
     if raw:
         u = raw.replace("/", "\\").upper()
-        # Refuse ADMIN repo / D: / anything not G:
+        # Only accept an existing G: path — refuse ADMIN / D: / C:
         if u.startswith("G:") and not is_non_g_pipeline(raw):
             return Path(raw)
 
@@ -113,12 +117,27 @@ def discover_pipeline_root(cfg: dict | None = None) -> Path:
         dest.mkdir(parents=True, exist_ok=True)
         return dest
 
-    # Windows + G: unmounted: still return pin (caller must abort if not live).
+    # Windows + G: unmounted: pinned path for abort messaging only.
     # NEVER return ROOT / ADMIN — that caused sync=C:\Users\thais\ADMIN.
     return PINNED_PIPELINE
 
 
+def discover_pipeline_root(cfg: dict | None = None) -> Path:
+    """Always G:\\Drive của tôi\\PKDK_Thuankieu_Pipeline. Never D: / ADMIN / may B."""
+    return resolve_g_sync(cfg)
+
+
+def abort_if_not_g_live() -> str | None:
+    """Return abort reason on Windows when G: pipeline is not live; else None."""
+    if not sys.platform.startswith("win"):
+        return None
+    if g_pipeline_live() is None:
+        return "g_drive_missing"
+    return None
+
+
 def discover_build_root(cfg: dict | None = None) -> Path:
+    """Logs/excel — ALWAYS under ADMIN repo pipeline/work/build (never G:)."""
     del cfg
     return local_work_build()
 
@@ -192,7 +211,12 @@ def sync_drive_layout(cfg: dict | None = None) -> dict:
         "build_root": str(build),
         "config": str(cfg_path),
         "pdf_counts": counts,
-        "using_local_fallback": not on_g and str(ROOT) in str(pipeline),
+        # Dev/CI only — never a Windows prod fallback to ADMIN
+        "using_local_fallback": (
+            (not sys.platform.startswith("win"))
+            and (not on_g)
+            and (PIPELINE_NAME in str(pipeline))
+        ),
         "hint": (
             ""
             if on_g and _pdf_count(pipeline) > 0

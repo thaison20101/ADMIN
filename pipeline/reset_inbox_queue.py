@@ -16,6 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from drive_paths import g_pipeline_live, resolve_g_sync  # noqa: E402
 from hourly_sync import read_cases, register_new_files, write_cases  # noqa: E402
 from phase_b_preview import load_config  # noqa: E402
 from win_console import safe_print, setup_utf8_stdio  # noqa: E402
@@ -25,9 +26,13 @@ setup_utf8_stdio()
 
 def main() -> int:
     cfg = load_config()
-    sync = Path(cfg.get("drive", {}).get("local_sync_root") or "")
-    inbox = sync / cfg["drive"]["inbox_folder"] if sync.exists() else ROOT / "INBOX_CLS"
-    error = sync / cfg["drive"]["error_folder"] if sync.exists() else ROOT / "ERROR"
+    if sys.platform.startswith("win") and g_pipeline_live() is None:
+        safe_print("ABORT: G: chua mount — khong fallback ADMIN/ROOT")
+        return 2
+
+    sync = resolve_g_sync(cfg)
+    inbox = sync / cfg["drive"].get("inbox_folder", "INBOX_CLS")
+    error = sync / cfg["drive"].get("error_folder", "ERROR")
     cases_path = ROOT / cfg.get("tracking", {}).get("cases_csv", "tracking/cases.csv")
 
     rows = read_cases(cases_path)
@@ -68,6 +73,7 @@ def main() -> int:
 
     write_cases(cases_path, rows)
     safe_print("========== RESET INBOX/ERROR QUEUE ==========")
+    safe_print(f"SYNC: {sync}")
     safe_print(f"Inbox folder : {inbox}")
     safe_print(f"Error folder : {error}")
     safe_print(f"PDFs on disk : {len(work_names)}")

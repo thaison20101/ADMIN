@@ -41,12 +41,11 @@ KEEP_MARKERS = (
 
 
 def _drive_dirs(cfg: dict) -> tuple[Path, Path]:
-    from drive_paths import discover_pipeline_root, g_pipeline_live, PINNED_PIPELINE
+    from drive_paths import g_pipeline_live, resolve_g_sync
 
-    live = g_pipeline_live()
-    sync = live if live is not None else discover_pipeline_root(cfg)
-    if not str(sync).replace("/", "\\").upper().startswith("G:"):
-        sync = PINNED_PIPELINE
+    if sys.platform.startswith("win") and g_pipeline_live() is None:
+        raise RuntimeError("ABORT: G: chua mount — khong fallback ADMIN")
+    sync = resolve_g_sync(cfg)
     processed = sync / cfg["drive"].get("processed_folder", "PROCESSED")
     missing = sync / cfg["drive"].get("missing_folder", "MISSING")
     return processed, missing
@@ -79,7 +78,11 @@ def main() -> int:
     args = ap.parse_args()
 
     cfg = load_config()
-    processed, missing = _drive_dirs(cfg)
+    try:
+        processed, missing = _drive_dirs(cfg)
+    except RuntimeError as e:
+        safe_print(str(e))
+        return 2
     cases_path = ROOT / cfg.get("tracking", {}).get("cases_csv", "tracking/cases.csv")
     rows = read_cases(cases_path)
 

@@ -78,19 +78,16 @@ def load_config() -> dict:
 
 
 def _resolve_existing_build(raw: str) -> Path:
-    """Prefer an existing Drive build folder; try common Google Drive name variants."""
+    """Prefer local pipeline/work/build — NEVER write logs/excel to G: (unmounts Drive)."""
+    try:
+        from drive_paths import local_work_build
+
+        return local_work_build()
+    except Exception:
+        pass
     candidates = []
-    if raw:
+    if raw and not str(raw).replace("/", "\\").upper().startswith("G:"):
         candidates.append(Path(raw))
-    # Common Google Drive Desktop folder names on Windows
-    for drive in ("G:",):
-        for mid in (
-            "Drive của tôi",
-            "Drive của Tôi",
-            "My Drive",
-            "Drive cua toi",
-        ):
-            candidates.append(Path(f"{drive}/{mid}/build for Supper Data"))
     candidates.append(ROOT / "pipeline" / "work" / "build")
 
     seen = set()
@@ -104,32 +101,34 @@ def _resolve_existing_build(raw: str) -> Path:
                 return p
         except Exception:
             continue
-    # default: configured/raw even if missing (will be created)
-    return Path(raw) if raw else candidates[0]
+    dest = ROOT / "pipeline" / "work" / "build"
+    dest.mkdir(parents=True, exist_ok=True)
+    return dest
 
 
 def build_root(cfg: dict) -> Path:
+    """Logs/excel always under ADMIN repo — never G:\\build for Supper Data."""
     try:
-        from drive_paths import discover_build_root, discover_pipeline_root, ensure_standard_folders
+        from drive_paths import discover_build_root, resolve_g_sync, ensure_standard_folders, g_pipeline_live
 
-        pipeline = discover_pipeline_root(cfg)
         p = discover_build_root(cfg)
-        ensure_standard_folders(pipeline, p)
+        if g_pipeline_live() is not None:
+            ensure_standard_folders(resolve_g_sync(cfg), p)
         return p
     except Exception:
-        raw = cfg.get("drive", {}).get("build_root") or r"G:\Drive của tôi\build for Supper Data"
-        p = _resolve_existing_build(str(raw))
+        p = ROOT / "pipeline" / "work" / "build"
+        p.mkdir(parents=True, exist_ok=True)
         for sub in ("excel_preview", "missing_or_updated", "logs", "cases_snapshot"):
             (p / sub).mkdir(parents=True, exist_ok=True)
         return p
 
 
 def inbox_dir(cfg: dict) -> Path:
+    """INBOX under G: pipeline only — never ADMIN / ROOT fallback."""
     try:
-        from drive_paths import discover_pipeline_root, PINNED_PIPELINE, g_pipeline_live
+        from drive_paths import resolve_g_sync, PINNED_PIPELINE
 
-        live = g_pipeline_live()
-        sync = live if live is not None else discover_pipeline_root(cfg)
+        sync = resolve_g_sync(cfg)
         if str(sync).replace("/", "\\").upper().startswith("G:") or not sys.platform.startswith("win"):
             return sync / cfg["drive"].get("inbox_folder", "INBOX_CLS")
         return PINNED_PIPELINE / cfg["drive"].get("inbox_folder", "INBOX_CLS")

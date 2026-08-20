@@ -30,7 +30,12 @@ setup_utf8_stdio()
 
 def main() -> int:
     cfg = load_config()
-    sync = Path(cfg.get("drive", {}).get("local_sync_root") or "")
+    from drive_paths import g_pipeline_live, resolve_g_sync
+
+    if sys.platform.startswith("win") and g_pipeline_live() is None:
+        safe_print("ABORT: G: chua mount — khong fallback ADMIN/ROOT")
+        return 2
+    sync = resolve_g_sync(cfg)
     folders = {
         "PROCESSED": sync / cfg["drive"].get("processed_folder", "PROCESSED"),
         "ERROR": sync / cfg["drive"].get("error_folder", "ERROR"),

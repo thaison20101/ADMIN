@@ -195,7 +195,13 @@ if __name__ == "__main__":
             assert picked.resolve() == fat.resolve(), picked
 
     test_best_pipeline_picks_fat_tree()
-    from pipeline.drive_paths import _first_existing_dir, PINNED_PIPELINE, discover_build_root, is_forbidden_d_pipeline
+    from pipeline.drive_paths import (
+        _first_existing_dir,
+        PINNED_PIPELINE,
+        discover_build_root,
+        is_forbidden_d_pipeline,
+        resolve_g_sync,
+    )
 
     assert callable(_first_existing_dir)
     assert "PKDK_Thuankieu_Pipeline" in str(PINNED_PIPELINE)
@@ -204,7 +210,50 @@ if __name__ == "__main__":
     bs = str(build_dir).replace("\\", "/")
     assert bs.endswith("pipeline/work/build") or "/pipeline/work/build" in bs, build_dir
 
-    from pipeline.auto_cycle import _row_priority
+    # Fallback must never resolve to ADMIN repo / D: even if config says so
+    bad_cfg = {
+        "drive": {
+            "local_sync_root": r"C:\Users\thais\ADMIN",
+        }
+    }
+    sync_bad = resolve_g_sync(bad_cfg)
+    su = str(sync_bad).replace("/", "\\").upper()
+    assert not su.rstrip("\\").endswith("ADMIN"), sync_bad
+    assert not su.startswith("D:"), sync_bad
+
+    d_cfg = {"drive": {"local_sync_root": r"D:\PKDK_Thuankieu_Pipeline"}}
+    sync_d = resolve_g_sync(d_cfg)
+    assert not str(sync_d).replace("/", "\\").upper().startswith("D:"), sync_d
+
+    # Windows + G: dead: pin G:, never ADMIN even when config points there
+    import sys as _sys
+    import pipeline.drive_paths as _dp
+
+    _real_plat = _sys.platform
+    _orig_live = _dp.g_pipeline_live
+    _sys.platform = "win32"
+    _dp.g_pipeline_live = lambda: None
+    try:
+        pinned = _dp.resolve_g_sync(bad_cfg)
+        assert str(pinned) == str(_dp.PINNED_PIPELINE), pinned
+        pinned_d = _dp.resolve_g_sync(d_cfg)
+        assert str(pinned_d) == str(_dp.PINNED_PIPELINE), pinned_d
+    finally:
+        _dp.g_pipeline_live = _orig_live
+        _sys.platform = _real_plat
+
+    from pipeline.auto_cycle import _collect_scan_dirs, _row_priority
+    from pathlib import Path as _P
+
+    def test_repair_skips_missing():
+        inbox, miss, err, proc = _P("INBOX_CLS"), _P("MISSING"), _P("ERROR"), _P("PROCESSED")
+        dirs = _collect_scan_dirs(
+            _P("sync"), inbox, miss, err, proc, full_scan=False, repair=True
+        )
+        assert miss not in dirs
+        assert inbox in dirs and err in dirs and proc in dirs
+
+    test_repair_skips_missing()
 
     def test_inbox_before_missing():
         inbox = {

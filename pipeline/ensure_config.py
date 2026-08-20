@@ -71,9 +71,13 @@ def main() -> int:
         sync_root = summary["pipeline_root"]
         build_root = summary["build_root"]
     except Exception as e:
-        sync_root = drive.get("local_sync_root")
-        build_root = drive.get("build_root")
+        # Never fall back to ADMIN as sync — keep pinned G: from config write above
+        sync_root = drive.get("local_sync_root") or DEFAULT_SYNC
+        build_root = drive.get("build_root") or DEFAULT_BUILD
         print(f"WARN drive_paths: {e}")
+        if str(sync_root).replace("/", "\\").upper().startswith(("C:", "D:")):
+            sync_root = DEFAULT_SYNC
+            print("WARN: refuse ADMIN/D fallback; keep G: pin")
 
     from datetime import date
 

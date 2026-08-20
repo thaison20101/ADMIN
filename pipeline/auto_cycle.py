@@ -70,25 +70,14 @@ def _drive_dirs(cfg: dict) -> tuple[Path, Path, Path, Path, Path]:
     ABORT sync=C:\\Users\\thais\\ADMIN after G: died mid full-scan.
     """
     from drive_paths import (
-        discover_pipeline_root,
+        resolve_g_sync,
         ensure_standard_folders,
         discover_build_root,
         g_pipeline_live,
-        PINNED_PIPELINE,
     )
 
-    live = g_pipeline_live()
-    if live is not None:
-        sync = live
-    else:
-        # Keep pinned G: path for abort messaging; do NOT mkdir / use ROOT
-        sync = PINNED_PIPELINE
-        try:
-            raw = str((cfg.get("drive") or {}).get("local_sync_root") or "").strip()
-            if raw.replace("/", "\\").upper().startswith("G:"):
-                sync = Path(raw)
-        except Exception:
-            pass
+    # resolve_g_sync: live G: or pinned G: — never ADMIN / D: / C:
+    sync = resolve_g_sync(cfg)
     try:
         build = discover_build_root(cfg)
         if g_pipeline_live() is not None:
@@ -110,10 +99,12 @@ def _collect_scan_dirs(
     processed: Path,
     *,
     full_scan: bool,
+    repair: bool = False,
 ) -> list[Path]:
     """Folders whose PDFs are registered + re-queued this run.
 
     full_scan=True → TOAN BO folder (ke ca PROCESSED) de khong bo sot BN cu.
+    repair → INBOX + ERROR + PROCESSED (khong MISSING).
     hourly → INBOX + MISSING + ERROR (khong rematch PROCESSED).
     """
     if not full_scan:
@@ -303,9 +294,15 @@ def run_auto_cycle(
     if full_scan:
         audit_processed = True
 
-    mode = "FULL_SCAN" if full_scan else "HOURLY"
+    mode = "FULL_SCAN" if full_scan else ("REPAIR" if repair else "HOURLY")
     scan_dirs = _collect_scan_dirs(
-        sync, inbox, missing, error_dir, processed, full_scan=full_scan
+        sync,
+        inbox,
+        missing,
+        error_dir,
+        processed,
+        full_scan=full_scan,
+        repair=repair,
     )
     safe_print(f"Mode: {mode} | scan dirs ({len(scan_dirs)}): {[d.name for d in scan_dirs]}")
     safe_print(f"MISSING rematch budget this run: {missing_budget}")

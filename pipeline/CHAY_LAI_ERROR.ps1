@@ -40,9 +40,14 @@ for ($round = 1; $round -le 3; $round++) {
   if ($imported -le 0 -and $round -ge 2) { break }
 }
 
-$cfgOut = & python -c "import json;from pathlib import Path;c=json.loads(Path('pipeline/config.local.json').read_text(encoding='utf-8-sig'));s=c['drive']['local_sync_root'];print(s+'\\'+c['drive']['error_folder']);print(s+'\\'+c['drive']['processed_folder'])"
-$err = @($cfgOut)[0]
-$proc = @($cfgOut)[1]
+$cfgOut = & python ".\pipeline\print_drive_dirs.py"
+# lines: sync, inbox, error, processed, missing, BUILD..., COUNTS...
+$err = @($cfgOut)[2]
+$proc = @($cfgOut)[3]
+if ("$err" -notmatch '(?i)ERROR' -or "$err" -match '(?i)^[CD]:\\Users\\thais\\ADMIN') {
+  Write-Host "DUNG: ERROR path khong phai G: ($err). KHONG fallback ADMIN."
+  exit 2
+}
 Write-Host ""
 Write-Host "========== XONG =========="
 Write-Host ("ERROR con: {0}" -f @(Get-ChildItem -LiteralPath $err -Filter *.pdf -ErrorAction SilentlyContinue).Count)

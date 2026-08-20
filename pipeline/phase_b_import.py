@@ -299,7 +299,7 @@ def main() -> int:
         safe_print("Nothing to import.")
         safe_print(
             "Hint: pass the approved Excel explicitly, e.g.\n"
-            '  -Preview "G:\\Drive của tôi\\build for Supper Data\\excel_preview\\CLS_preview_20260802-001204.xlsx"'
+            '  -Preview "C:\\Users\\thais\\ADMIN\\pipeline\\work\\build\\excel_preview\\CLS_preview_....xlsx"'
         )
         return 0
 

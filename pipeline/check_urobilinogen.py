@@ -32,13 +32,11 @@ setup_utf8_stdio()
 
 
 def _folders(cfg: dict, which: str) -> list[Path]:
-    from drive_paths import g_pipeline_live, PINNED_PIPELINE
+    from drive_paths import g_pipeline_live, resolve_g_sync
 
-    live = g_pipeline_live()
-    sync = live if live is not None else PINNED_PIPELINE
-    raw = str(cfg.get("drive", {}).get("local_sync_root") or "")
-    if raw.replace("/", "\\").upper().startswith("G:") and Path(raw).exists():
-        sync = Path(raw)
+    if sys.platform.startswith("win") and g_pipeline_live() is None:
+        raise RuntimeError("ABORT: G: chua mount — khong fallback ADMIN")
+    sync = resolve_g_sync(cfg)
     mapping = {
         "PROCESSED": sync / cfg["drive"].get("processed_folder", "PROCESSED"),
         "ERROR": sync / cfg["drive"].get("error_folder", "ERROR"),

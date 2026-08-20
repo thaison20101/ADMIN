@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from drive_paths import g_pipeline_live, resolve_g_sync  # noqa: E402
 from hourly_sync import read_cases, register_new_files, sha256_file, write_cases  # noqa: E402
 from phase_b_preview import load_config  # noqa: E402
 from win_console import safe_print, setup_utf8_stdio  # noqa: E402
@@ -31,10 +32,14 @@ def main() -> int:
     args = ap.parse_args()
 
     cfg = load_config()
-    sync = Path(cfg.get("drive", {}).get("local_sync_root") or "")
-    inbox = sync / cfg["drive"]["inbox_folder"] if sync.exists() else ROOT / "INBOX_CLS"
-    error = sync / cfg["drive"]["error_folder"] if sync.exists() else ROOT / "ERROR"
-    processed = sync / cfg["drive"]["processed_folder"] if sync.exists() else ROOT / "PROCESSED"
+    if sys.platform.startswith("win") and g_pipeline_live() is None:
+        safe_print("ABORT: G: chua mount — khong fallback ADMIN/ROOT")
+        return 2
+
+    sync = resolve_g_sync(cfg)
+    inbox = sync / cfg["drive"].get("inbox_folder", "INBOX_CLS")
+    error = sync / cfg["drive"].get("error_folder", "ERROR")
+    processed = sync / cfg["drive"].get("processed_folder", "PROCESSED")
     cases_path = ROOT / cfg.get("tracking", {}).get("cases_csv", "tracking/cases.csv")
 
     rows = read_cases(cases_path)
@@ -80,6 +85,7 @@ def main() -> int:
 
     write_cases(cases_path, rows)
     safe_print("========== RESET ALL FOLDERS ==========")
+    safe_print(f"SYNC: {sync}")
     for tag, folder in folders:
         n = len(list(folder.rglob("*.pdf"))) if folder.exists() else 0
         safe_print(f"{tag}: {folder} pdfs={n}")
