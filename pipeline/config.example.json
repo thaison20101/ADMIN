@@ -7,7 +7,7 @@
     "missing_folder": "MISSING",
     "local_sync_root": "G:/Drive của tôi/PKDK_Thuankieu_Pipeline",
     "build_root": "pipeline/work/build",
-    "note": "Full-scan: TOAN BO folder (ke ca PROCESSED). Hourly: chi INBOX_CLS + MISSING. No TTHC → MISSING. Match: ten+nam_sinh+ngay_in_KQ."
+    "note": "May A only. Inbox=INBOX_CLS. Hourly: INBOX_CLS+MISSING. Full: all folders. Match: ho+ten+nam_sinh. FULL adult->PROCESSED; FULL kid->UNDER 18; PARTIAL->ERROR; no TTHC->MISSING. Date 01/07/2026->today."
   },
   "tracking": {
     "cases_csv": "tracking/cases.csv",
@@ -41,7 +41,9 @@
     "form_code": "KSKDK_Phieu_CanLamSang",
     "form_id": 1000250,
     "loai_kham_dinh_ky": 5152,
-    "urine_negative_map": { "Âm tính": "Negative" },
+    "urine_negative_map": {
+      "Âm tính": "Negative"
+    },
     "nitrit_am_tinh_id": 5120,
     "nitrit_duong_tinh_id": 5119,
     "count_suffix_hash": true,

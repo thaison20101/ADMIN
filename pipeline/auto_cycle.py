@@ -104,30 +104,25 @@ def _collect_scan_dirs(
 ) -> list[Path]:
     """Folders whose PDFs are registered + re-queued this run.
 
-    full_scan=True → TOAN BO folder (ke ca PROCESSED) de khong bo sot BN cu.
-    repair → INBOX + ERROR + PROCESSED (khong MISSING).
-    hourly → ALL inbox aliases (INBOX_CLS + inbox/...) + ERROR.
+    full_scan=True → TOAN BO (ke ca PROCESSED + UNDER 18) — urea/BN cu.
+    repair → INBOX_CLS + ERROR + PROCESSED + UNDER 18.
+    hourly → chi INBOX_CLS tren disk; MISSING rematch tu CSV.
     """
-    from drive_paths import discover_inbox_dirs
+    from drive_paths import UNDER18_FOLDER, discover_inbox_dirs
 
     inbox_dirs = discover_inbox_dirs(sync, inbox)
+    under18 = sync / UNDER18_FOLDER
     if not full_scan:
         if repair:
-            # Urea/field fill: INBOX+ERROR+PROCESSED only. MISSING has no TTHC
-            # → cannot fill web; walking 11k PDFs also unmounts G:.
-            dirs = list(inbox_dirs) + [error_dir, processed]
-            return _uniq_dirs(dirs)
-        # Hourly/rematch: NEVER rglob the 10k MISSING folder on G:.
-        # Rematch uses tracking CSV (see run_auto_cycle).
-        return _uniq_dirs(list(inbox_dirs) + [error_dir])
+            return _uniq_dirs(list(inbox_dirs) + [error_dir, processed, under18])
+        return _uniq_dirs(list(inbox_dirs))
     roots: list[Path] = []
-    # Skip UNDER 18 (parked kids) and VCS
-    skip = {".git", "under 18", "under_18", "under18"}
+    skip = {".git"}
     if sync.exists():
         for child in sorted(sync.iterdir()):
             if child.is_dir() and child.name.lower() not in skip:
                 roots.append(child)
-    for must in (*inbox_dirs, missing, error_dir, processed):
+    for must in (*inbox_dirs, missing, error_dir, processed, under18):
         if must.exists() and must not in roots:
             roots.append(must)
     return roots
@@ -146,6 +141,16 @@ def _uniq_dirs(dirs: list[Path]) -> list[Path]:
         seen.add(key)
         out.append(d)
     return out
+
+
+def _patient_under18(nam_sinh: str, file_name: str = "") -> bool:
+    """Age <= 17 by birth year, or child mau M1/M2/M12 in filename."""
+    try:
+        from move_under18 import is_under18
+
+        return is_under18(nam_sinh=nam_sinh or "", file_name=file_name or "")
+    except Exception:
+        return False
 
 def _resolve_pdf(row: dict, inbox: Path, *extra_dirs: Path) -> Path | None:
     src = Path(row.get("source_file") or "")
@@ -280,18 +285,26 @@ def _route_after_import(
     coverage: str,
     processed: Path,
     error_dir: Path,
+    under18_dir: Path,
     stats: Counter,
     note: str,
     moves: list[str],
+    nam_sinh: str = "",
 ) -> None:
-    """FULL → PROCESSED; URINE_ONLY/PARTIAL/EMPTY → ERROR (đã nhập phần có trên PDF)."""
+    """FULL adult → PROCESSED; FULL under18 → UNDER 18; PARTIAL → ERROR."""
+    is_kid = _patient_under18(nam_sinh or row.get("nam_sinh") or "", pdf.name)
     if coverage == "FULL":
-        dest = processed
+        if is_kid:
+            dest = under18_dir
+            tag = "UNDER18"
+            stats["routed_under18"] += 1
+        else:
+            dest = processed
+            tag = "PROCESSED"
+            stats["routed_processed"] += 1
         row["status"] = "IMPORTED"
         row["notes"] = f"imported_full:{note}"[:200]
         stats["imported"] += 1
-        stats["routed_processed"] += 1
-        tag = "PROCESSED"
     else:
         dest = error_dir
         row["status"] = "ERROR_IMPORT"
@@ -299,11 +312,15 @@ def _route_after_import(
         stats["imported_partial_to_error"] += 1
         stats["routed_error"] += 1
         tag = "ERROR"
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
     moved = _move_pdf(pdf, dest, pid=pid)
     if moved:
         row["source_file"] = str(moved)
         row["file_name"] = moved.name
-        if tag == "PROCESSED":
+        if tag in {"PROCESSED", "UNDER18"}:
             try:
                 for folder in (error_dir,):
                     for dup in folder.glob(Path(pdf.name).name):
@@ -315,7 +332,7 @@ def _route_after_import(
     elif pdf.exists():
         row["notes"] = f"{row['notes']};move_failed"[:200]
         moves.append(f"{tag}_MOVE_FAIL\t{row.get('ho_ten')}\t{pdf.name}\t->\t{dest.name}")
-    safe_print(f"  {tag} coverage={coverage} {row.get('ho_ten')} pid={pid}")
+    safe_print(f"  {tag} coverage={coverage} kid={is_kid} {row.get('ho_ten')} pid={pid}")
 
 
 def run_auto_cycle(
@@ -383,12 +400,21 @@ def _run_auto_cycle_inner(
         return {"abort": "g_drive_missing", "sync": str(sync)}
 
     # Only mkdir after G: confirmed live — never create under ADMIN fallback
-    for p in (inbox, processed, error_dir, missing):
+    from drive_paths import UNDER18_FOLDER, migrate_stray_inbox
+
+    under18_dir = sync / UNDER18_FOLDER
+    for p in (inbox, processed, error_dir, missing, under18_dir):
         try:
             p.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             safe_print(f"ABORT: khong tao folder tren G: ({e}). sync={sync}")
             return {"abort": "g_mkdir_failed", "sync": str(sync)}
+    try:
+        n_mig = migrate_stray_inbox(sync)
+        if n_mig:
+            safe_print(f"MIGRATE stray inbox -> INBOX_CLS: {n_mig} pdfs")
+    except Exception as e:
+        safe_print(f"WARN migrate inbox: {e}")
 
     # Plan MISSING rematch budget early (TTHC often added after park in MISSING)
     # <0 (default): hourly 1500 / repair 0 / full-scan all
@@ -424,7 +450,7 @@ def _run_auto_cycle_inner(
     safe_print(f"Mode: {mode} | scan dirs ({len(scan_dirs)}): {[d.name for d in scan_dirs]}")
     safe_print(f"MISSING rematch budget this run: {missing_budget}")
     safe_print("Match TTHC: ho + ten (full name tokens dau+cuoi) + nam sinh")
-    safe_print("START: inbox aliases + ERROR walk — MISSING rematch from tracking CSV")
+    safe_print("START: INBOX_CLS disk + MISSING CSV | FULL->PROCESSED/UNDER18 PARTIAL->ERROR")
     cases_path = ROOT / cfg.get("tracking", {}).get("cases_csv", "tracking/cases.csv")
     from hourly_sync import read_cases, register_new_files, write_cases  # local import
 
@@ -553,10 +579,7 @@ def _run_auto_cycle_inner(
     # Oldest last_checked first so 8 rounds of 2500 rotate through the backlog.
     csv_missing_queued = 0
     csv_missing_total = 0
-    csv_skipped_u18 = 0
     if (not full_scan) and (not repair) and missing_budget > 0:
-        from move_under18 import is_under18
-
         miss_rows = []
         for r in rows:
             src_u = (r.get("source_file") or "").replace("\\", "/").upper()
@@ -586,9 +609,7 @@ def _run_auto_cycle_inner(
                     "source_file": r.get("source_file") or "",
                 }
             )
-            if is_under18(nam_sinh=year or r.get("nam_sinh") or "", file_name=fname):
-                csv_skipped_u18 += 1
-                continue
+            # Under-18 in MISSING still rematch (M2 form) — do not skip
             r["status"] = "READY_IMPORT"
             r["import_attempts"] = "0"
             r["notes"] = f"csv_missing_rematch:{old}"[:200]
@@ -596,8 +617,7 @@ def _run_auto_cycle_inner(
             csv_missing_queued += 1
         safe_print(
             f"MISSING rematch from CSV (no G: walk): queued={csv_missing_queued} "
-            f"tracked={csv_missing_total} budget={missing_budget} "
-            f"skipped_under18={csv_skipped_u18}"
+            f"tracked={csv_missing_total} budget={missing_budget}"
         )
 
     requeued_err = 0
@@ -766,7 +786,7 @@ def _run_auto_cycle_inner(
         status = (row.get("status") or "").upper()
 
         # Attach file early — always re-check PDFs in current scan dirs
-        pdf = _resolve_pdf(row, inbox, missing, processed, error_dir)
+        pdf = _resolve_pdf(row, inbox, missing, processed, error_dir, under18_dir)
         if not pdf or not pdf.exists():
             if status in PENDING | {"IMPORTED", "SKIP_ALREADY_CLS", "PARSE_ERROR"}:
                 row["notes"] = "source_pdf_missing"
@@ -775,13 +795,23 @@ def _run_auto_cycle_inner(
         row["file_name"] = pdf.name
         row["source_file"] = str(pdf)
         src_u = str(pdf).replace("\\", "/").upper()
-        # Parked under-18 folder — user moves back to INBOX when ready
-        if "/UNDER 18/" in src_u or "/UNDER_18/" in src_u or src_u.endswith("/UNDER 18"):
+        # UNDER 18: hourly skip (da import). Full/repair: kiem urea lai.
+        in_under18 = (
+            "/UNDER 18/" in src_u or "/UNDER_18/" in src_u or src_u.endswith("/UNDER 18")
+        )
+        if in_under18 and not full_scan and not repair:
             stats["skipped_under18"] += 1
             continue
-        # Hourly: INBOX / MISSING / ERROR. Full-scan: moi folder (ke ca PROCESSED)
-        if not full_scan and not (
-            ("/INBOX" in src_u) or ("/MISSING" in src_u) or ("/ERROR" in src_u)
+        # Hourly: INBOX_CLS + MISSING. Full-scan: moi folder. Repair: INBOX+ERROR+PROCESSED+U18.
+        if not full_scan and not repair and not (
+            ("/INBOX" in src_u) or ("/MISSING" in src_u)
+        ):
+            continue
+        if not full_scan and repair and not (
+            ("/INBOX" in src_u)
+            or ("/ERROR" in src_u)
+            or ("/PROCESSED" in src_u)
+            or in_under18
         ):
             continue
         if (not full_scan) and ("/MISSING" in src_u):
@@ -982,9 +1012,11 @@ def _run_auto_cycle_inner(
                         coverage=coverage,
                         processed=processed,
                         error_dir=error_dir,
+                        under18_dir=under18_dir,
                         stats=stats,
                         note="already_has_cls",
                         moves=moves,
+                        nam_sinh=str(row.get("nam_sinh") or data.get("nam_sinh") or ""),
                     )
                     continue
 
@@ -1008,8 +1040,6 @@ def _run_auto_cycle_inner(
             payload["cdId"] = int(cdid)
         fields_sent = len([k for k in payload if k in LAB_TO_FORM.values()])
         missing_on_web = cls_missing_lab_fields(existing, payload) if has_cls else []
-        # Urea often absent on Thuận Kiều PDF — never block / force-repair for it alone
-        missing_on_web = [k for k in missing_on_web if k != "SinhHoaMau_Ure"]
         # Hourly: defer Urobilinogen-only gaps to CHAY_REPAIR_URO.ps1
         # (otherwise hundreds of REPAIR incomplete burn all import slots)
         if not repair and missing_on_web == ["NuocTieu_Urobilinogen"]:
@@ -1020,7 +1050,7 @@ def _run_auto_cycle_inner(
         if not repair and looks_incomplete:
             # same defer if the only payload gap is urobilinogen
             miss2 = cls_missing_lab_fields(existing, payload)
-            miss2 = [k for k in miss2 if k not in {"SinhHoaMau_Ure", "NuocTieu_Urobilinogen"}]
+            miss2 = [k for k in miss2 if k not in {"NuocTieu_Urobilinogen"}]
             if not miss2 and "NuocTieu_Urobilinogen" in (cls_missing_lab_fields(existing, payload) or []):
                 looks_incomplete = False
                 stats["defer_urobilinogen"] += 1
@@ -1063,9 +1093,11 @@ def _run_auto_cycle_inner(
                 coverage=coverage,
                 processed=processed,
                 error_dir=error_dir,
+                under18_dir=under18_dir,
                 stats=stats,
                 note="already_on_web",
                 moves=moves,
+                nam_sinh=str(data.get("nam_sinh") or row.get("nam_sinh") or ""),
             )
             continue
         if not has_cls or needs_urine_fix:
@@ -1133,7 +1165,7 @@ def _run_auto_cycle_inner(
         partial_bad = ("SET-no-urine-text" in (msg or "")) or ("SET-urine-all-dropped" in (msg or ""))
 
         if ok and verified and fields_sent > 0 and urine_ok and not partial_bad:
-            still_missing = [k for k in still_missing if k != "SinhHoaMau_Ure"]
+            # keep urea in still_missing when PDF has it
             if still_missing:
                 # PDF fields still empty on web — keep retrying (do not park yet)
                 row["status"] = "READY_IMPORT"
@@ -1170,9 +1202,11 @@ def _run_auto_cycle_inner(
                 coverage=coverage,
                 processed=processed,
                 error_dir=error_dir,
+                under18_dir=under18_dir,
                 stats=stats,
                 note=msg or "imported",
-                        moves=moves,
+                moves=moves,
+                nam_sinh=str(data.get("nam_sinh") or row.get("nam_sinh") or ""),
             )
             safe_print(f"  SAVED {data.get('ho_ten')} pid={pid} fields={fields_sent} coverage={coverage}")
         else:

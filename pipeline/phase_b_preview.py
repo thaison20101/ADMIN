@@ -749,8 +749,16 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
         date_ok = _date_proximity_score(pdf_result_d, _rec_ngaykham(c))
         mau = row.get("mau_kham")
         mau_ok = 1 if mau and c.get("_mau") == mau else 0
-        # Primary: year+name+phone+date; secondary: mau
-        return (year_ok + name_ok + phone_ok + date_ok, mau_ok, date_ok)
+        # Kids (age<=17): prefer M2/M12 list over M3/M4
+        kid_boost = 0
+        if yr_target and yr_target.isdigit():
+            try:
+                if int(yr_target) >= date.today().year - 17 and c.get("_mau") in {"M2", "M12"}:
+                    kid_boost = 2
+            except Exception:
+                pass
+        # Primary: year+name+phone+date; secondary: mau / kid form
+        return (year_ok + name_ok + phone_ok + date_ok + kid_boost, mau_ok, date_ok)
 
     uniq.sort(key=_score, reverse=True)
     # Require name soft-match when we have a name (after year filter)

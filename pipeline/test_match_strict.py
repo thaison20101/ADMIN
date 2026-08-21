@@ -261,27 +261,30 @@ if __name__ == "__main__":
             _P("sync"), inbox, miss, err, proc, full_scan=False, repair=False
         )
         assert miss not in dirs, dirs
-        assert inbox in dirs and err in dirs
+        assert inbox in dirs
+        assert err not in dirs  # hourly: INBOX_CLS only (MISSING via CSV)
         assert proc not in dirs
 
     test_hourly_scan_skips_missing_walk()
 
-    def test_discover_inbox_aliases():
+    def test_discover_inbox_only_cls():
         import tempfile
-        from pipeline.drive_paths import discover_inbox_dirs
+        from pipeline.drive_paths import discover_inbox_dirs, migrate_stray_inbox
 
         with tempfile.TemporaryDirectory() as d:
             root = _P(d)
             (root / "INBOX_CLS").mkdir()
             (root / "inbox").mkdir()
+            (root / "inbox" / "a.pdf").write_bytes(b"%PDF")
             (root / "MISSING").mkdir()
             found = discover_inbox_dirs(root, root / "INBOX_CLS")
             names = {p.name for p in found}
-            assert "INBOX_CLS" in names
-            assert "inbox" in names
-            assert "MISSING" not in names
+            assert names == {"INBOX_CLS"}
+            n = migrate_stray_inbox(root)
+            assert n == 1
+            assert (root / "INBOX_CLS" / "a.pdf").exists()
 
-    test_discover_inbox_aliases()
+    test_discover_inbox_only_cls()
 
     def test_count_pdfs_fast_top_level(tmp_path=None):
         import tempfile

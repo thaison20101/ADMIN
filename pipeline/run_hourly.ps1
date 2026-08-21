@@ -1,5 +1,8 @@
-# Windows hourly runner for Drive pipeline
-# Installed by: .\pipeline\install_hourly_task.ps1  or  .\pipeline\CHAY_MOT_LAN.ps1
+# Windows hourly runner for Drive pipeline (MAY A ONLY)
+# Lan dau (chua co FIRST_FULL_SCAN_DONE): --full-scan --repair
+# Sau do: chi INBOX_CLS + MISSING rematch CSV (nhe)
+#
+# Installed by: .\pipeline\install_hourly_task.ps1
 
 $ErrorActionPreference = "Continue"
 $Repo = Split-Path -Parent $PSScriptRoot
@@ -18,7 +21,6 @@ if (-not (Test-Path ".\pipeline\config.local.json")) {
 
 & python ".\pipeline\ensure_config.py" | Out-Null
 
-# Load Medinet login: env -> config.local.json -> defaults
 try {
   $credLines = @(& python ".\pipeline\medinet_creds.py" 2>$null)
   if ($credLines.Count -ge 2) {
@@ -55,21 +57,33 @@ if ($logDirOk) {
   $log = Join-Path $LocalLogDir ("hourly-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
 }
 
-if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdk_Thuankieu" }
-if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "pkdk_Thuankieu#2026" }
+$FlagFull = Join-Path $BuildRoot "FIRST_FULL_SCAN_DONE.txt"
+$doFull = -not (Test-Path -LiteralPath $FlagFull)
 
 Write-Host "BuildRoot: $BuildRoot"
-Write-Host "Hourly: quet INBOX_CLS + inbox(+alias) + ERROR; MISSING rematch tu CSV"
-Write-Host "  FULL -> PROCESSED | PARTIAL -> ERROR (nhap phan co) | no TTHC -> MISSING"
-Write-Host "Ngay kham index: 01/07/2026 -> hom nay (rolling)"
-Write-Host "Khop TTHC: ho + ten (token dau+cuoi, ten day du) + nam sinh"
-$started = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-& python -u ".\pipeline\hourly_sync.py" 2>&1 | Tee-Object -FilePath $log
-$code = $LASTEXITCODE
+Write-Host "INBOX: G:\Drive cua toi\PKDK_Thuankieu_Pipeline\INBOX_CLS"
+Write-Host "Khop: ho + ten + nam sinh | ngay kham 01/07/2026 -> hom nay"
+Write-Host "FULL nguoi lon->PROCESSED | FULL tre->UNDER 18 | PARTIAL->ERROR | no TTHC->MISSING"
 
-# Heartbeat o 2 cho: Drive build + local (de biet task co fire khi G:\ loi)
+$started = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+if ($doFull) {
+  Write-Host "MODE: FIRST FULL SCAN + REPAIR (toan bo folder)"
+  & python -u ".\pipeline\hourly_sync.py" --full-scan --repair 2>&1 | Tee-Object -FilePath $log
+  $code = $LASTEXITCODE
+  if ($code -eq 0) {
+    try {
+      Set-Content -LiteralPath $FlagFull -Value ("done=" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss")) -Encoding utf8
+      Write-Host "OK: da ghi FIRST_FULL_SCAN_DONE - lan sau chi INBOX_CLS+MISSING"
+    } catch {}
+  }
+} else {
+  Write-Host "MODE: HOURLY nhe - INBOX_CLS disk + MISSING CSV rematch"
+  & python -u ".\pipeline\hourly_sync.py" 2>&1 | Tee-Object -FilePath $log
+  $code = $LASTEXITCODE
+}
+
 $ended = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-$hb = "started=$started`nended=$ended`nexit=$code`nlog=$log`n"
+$hb = "started=$started`nended=$ended`nexit=$code`nlog=$log`nfull=$doFull`n"
 try {
   $hbPath = Join-Path $BuildRoot "logs\LAST_HOURLY_OK.txt"
   Ensure-Dir (Join-Path $BuildRoot "logs") | Out-Null

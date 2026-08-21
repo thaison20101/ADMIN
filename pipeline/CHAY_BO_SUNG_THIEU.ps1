@@ -38,7 +38,7 @@ if ($LASTEXITCODE -ne 0) {
   exit 2
 }
 
-Write-Host "==== 3/3 REPAIR INBOX+ERROR+PROCESSED (Ure neu PDF co) ===="
+Write-Host "==== 3/3 REPAIR INBOX+ERROR+PROCESSED+UNDER18 (Ure neu PDF co) ===="
 Write-Host "Khong full-scan MISSING (11k file lam G: unmount)."
 $code = 0
 for ($round = 1; $round -le 3; $round++) {
@@ -69,13 +69,13 @@ for ($round = 1; $round -le 3; $round++) {
     $repair = [int]$parts[5]
   }
   Write-Host ("Vong {0}: imported={1} repair={2} queued={3}" -f $round, $imported, $repair, $queued)
-  & python ".\pipeline\print_drive_dirs.py" | Select-Object -Last 1 | ForEach-Object { Write-Host $_ }
+  & python ".\pipeline\print_counts.py" | Select-Object -Last 1 | ForEach-Object { Write-Host $_ }
   if (($repair -le 0) -and ($queued -le 0) -and ($imported -le 0) -and $round -ge 2) { break }
 }
 
 Write-Host ""
 Write-Host "========== XONG BO SUNG =========="
-Write-Host "Ure: chi dien khi PDF co Urea. MISSING van cho TTHC (khong dien duoc)."
+Write-Host "Ure: dien khi PDF co Urea (doi don vi mmol/L). MISSING cho TTHC."
 Write-Host "=================================="
 if ($code -ne 0) { exit $code }
 exit 0

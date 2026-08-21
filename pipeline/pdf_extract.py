@@ -505,8 +505,15 @@ def normalize_for_web(labs: dict) -> dict:
                 vnorm, unorm = f"{prefix}{num:g}", unit or "mcmol/L"
 
         elif key == "Urea":
-            # keep; web unit unclear — expose both
-            vnorm, unorm, note = f"{prefix}{num:g}", unit, "giữ nguyên — kiểm tra đơn vị web"
+            # Medinet SinhHoaMau_Ure expects mmol/L
+            if "mg" in u:
+                vnorm, unorm, note = (
+                    f"{prefix}{num / 6.0:.2f}",
+                    "mmol/L",
+                    "mg/dL /6 → mmol/L",
+                )
+            else:
+                vnorm, unorm, note = f"{prefix}{num:g}", unit or "mmol/L", ""
 
         else:
             vnorm, unorm = f"{prefix}{num:g}", unit

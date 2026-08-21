@@ -46,7 +46,7 @@ Write-Host ""
 Write-Host "Thu My Drive / Drive cua toi:"
 @(
   "G:\My Drive",
-  "G:\Drive của tôi",
+  "G:\Drive c-a t-i",
   "G:\Drive cua toi",
   "$env:USERPROFILE\Google Drive\My Drive",
   "$env:USERPROFILE\GoogleDrive\My Drive"

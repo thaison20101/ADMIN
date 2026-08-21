@@ -20,11 +20,11 @@ EXAMPLE_CONFIG = Path(__file__).resolve().parent / "config.example.json"
 
 PIPELINE_NAME = "PKDK_Thuankieu_Pipeline"
 STD_FOLDERS = ("INBOX_CLS", "MISSING", "ERROR", "PROCESSED")
-# Park under-18 PDFs here; hourly/rematch skip. User moves back to INBOX when ready.
+# Park under-18 AFTER successful FULL import (kids use M2 form, not M3/M4).
 UNDER18_FOLDER = "UNDER 18"
 EXTRA_FOLDERS = (UNDER18_FOLDER,)
-# Alternate inbox folder names users may create / paste into
-INBOX_ALIAS_NAMES = ("INBOX_CLS", "INBOX", "inbox", "Inbox")
+# May A only — never scan stray "inbox" / "INBOX" aliases (wrong folder).
+INBOX_FOLDER_NAME = "INBOX_CLS"
 LOCAL_BUILD = ROOT / "pipeline" / "work" / "build"
 
 # May A — duy nhat
@@ -181,47 +181,52 @@ def discover_build_root(cfg: dict | None = None) -> Path:
 
 
 def discover_inbox_dirs(sync: Path, primary: Path | None = None) -> list[Path]:
-    """All inbox-like folders under pipeline root (INBOX_CLS + aliases).
+    """Return only INBOX_CLS (may A — single inbox, no aliases)."""
+    inbox = primary if primary is not None else (sync / INBOX_FOLDER_NAME)
+    return [inbox]
 
-    Users sometimes drop new PDFs into a folder named ``inbox`` / ``INBOX``
-    instead of ``INBOX_CLS``. Hourly must scan every alias that exists.
-    Primary is always included (even if not yet created) so callers keep a
-    stable inbox target.
-    """
-    found: list[Path] = []
-    seen: set[str] = set()
 
-    def _add(p: Path, *, require_exists: bool) -> None:
-        try:
-            key = str(p.resolve()).lower() if p.exists() else str(p).lower()
-        except Exception:
-            key = str(p).lower()
-        if key in seen:
-            return
-        if require_exists:
-            try:
-                if not (p.exists() and p.is_dir()):
-                    return
-            except Exception:
-                return
-        seen.add(key)
-        found.append(p)
-
-    if primary is not None:
-        _add(primary, require_exists=False)
-    for name in INBOX_ALIAS_NAMES:
-        _add(sync / name, require_exists=True)
+def migrate_stray_inbox(sync: Path) -> int:
+    """Move PDFs from leftover inbox/INBOX into INBOX_CLS. Returns move count."""
+    dest = sync / INBOX_FOLDER_NAME
     try:
-        if sync.exists():
-            for child in sync.iterdir():
-                if not child.is_dir():
-                    continue
-                n = child.name.lower().replace("_", " ").strip()
-                if n == "inbox" or n.startswith("inbox "):
-                    _add(child, require_exists=True)
+        dest.mkdir(parents=True, exist_ok=True)
     except Exception:
-        pass
-    return found
+        return 0
+    moved = 0
+    for name in ("inbox", "INBOX", "Inbox"):
+        src = sync / name
+        try:
+            if src.resolve() == dest.resolve():
+                continue
+        except Exception:
+            pass
+        try:
+            if not src.exists() or not src.is_dir():
+                continue
+        except Exception:
+            continue
+        try:
+            with os.scandir(src) as it:
+                for ent in it:
+                    if not ent.name.lower().endswith(".pdf"):
+                        continue
+                    if not ent.is_file(follow_symlinks=False):
+                        continue
+                    target = dest / ent.name
+                    if target.exists():
+                        stem = Path(ent.name).stem
+                        suf = Path(ent.name).suffix
+                        target = dest / f"{stem}_from_{name}{suf}"
+                    try:
+                        os.replace(ent.path, str(target))
+                        moved += 1
+                        print(f"MIGRATE {name}/{ent.name} -> INBOX_CLS/")
+                    except Exception as e:
+                        print(f"WARN migrate {ent.name}: {e}")
+        except Exception as e:
+            print(f"WARN scan {src}: {e}")
+    return moved
 
 def ensure_standard_folders(pipeline: Path, build: Path) -> dict[str, Path]:
     """Create folder layout. Never mkdir on G: when Drive is unmounted."""

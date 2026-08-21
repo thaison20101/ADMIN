@@ -321,27 +321,23 @@ def _num_close(a, b, *, rel: float = 0.02, abs_tol: float = 0.05) -> bool:
 def cls_missing_lab_fields(existing: dict | None, payload: dict) -> list[str]:
     """Lab fields in PDF payload that are empty OR wrong on the web form.
 
-    Rule: điền theo PDF (bình thường lẫn bất thường). Ure never required.
+    Rule: dien theo PDF (binh thuong lan bat thuong), KE CA Urea khi PDF co.
     """
+    tracked = [
+        k
+        for k in payload
+        if k in NUMBER_FIELDS or k in URINE_TEXT_FIELDS or k == "NuocTieu_NiTrit"
+    ]
     if not existing:
-        return [
-            k
-            for k in payload
-            if (k in NUMBER_FIELDS or k in URINE_TEXT_FIELDS or k == "NuocTieu_NiTrit")
-            and k != "SinhHoaMau_Ure"
-        ]
+        return list(tracked)
     missing = []
-    for k, sent in payload.items():
-        if k not in NUMBER_FIELDS and k not in URINE_TEXT_FIELDS and k != "NuocTieu_NiTrit":
-            continue
-        if k == "SinhHoaMau_Ure":
-            continue
+    for k in tracked:
+        sent = payload.get(k)
         got = existing.get(k)
         if got in (None, ""):
             missing.append(k)
             continue
         if k in NUMBER_FIELDS and sent not in (None, ""):
-            # PDF value differs from web → must rewrite (old bug wrote ref-range)
             if not _num_close(got, sent):
                 missing.append(k)
             continue
@@ -350,7 +346,6 @@ def cls_missing_lab_fields(existing: dict | None, payload: dict) -> list[str]:
             if gl not in {"negative", "neg"} and not re.search(
                 r"âm\s*t[íi]nh|am\s*tinh", gl
             ):
-                # web has unexpected non-negative text while we sent Negative
                 missing.append(k)
     return missing
 
@@ -365,10 +360,10 @@ def cls_urine_incomplete(existing: dict | None, payload: dict) -> bool:
 
 
 def web_cls_looks_incomplete(existing: dict | None, payload: dict | None = None) -> bool:
-    """True only when PDF payload fields are missing on web.
+    """True when PDF payload fields (incl. Urea) are missing on web.
 
     Do not guess from Get alone (Get often omits NuocTieu_Urobilinogen even when
-    the form has it). Urea is never required.
+    the form has it).
     """
     if not existing or not cls_has_lab_values(existing):
         return False
@@ -376,7 +371,6 @@ def web_cls_looks_incomplete(existing: dict | None, payload: dict | None = None)
         return False
     miss = cls_missing_lab_fields(existing, payload)
     return bool(miss)
-
 
 def get_cls(token: str, phieukham_id: int | str, reauth=None) -> tuple[dict | None, str]:
     s, d, token = api(
