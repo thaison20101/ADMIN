@@ -355,12 +355,28 @@ if __name__ == "__main__":
 
     test_live_search_accepts_unique_without_date()
 
+    def test_is_under18():
+        from datetime import date
+        from pipeline.move_under18 import is_under18
+
+        as_of = date(2026, 8, 21)
+        assert is_under18(nam_sinh="2010", file_name="x.pdf", as_of=as_of)
+        assert is_under18(nam_sinh="2009", file_name="x.pdf", as_of=as_of)
+        assert not is_under18(nam_sinh="2008", file_name="x.pdf", as_of=as_of)
+        assert not is_under18(nam_sinh="1990", file_name="x.pdf", as_of=as_of)
+        assert is_under18(nam_sinh="", file_name="010725-1 - BE NAM - M2.pdf", as_of=as_of)
+        assert is_under18(nam_sinh="", file_name="010725-1 - BE NAM - M12.pdf", as_of=as_of)
+        assert not is_under18(nam_sinh="", file_name="010725-1 - ONG A - 1950 - M.pdf", as_of=as_of)
+
+    test_is_under18()
+
     def test_runner_ps1_ascii():
         root = Path(__file__).resolve().parent
         for name in (
             "CHAY_REMATCH_MISSING.ps1",
             "CHAY_GAP_ROI_HOURLY.ps1",
             "CHAY_BO_SUNG_THIEU.ps1",
+            "CHAY_LOC_UNDER18.ps1",
             "run_hourly.ps1",
         ):
             (root / name).read_bytes().decode("ascii")

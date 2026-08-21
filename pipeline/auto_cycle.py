@@ -117,7 +117,8 @@ def _collect_scan_dirs(
         # Rematch uses tracking CSV (see run_auto_cycle).
         return [inbox, error_dir]
     roots: list[Path] = []
-    skip = {".git"}
+    # Skip UNDER 18 (parked kids) and VCS
+    skip = {".git", "under 18", "under_18", "under18"}
     if sync.exists():
         for child in sorted(sync.iterdir()):
             if child.is_dir() and child.name.lower() not in skip:
@@ -186,6 +187,8 @@ def _move_pdf(pdf: Path, dest_dir: Path, pid: str = "") -> Path | None:
 
 def _src_bucket(src: str) -> str:
     u = (src or "").replace("\\", "/").upper()
+    if "/UNDER 18/" in u or "/UNDER_18/" in u or u.endswith("/UNDER 18"):
+        return "under18"
     if "/INBOX" in u or u.endswith("/INBOX_CLS") or "INBOX_CLS" in u:
         return "inbox"
     if "/MISSING/" in f"/{u}/" or u.endswith("/MISSING"):
@@ -199,7 +202,7 @@ def _src_bucket(src: str) -> str:
 
 def counts_from_rows(rows: list[dict]) -> dict[str, int]:
     """Folder counts from tracking CSV (no G: listing)."""
-    out = {"inbox": 0, "missing": 0, "error": 0, "processed": 0, "other": 0}
+    out = {"inbox": 0, "missing": 0, "error": 0, "processed": 0, "under18": 0, "other": 0}
     for r in rows:
         b = _src_bucket(r.get("source_file") or "")
         out[b] = out.get(b, 0) + 1
@@ -210,6 +213,7 @@ def format_counts_line(c: dict[str, int], *, tag: str = "COUNTS") -> str:
     return (
         f"{tag}\tinbox={c.get('inbox', 0)}\tmissing={c.get('missing', 0)}\t"
         f"error={c.get('error', 0)}\tprocessed={c.get('processed', 0)}"
+        f"\tunder18={c.get('under18', 0)}"
     )
 
 
@@ -531,10 +535,15 @@ def _run_auto_cycle_inner(
     # Oldest last_checked first so 8 rounds of 2500 rotate through the backlog.
     csv_missing_queued = 0
     csv_missing_total = 0
+    csv_skipped_u18 = 0
     if (not full_scan) and (not repair) and missing_budget > 0:
+        from move_under18 import is_under18
+
         miss_rows = []
         for r in rows:
             src_u = (r.get("source_file") or "").replace("\\", "/").upper()
+            if "/UNDER 18/" in src_u or "/UNDER_18/" in src_u:
+                continue
             if "/MISSING/" in src_u or src_u.endswith("/MISSING"):
                 miss_rows.append(r)
         csv_missing_total = len(miss_rows)
@@ -550,6 +559,18 @@ def _run_auto_cycle_inner(
             old = (r.get("status") or "").upper()
             if old not in {"WAITING_ADMIN", "READY_IMPORT", "NEW_LAB", "PARSE_ERROR"}:
                 continue
+            fname = Path(r.get("source_file") or "").name or r.get("file_name") or ""
+            _, year = resolve_name_year(
+                {
+                    "ho_ten": r.get("ho_ten") or "",
+                    "nam_sinh": r.get("nam_sinh") or "",
+                    "file_name": fname,
+                    "source_file": r.get("source_file") or "",
+                }
+            )
+            if is_under18(nam_sinh=year or r.get("nam_sinh") or "", file_name=fname):
+                csv_skipped_u18 += 1
+                continue
             r["status"] = "READY_IMPORT"
             r["import_attempts"] = "0"
             r["notes"] = f"csv_missing_rematch:{old}"[:200]
@@ -557,7 +578,8 @@ def _run_auto_cycle_inner(
             csv_missing_queued += 1
         safe_print(
             f"MISSING rematch from CSV (no G: walk): queued={csv_missing_queued} "
-            f"tracked={csv_missing_total} budget={missing_budget}"
+            f"tracked={csv_missing_total} budget={missing_budget} "
+            f"skipped_under18={csv_skipped_u18}"
         )
 
     requeued_err = 0
@@ -735,6 +757,10 @@ def _run_auto_cycle_inner(
         row["file_name"] = pdf.name
         row["source_file"] = str(pdf)
         src_u = str(pdf).replace("\\", "/").upper()
+        # Parked under-18 folder — user moves back to INBOX when ready
+        if "/UNDER 18/" in src_u or "/UNDER_18/" in src_u or src_u.endswith("/UNDER 18"):
+            stats["skipped_under18"] += 1
+            continue
         # Hourly: INBOX / MISSING / ERROR. Full-scan: moi folder (ke ca PROCESSED)
         if not full_scan and not (
             ("/INBOX" in src_u) or ("/MISSING" in src_u) or ("/ERROR" in src_u)

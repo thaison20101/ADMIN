@@ -2,7 +2,7 @@
 """Print COUNTS from tracking CSV (no 10k G: listing).
 
 Same line format as print_drive_dirs:
-  COUNTS\\tinbox=N\\tmissing=N\\terror=N\\tprocessed=N
+  COUNTS\\tinbox=N\\tmissing=N\\terror=N\\tprocessed=N\\tunder18=N
 
 Usage: python pipeline/print_counts.py
 """
@@ -18,6 +18,8 @@ CASES = ROOT / "tracking" / "cases.csv"
 
 def _bucket(src: str) -> str:
     u = (src or "").replace("\\", "/").upper()
+    if "/UNDER 18/" in u or "/UNDER_18/" in u or u.endswith("/UNDER 18"):
+        return "under18"
     if "/INBOX" in u or "INBOX_CLS" in u:
         return "inbox"
     if "/MISSING/" in f"/{u}/" or u.endswith("/MISSING"):
@@ -30,7 +32,7 @@ def _bucket(src: str) -> str:
 
 
 def counts_from_csv(path: Path) -> dict[str, int]:
-    out = {"inbox": 0, "missing": 0, "error": 0, "processed": 0, "other": 0}
+    out = {"inbox": 0, "missing": 0, "error": 0, "processed": 0, "under18": 0, "other": 0}
     if not path.exists():
         return out
     with path.open(encoding="utf-8", newline="") as f:
@@ -45,7 +47,7 @@ def main() -> int:
     print(CASES)
     print(
         f"COUNTS\tinbox={c['inbox']}\tmissing={c['missing']}\t"
-        f"error={c['error']}\tprocessed={c['processed']}"
+        f"error={c['error']}\tprocessed={c['processed']}\tunder18={c['under18']}"
     )
     return 0
 

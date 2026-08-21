@@ -20,6 +20,9 @@ EXAMPLE_CONFIG = Path(__file__).resolve().parent / "config.example.json"
 
 PIPELINE_NAME = "PKDK_Thuankieu_Pipeline"
 STD_FOLDERS = ("INBOX_CLS", "MISSING", "ERROR", "PROCESSED")
+# Park under-18 PDFs here; hourly/rematch skip. User moves back to INBOX when ready.
+UNDER18_FOLDER = "UNDER 18"
+EXTRA_FOLDERS = (UNDER18_FOLDER,)
 LOCAL_BUILD = ROOT / "pipeline" / "work" / "build"
 
 # May A — duy nhat
@@ -182,8 +185,9 @@ def ensure_standard_folders(pipeline: Path, build: Path) -> dict[str, Path]:
     if sys.platform.startswith("win"):
         # Only create PDF folders when G: is actually live
         can_touch_pipeline = g_pipeline_live() is not None and str(pipeline).replace("/", "\\").upper().startswith("G:")
+    all_pdf_folders = tuple(STD_FOLDERS) + tuple(EXTRA_FOLDERS)
     if can_touch_pipeline:
-        for name in STD_FOLDERS:
+        for name in all_pdf_folders:
             p = pipeline / name
             try:
                 p.mkdir(parents=True, exist_ok=True)
@@ -191,7 +195,7 @@ def ensure_standard_folders(pipeline: Path, build: Path) -> dict[str, Path]:
                 print(f"WARN mkdir {p}: {e}")
             folders[name] = p
     else:
-        for name in STD_FOLDERS:
+        for name in all_pdf_folders:
             folders[name] = pipeline / name
     for name in ("logs", "excel_preview", "missing_or_updated", "cases_snapshot"):
         p = build / name
