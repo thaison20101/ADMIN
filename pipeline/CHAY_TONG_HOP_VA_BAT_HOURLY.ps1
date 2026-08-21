@@ -118,13 +118,56 @@ if ($codeU18 -ne 0) {
 $afterU18 = Get-Counts
 Write-Host ("COUNTS sau loc U18: {0}" -f $afterU18.raw)
 
-# ---- 4/5 REMATCH MISSING ----
+# ---- 4/5 DRAIN INBOX (PDF moi) roi REMATCH MISSING ----
 $code = 0
 if ($SkipRematch) {
-  Write-Host "==== 4/5 REMATCH: SKIP (-SkipRematch) ===="
+  Write-Host "==== 4/5 IMPORT/REMATCH: SKIP (-SkipRematch) ===="
 } else {
   Write-Host ""
-  Write-Host ("==== 4/5 REMATCH MISSING (toi da {0} vong x 2500) ====" -f $RematchRounds)
+  Write-Host "==== 4a/5 QUET + IMPORT INBOX (INBOX_CLS + inbox) - PDF moi uu tien ===="
+  Write-Host "Rule khop TTHC: ho + ten (token dau+cuoi, ten day du) + nam sinh."
+  Write-Host "FULL labs -> PROCESSED | PARTIAL -> ERROR | chua TTHC -> MISSING."
+  $inboxRounds = [Math]::Max(4, $RematchRounds)
+  for ($round = 1; $round -le $inboxRounds; $round++) {
+    Write-Host ("----- INBOX VONG {0}/{1} (missing-budget=0) -----" -f $round, $inboxRounds)
+    & python ".\pipeline\assert_g_pipeline.py"
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "DUNG: G: mat ket noi. Mo Drive. KHONG bat hourly."
+      exit 2
+    }
+    $before = Get-Counts
+    Write-Host ("COUNTS before: {0}" -f $before.raw)
+    # 0 = chi quet/import INBOX(+ERROR), khong burn budget vao MISSING
+    $code = Invoke-PythonLive @(".\pipeline\hourly_sync.py", "--missing-budget", "0")
+    $text = ($script:LastPyLines -join "`n")
+    if ($text -match "ABORT:") {
+      Write-Host "DUNG: ABORT G:. KHONG bat hourly."
+      exit 2
+    }
+    $statLine = $text | & python ".\pipeline\parse_cycle_stats.py"
+    $parts = @($statLine -split "\s+")
+    $imported = 0; $queued = 0; $partial = 0
+    if ($parts.Count -ge 3) {
+      $imported = [int]$parts[0]
+      $queued = [int]$parts[1]
+      $partial = [int]$parts[2]
+    }
+    $after = Get-Counts
+    $dInbox = $after.inbox - $before.inbox
+    $dProcessed = $after.processed - $before.processed
+    $dError = $after.error - $before.error
+    $dMissing = $after.missing - $before.missing
+    Write-Host ("INBOX vong {0}: imported={1} partial={2} queued={3}" -f $round, $imported, $partial, $queued)
+    Write-Host ("COUNTS after : {0}" -f $after.raw)
+    Write-Host ("DELTA inbox={0} missing={1} error={2} processed={3}" -f $dInbox, $dMissing, $dError, $dProcessed)
+    if ($round -ge 2 -and ($imported -le 0) -and ($partial -le 0) -and ($dInbox -eq 0) -and ($dProcessed -eq 0) -and ($dError -eq 0)) {
+      Write-Host "INBOX het tien do (PDF moi da xu ly xong vong nay)."
+      break
+    }
+  }
+
+  Write-Host ""
+  Write-Host ("==== 4b/5 REMATCH MISSING (toi da {0} vong x 2500) ====" -f $RematchRounds)
   for ($round = 1; $round -le $RematchRounds; $round++) {
     Write-Host ("----- REMATCH VONG {0}/{1} -----" -f $round, $RematchRounds)
     & python ".\pipeline\assert_g_pipeline.py"
@@ -164,7 +207,7 @@ if ($SkipRematch) {
 
 if (-not $SkipUrea) {
   Write-Host ""
-  Write-Host "==== 4b/5 BO SUNG Ure (INBOX+ERROR+PROCESSED) ===="
+  Write-Host "==== 4c/5 BO SUNG Ure (INBOX+ERROR+PROCESSED) ===="
   & powershell -ExecutionPolicy Bypass -File ".\pipeline\CHAY_BO_SUNG_THIEU.ps1"
   $bs = $LASTEXITCODE
   if ($bs -ne 0) {

@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from drive_paths import (  # noqa: E402
     UNDER18_FOLDER,
     count_pdfs_fast,
+    discover_inbox_dirs,
     ensure_standard_folders,
     g_pipeline_live,
     local_work_build,
@@ -38,7 +39,7 @@ from win_console import safe_print, setup_utf8_stdio  # noqa: E402
 
 setup_utf8_stdio()
 
-SOURCE_TAGS = ("INBOX_CLS", "MISSING", "ERROR")
+SOURCE_TAGS = ("INBOX_CLS", "INBOX", "MISSING", "ERROR")
 CHILD_MAU = re.compile(r"(?<![A-Z0-9])(M1|M2|M12)(?![A-Z0-9])", re.I)
 
 
@@ -60,13 +61,14 @@ def is_under18(*, nam_sinh: str, file_name: str = "", as_of: date | None = None)
 
 def _bucket(src: str) -> str:
     u = (src or "").replace("\\", "/").upper()
-    for tag in SOURCE_TAGS:
+    if "/UNDER 18" in u or "/UNDER_18" in u:
+        return "UNDER18"
+    if "/INBOX" in u or "INBOX_CLS" in u:
+        return "INBOX_CLS"
+    for tag in ("MISSING", "ERROR"):
         if f"/{tag}/" in u or u.endswith(f"/{tag}"):
             return tag
-    if "UNDER 18" in u or "UNDER_18" in u:
-        return "UNDER18"
     return ""
-
 
 def _list_top_pdfs(folder: Path) -> list[Path]:
     out: list[Path] = []
@@ -138,8 +140,13 @@ def main() -> int:
         candidates.append((pdf, year or "?", tag, r))
 
     if args.disk_scan:
-        for tag in SOURCE_TAGS:
-            folder = sync / tag
+        # Primary folders + any inbox alias (inbox / INBOX / INBOX_CLS)
+        scan_folders: list[tuple[str, Path]] = []
+        for d in discover_inbox_dirs(sync, sync / "INBOX_CLS"):
+            scan_folders.append(("INBOX_CLS", d))
+        for tag in ("MISSING", "ERROR"):
+            scan_folders.append((tag, sync / tag))
+        for tag, folder in scan_folders:
             for pdf in _list_top_pdfs(folder):
                 key = pdf.name.lower()
                 if any(c[0].name.lower() == key for c in candidates):
@@ -156,7 +163,6 @@ def main() -> int:
                 if not is_under18(nam_sinh=year, file_name=pdf.name):
                     continue
                 candidates.append((pdf, year or "?", tag, r))
-
     safe_print("========== LOC UNDER 18 ==========")
     safe_print(f"SYNC: {sync}")
     safe_print(f"DEST: {dest}")

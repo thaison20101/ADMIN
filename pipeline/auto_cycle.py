@@ -106,16 +106,20 @@ def _collect_scan_dirs(
 
     full_scan=True → TOAN BO folder (ke ca PROCESSED) de khong bo sot BN cu.
     repair → INBOX + ERROR + PROCESSED (khong MISSING).
-    hourly → INBOX + MISSING + ERROR (khong rematch PROCESSED).
+    hourly → ALL inbox aliases (INBOX_CLS + inbox/...) + ERROR.
     """
+    from drive_paths import discover_inbox_dirs
+
+    inbox_dirs = discover_inbox_dirs(sync, inbox)
     if not full_scan:
         if repair:
             # Urea/field fill: INBOX+ERROR+PROCESSED only. MISSING has no TTHC
             # → cannot fill web; walking 11k PDFs also unmounts G:.
-            return [inbox, error_dir, processed]
+            dirs = list(inbox_dirs) + [error_dir, processed]
+            return _uniq_dirs(dirs)
         # Hourly/rematch: NEVER rglob the 10k MISSING folder on G:.
         # Rematch uses tracking CSV (see run_auto_cycle).
-        return [inbox, error_dir]
+        return _uniq_dirs(list(inbox_dirs) + [error_dir])
     roots: list[Path] = []
     # Skip UNDER 18 (parked kids) and VCS
     skip = {".git", "under 18", "under_18", "under18"}
@@ -123,11 +127,25 @@ def _collect_scan_dirs(
         for child in sorted(sync.iterdir()):
             if child.is_dir() and child.name.lower() not in skip:
                 roots.append(child)
-    for must in (inbox, missing, error_dir, processed):
+    for must in (*inbox_dirs, missing, error_dir, processed):
         if must.exists() and must not in roots:
             roots.append(must)
     return roots
 
+
+def _uniq_dirs(dirs: list[Path]) -> list[Path]:
+    out: list[Path] = []
+    seen: set[str] = set()
+    for d in dirs:
+        try:
+            key = str(d.resolve()).lower()
+        except Exception:
+            key = str(d).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(d)
+    return out
 
 def _resolve_pdf(row: dict, inbox: Path, *extra_dirs: Path) -> Path | None:
     src = Path(row.get("source_file") or "")
@@ -405,8 +423,8 @@ def _run_auto_cycle_inner(
     )
     safe_print(f"Mode: {mode} | scan dirs ({len(scan_dirs)}): {[d.name for d in scan_dirs]}")
     safe_print(f"MISSING rematch budget this run: {missing_budget}")
-    safe_print("START: inbox/error walk only — MISSING rematch from tracking CSV (no 10k G: listing)")
-
+    safe_print("Match TTHC: ho + ten (full name tokens dau+cuoi) + nam sinh")
+    safe_print("START: inbox aliases + ERROR walk — MISSING rematch from tracking CSV")
     cases_path = ROOT / cfg.get("tracking", {}).get("cases_csv", "tracking/cases.csv")
     from hourly_sync import read_cases, register_new_files, write_cases  # local import
 

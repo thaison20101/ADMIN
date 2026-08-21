@@ -266,6 +266,23 @@ if __name__ == "__main__":
 
     test_hourly_scan_skips_missing_walk()
 
+    def test_discover_inbox_aliases():
+        import tempfile
+        from pipeline.drive_paths import discover_inbox_dirs
+
+        with tempfile.TemporaryDirectory() as d:
+            root = _P(d)
+            (root / "INBOX_CLS").mkdir()
+            (root / "inbox").mkdir()
+            (root / "MISSING").mkdir()
+            found = discover_inbox_dirs(root, root / "INBOX_CLS")
+            names = {p.name for p in found}
+            assert "INBOX_CLS" in names
+            assert "inbox" in names
+            assert "MISSING" not in names
+
+    test_discover_inbox_aliases()
+
     def test_count_pdfs_fast_top_level(tmp_path=None):
         import tempfile
         from pipeline.drive_paths import count_pdfs_fast
