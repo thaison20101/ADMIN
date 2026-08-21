@@ -6,7 +6,8 @@
 #   1) TAT hourly cu (PKDK_Hourly_Sync)
 #   2) git pull code moi
 #   3) Loc PDF duoi 18 -> UNDER 18
-#   4) Rematch MISSING (M2/M3/M4/M11, CSV, 2500/vong)
+#   4a) Quet + import INBOX (INBOX_CLS + inbox) PDF moi, rule ho+ten+nam sinh
+#   4b) Rematch MISSING (M2/M3/M4/M11, CSV, 2500/vong)
 #   5) Cai lai + BAT hourly cho code moi
 #
 #   cd C:\Users\thais\ADMIN
