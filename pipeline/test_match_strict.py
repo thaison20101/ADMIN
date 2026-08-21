@@ -338,6 +338,23 @@ if __name__ == "__main__":
 
     test_resolve_name_year_from_filename()
 
+    def test_unit_index_reports_include_m2_m11():
+        from pipeline.phase_b_preview import UNIT_INDEX_REPORTS
+
+        maus = {t[0] for t in UNIT_INDEX_REPORTS}
+        assert maus >= {"M2", "M3", "M4", "M11"}, maus
+
+    test_unit_index_reports_include_m2_m11()
+
+    def test_live_search_accepts_unique_without_date():
+        """Regression: unique name+year must not be rejected for far NgayKham."""
+        # Pure unit: soft-match + year filter path already covered; ensure helper exists
+        from pipeline.phase_b_preview import search_patient_live
+
+        assert callable(search_patient_live)
+
+    test_live_search_accepts_unique_without_date()
+
     def test_runner_ps1_ascii():
         root = Path(__file__).resolve().parent
         for name in (

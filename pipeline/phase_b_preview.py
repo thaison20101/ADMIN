@@ -357,17 +357,24 @@ def _daterange_chunks(d0, d1, chunk_days: int = 14):
     return chunks
 
 
+# All PKDK exam list reports used on Medinet (must match export_medinet_full).
+# Old pipeline only indexed M3+M4 → mass NO_TTHC for M2 (tre) / M11.
+UNIT_INDEX_REPORTS = [
+    ("M3", "KSKDK_DanhSach_KSK_M13", "NgayTao", True),
+    ("M2", "KSKDK_DanhSach_KSK_M12", "KSKDK_NgayKham", True),
+    ("M4", "KSKDK_DanhSach_KSK_NguoiCaoTuoi_Report", "KSKDK_NgayKham", True),
+    ("M11", "KSKDK_DanhSach_KSK_M11", "KSKDK_NgayKham", False),
+]
+
+
 def fetch_unit_index(token: str, date_from: str, date_to: str, *, chunk_days: int = 14) -> dict:
-    """Build lookup by normalized name+phone and SID-ish MaPhieu for M3/M4.
+    """Build lookup by normalized name+phone and SID-ish MaPhieu for M2/M3/M4/M11.
 
     Queries Medinet in date *windows* (default 14 days), not one HTTP call per
     calendar day. Old per-day indexing (~48d × 2 reports × 2 calls) made each
     full-scan round take many hours before any PDF was imported.
     """
-    reports = [
-        ("M3", "KSKDK_DanhSach_KSK_M13", "NgayTao"),
-        ("M4", "KSKDK_DanhSach_KSK_NguoiCaoTuoi_Report", "KSKDK_NgayKham"),
-    ]
+    reports = UNIT_INDEX_REPORTS
     index = {
         "by_phone": {},
         "by_name_year": {},
@@ -377,6 +384,7 @@ def fetch_unit_index(token: str, date_from: str, date_to: str, *, chunk_days: in
         "by_pid": {},
         "no_cls_ids": set(),
         "all_ids": set(),
+        "by_mau_count": {},
     }
 
     def get_report(code):
@@ -397,7 +405,7 @@ def fetch_unit_index(token: str, date_from: str, date_to: str, *, chunk_days: in
     n_days = (d1 - d0).days + 1
     safe_print(
         f"  Index span {d0.strftime('%d/%m/%Y')} -> {d1.strftime('%d/%m/%Y')} "
-        f"({n_days} days, {len(chunks)} windows x{chunk_days}d)",
+        f"({n_days} days, {len(chunks)} windows x{chunk_days}d) reports={len(reports)}",
         flush=True,
     )
 
@@ -416,13 +424,14 @@ def fetch_unit_index(token: str, date_from: str, date_to: str, *, chunk_days: in
                 return v
         return ""
 
-    for mau, code, date_field in reports:
+    for mau, code, date_field, has_quality in reports:
         rep = get_report(code)
         if not rep:
             safe_print(f"  report missing {code}")
             continue
         store, ds = rep["sqlContent"], rep["dataSourceId"]
         safe_print(f"Indexing {mau} ({code}) ...", flush=True)
+        mau_n = 0
         for w0, w1 in chunks:
             dr = f"{w0.strftime('%d/%m/%Y')} - {w1.strftime('%d/%m/%Y')}"
             safe_print(f"  {mau} window {dr}", flush=True)
@@ -452,6 +461,7 @@ def fetch_unit_index(token: str, date_from: str, date_to: str, *, chunk_days: in
                     year = _year_from_ngaysinh(r.get("NgaySinh"))
                     mp = str(r.get("MaPhieu") or "")
                     rec = {**r, "_mau": mau}
+                    mau_n += 1
                     if phone:
                         index["by_phone"].setdefault(phone, []).append(rec)
                     if name and year:
@@ -467,34 +477,42 @@ def fetch_unit_index(token: str, date_from: str, date_to: str, *, chunk_days: in
                 if len(rows) < 5000:
                     break
 
-            for page in range(1, 21):
-                s, d = api(
-                    token,
-                    f"/api/services/app/DRViewer/ExecuteStoreWithParam_ByDatasource?dataSourceId={ds}&store={store}",
-                    "POST",
-                    to_fparams(
-                        {
-                            date_field: dr,
-                            "NgayTao": dr,
-                            "KSKDK_NgayKham": dr,
-                            "ChatLuongDuLieu": 4,
-                            "page": page,
-                            "pageSize": 5000,
-                        }
-                    ),
-                )
-                rows_no = ((d or {}).get("result") or {}).get("data") or []
-                if not rows_no:
-                    break
-                for r in rows_no:
-                    index["no_cls_ids"].add(r.get("phieukhamId") or r.get("Id"))
-                if len(rows_no) < 5000:
-                    break
+            if has_quality:
+                for page in range(1, 21):
+                    s, d = api(
+                        token,
+                        f"/api/services/app/DRViewer/ExecuteStoreWithParam_ByDatasource?dataSourceId={ds}&store={store}",
+                        "POST",
+                        to_fparams(
+                            {
+                                date_field: dr,
+                                "NgayTao": dr,
+                                "KSKDK_NgayKham": dr,
+                                "ChatLuongDuLieu": 4,
+                                "page": page,
+                                "pageSize": 5000,
+                            }
+                        ),
+                    )
+                    rows_no = ((d or {}).get("result") or {}).get("data") or []
+                    if not rows_no:
+                        break
+                    for r in rows_no:
+                        index["no_cls_ids"].add(r.get("phieukhamId") or r.get("Id"))
+                    if len(rows_no) < 5000:
+                        break
+        index["by_mau_count"][mau] = mau_n
         safe_print(
-            f"  {mau} indexed phones={len(index['by_phone'])} names={len(index['by_name_year'])} "
-            f"fold={len(index['by_fold_year'])} cccd={len(index['by_cccd'])}",
+            f"  {mau} indexed rows={mau_n} phones={len(index['by_phone'])} "
+            f"names={len(index['by_name_year'])} fold={len(index['by_fold_year'])} "
+            f"cccd={len(index['by_cccd'])}",
             flush=True,
         )
+    safe_print(
+        f"  INDEX TOTAL ids={len(index['all_ids'])} no_cls={len(index['no_cls_ids'])} "
+        f"by_mau={index['by_mau_count']}",
+        flush=True,
+    )
     return index
 
 
@@ -512,7 +530,8 @@ def load_or_fetch_unit_index(
     if cache_dir is None:
         cache_dir = Path(__file__).resolve().parent / "work" / "index_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    key = f"{date_from.replace('/', '')}_{date_to.replace('/', '')}.pkl"
+    # v2 = M2+M3+M4+M11 (old caches only had M3+M4 → mass MISSING)
+    key = f"v2_{date_from.replace('/', '')}_{date_to.replace('/', '')}.pkl"
     path = cache_dir / key
     now = time.time()
     if path.exists():
@@ -522,10 +541,17 @@ def load_or_fetch_unit_index(
                 with path.open("rb") as f:
                     idx = pickle.load(f)
                 n = len(idx.get("all_ids") or [])
+                mau = idx.get("by_mau_count") or {}
+                # Reject stale/partial caches without M2/M11
                 if n < 50:
                     safe_print(f"  Index CACHE skip (too small ids={n}) — rebuild", flush=True)
+                elif "M2" not in mau and "M11" not in mau:
+                    safe_print("  Index CACHE skip (old M3+M4 only) — rebuild with M2/M11", flush=True)
                 else:
-                    safe_print(f"  Index CACHE hit age={age_h:.1f}h ids={n} file={path.name}", flush=True)
+                    safe_print(
+                        f"  Index CACHE hit age={age_h:.1f}h ids={n} by_mau={mau} file={path.name}",
+                        flush=True,
+                    )
                     return idx
             except Exception as e:
                 safe_print(f"  Index cache unreadable: {e} — rebuild")
@@ -803,18 +829,16 @@ def search_patient_live(
     gioi_tinh: str = "",
     sdt: str = "",
 ) -> tuple[str, dict | None, str]:
-    """Fallback when day-index miss: query M3/M4 by HoTen over full date span.
+    """Fallback when day-index miss: query M2/M3/M4/M11 by HoTen over date span.
 
     Same rule as match_patient (ho+ten + year; no hard gender/phone block).
+    Unique name+year hit is accepted even if NgayKham is far from PDF print date.
     gioi_tinh/sdt kwargs kept for callers but not used. Returns (status, rec, token).
     """
     if not name or not year:
         return "WAITING_ADMIN", None, token
 
-    reports = [
-        ("M3", "KSKDK_DanhSach_KSK_M13", "NgayTao"),
-        ("M4", "KSKDK_DanhSach_KSK_NguoiCaoTuoi_Report", "KSKDK_NgayKham"),
-    ]
+    reports = UNIT_INDEX_REPORTS
     fold = _fold_name(name)
     pdf_d = _parse_any_date(ngay_co_kq)
     hits = []
@@ -824,8 +848,21 @@ def search_patient_live(
         items = ((d or {}).get("result") or {}).get("data") or []
         return items[0] if items else None
 
-    dr = f"{date_from} - {date_to}"
-    for mau, code, date_field in reports:
+    # Widen live window like index (NgayTao may precede exam)
+    from datetime import timedelta
+
+    def parse_d(s):
+        dd, mm, yy = s.split("/")
+        return date(int(yy), int(mm), int(dd))
+
+    try:
+        d0 = parse_d(date_from) - timedelta(days=60)
+        d1 = parse_d(date_to)
+        dr = f"{d0.strftime('%d/%m/%Y')} - {d1.strftime('%d/%m/%Y')}"
+    except Exception:
+        dr = f"{date_from} - {date_to}"
+
+    for mau, code, date_field, _has_q in reports:
         rep = get_report(code)
         if not rep:
             continue
@@ -869,46 +906,47 @@ def search_patient_live(
     if exact:
         uniq = exact
 
-    if len(uniq) > 1 and pdf_d:
+    # Unique name+year → accept (date only helps disambiguate multiples)
+    if len(uniq) == 1:
+        return "READY_IMPORT", uniq[0], token
+
+    if pdf_d:
         dated = [
             h
             for h in uniq
             if _date_proximity_score(
-                pdf_d, _parse_any_date(h.get("NgayKham") or h.get("KSKDK_NgayKham"))
+                pdf_d, _parse_any_date(h.get("NgayKham") or h.get("KSKDK_NgayKham") or h.get("NgayTao"))
             )
             > 0
         ]
         if len(dated) == 1:
-            uniq = dated
-        elif len(dated) > 1:
+            return "READY_IMPORT", dated[0], token
+        if len(dated) > 1:
             dated.sort(
                 key=lambda h: _date_proximity_score(
-                    pdf_d, _parse_any_date(h.get("NgayKham") or h.get("KSKDK_NgayKham"))
+                    pdf_d,
+                    _parse_any_date(h.get("NgayKham") or h.get("KSKDK_NgayKham") or h.get("NgayTao")),
                 ),
                 reverse=True,
             )
             best = _date_proximity_score(
-                pdf_d, _parse_any_date(dated[0].get("NgayKham") or dated[0].get("KSKDK_NgayKham"))
+                pdf_d,
+                _parse_any_date(dated[0].get("NgayKham") or dated[0].get("KSKDK_NgayKham") or dated[0].get("NgayTao")),
             )
             tied = [
                 h
                 for h in dated
                 if _date_proximity_score(
-                    pdf_d, _parse_any_date(h.get("NgayKham") or h.get("KSKDK_NgayKham"))
+                    pdf_d,
+                    _parse_any_date(h.get("NgayKham") or h.get("KSKDK_NgayKham") or h.get("NgayTao")),
                 )
                 == best
             ]
             if len(tied) == 1:
-                uniq = tied
-            else:
-                return "WAITING_ADMIN", None, token
-        else:
-            return "WAITING_ADMIN", None, token
+                return "READY_IMPORT", tied[0], token
 
-    if len(uniq) > 1:
-        return "WAITING_ADMIN", None, token
-    rec = uniq[0]
-    return "READY_IMPORT", rec, token
+    # Still ambiguous
+    return "WAITING_ADMIN", None, token
 
 
 

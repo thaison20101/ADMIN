@@ -638,9 +638,16 @@ def _run_auto_cycle_inner(
     safe_print(f"Indexing Medinet NgayKham {date_from} -> {date_to} (rolling today) ...")
     cache_dir = ROOT / "pipeline" / "work" / "index_cache"
     # Fresh index when rematching MISSING — TTHC often entered after last cache
-    index_max_age = 0.0 if (full_scan or missing_budget > 0) else 2.0
-    if index_max_age == 0.0:
-        safe_print("Index: FORCE REFRESH (MISSING rematch — web may have new TTHC)")
+    # Rematch: reuse index up to 3h (rounds 2-8). Force rebuild only on full-scan
+    # or first rematch after cache miss. Old force-every-round wasted 10+ min/vong.
+    if full_scan:
+        index_max_age = 0.0
+        safe_print("Index: FORCE REFRESH (full-scan)")
+    elif missing_budget > 0:
+        index_max_age = 3.0
+        safe_print("Index: rematch — reuse cache <=3h (M2/M3/M4/M11)")
+    else:
+        index_max_age = 2.0
     index = load_or_fetch_unit_index(
         token_box["t"],
         date_from,
