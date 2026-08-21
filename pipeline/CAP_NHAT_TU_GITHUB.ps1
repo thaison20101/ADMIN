@@ -4,7 +4,7 @@
 # MAY A (C:\Users\thais\ADMIN co .git): KHONG CHAY SCRIPT NAY.
 #   cd C:\Users\thais\ADMIN
 #   git pull origin cursor/drive-hourly-pipeline-df0f
-#   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_GAP_ROI_HOURLY.ps1
+#   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_TONG_HOP_VA_BAT_HOURLY.ps1
 #
 # Script nay chi cho may khac khong co git (ZIP giai nen).
 # GIU nguyen pipeline\config.local.json
@@ -18,7 +18,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $Repo ".git"))) {
   Write-Host "PHAT HIEN .git - day la may A. KHONG dung CAP_NHAT_TU_GITHUB.ps1."
   Write-Host "Chay thay:"
   Write-Host "  git pull origin cursor/drive-hourly-pipeline-df0f"
-  Write-Host "  powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_GAP_ROI_HOURLY.ps1"
+  Write-Host "  powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_TONG_HOP_VA_BAT_HOURLY.ps1"
   exit 0
 }
 

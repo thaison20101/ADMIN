@@ -22,12 +22,15 @@ function Get-Counts {
   $lines = @(& python ".\pipeline\print_counts.py" 2>$null)
   $counts = ($lines | Select-Object -Last 1)
   $parts = @($counts -split "\t")
-  $o = @{ inbox = 0; missing = 0; error = 0; processed = 0; raw = $counts }
+  $o = @{ inbox = 0; missing = 0; error = 0; processed = 0; under18 = 0; raw = $counts }
   try {
-    $o.inbox = [int](($parts[1] -split "=")[1])
-    $o.missing = [int](($parts[2] -split "=")[1])
-    $o.error = [int](($parts[3] -split "=")[1])
-    $o.processed = [int](($parts[4] -split "=")[1])
+    foreach ($p in $parts) {
+      if ($p -match "^inbox=(\d+)$") { $o.inbox = [int]$Matches[1] }
+      if ($p -match "^missing=(\d+)$") { $o.missing = [int]$Matches[1] }
+      if ($p -match "^error=(\d+)$") { $o.error = [int]$Matches[1] }
+      if ($p -match "^processed=(\d+)$") { $o.processed = [int]$Matches[1] }
+      if ($p -match "^under18=(\d+)$") { $o.under18 = [int]$Matches[1] }
+    }
   } catch {}
   return $o
 }

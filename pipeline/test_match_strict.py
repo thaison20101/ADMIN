@@ -377,6 +377,9 @@ if __name__ == "__main__":
             "CHAY_GAP_ROI_HOURLY.ps1",
             "CHAY_BO_SUNG_THIEU.ps1",
             "CHAY_LOC_UNDER18.ps1",
+            "CHAY_TONG_HOP_VA_BAT_HOURLY.ps1",
+            "TAM_NGUNG_HOURLY.ps1",
+            "BAT_LAI_HOURLY.ps1",
             "run_hourly.ps1",
         ):
             (root / name).read_bytes().decode("ascii")

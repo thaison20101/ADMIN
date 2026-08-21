@@ -22,12 +22,15 @@ function Get-Counts {
   $lines = @(& python ".\pipeline\print_counts.py" 2>$null)
   $counts = ($lines | Select-Object -Last 1)
   $parts = @($counts -split "\t")
-  $o = @{ inbox = 0; missing = 0; error = 0; processed = 0; raw = $counts }
+  $o = @{ inbox = 0; missing = 0; error = 0; processed = 0; under18 = 0; raw = $counts }
   try {
-    $o.inbox = [int](($parts[1] -split "=")[1])
-    $o.missing = [int](($parts[2] -split "=")[1])
-    $o.error = [int](($parts[3] -split "=")[1])
-    $o.processed = [int](($parts[4] -split "=")[1])
+    foreach ($p in $parts) {
+      if ($p -match "^inbox=(\d+)$") { $o.inbox = [int]$Matches[1] }
+      if ($p -match "^missing=(\d+)$") { $o.missing = [int]$Matches[1] }
+      if ($p -match "^error=(\d+)$") { $o.error = [int]$Matches[1] }
+      if ($p -match "^processed=(\d+)$") { $o.processed = [int]$Matches[1] }
+      if ($p -match "^under18=(\d+)$") { $o.under18 = [int]$Matches[1] }
+    }
   } catch {}
   return $o
 }
@@ -46,6 +49,15 @@ Write-Host ""
 Write-Host "############################################################"
 Write-Host "#  GAP may A: INBOX + MISSING rematch + Ure + hourly       #"
 Write-Host "############################################################"
+Write-Host "Goi y 1 lenh moi (loc U18 + rematch + doi hourly):"
+Write-Host "  powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_TONG_HOP_VA_BAT_HOURLY.ps1"
+
+Write-Host "==== 0/4 TAT hourly cu (tranh 2 bot) ===="
+& powershell -ExecutionPolicy Bypass -File ".\pipeline\TAM_NGUNG_HOURLY.ps1"
+$lockGap = Join-Path $Repo "pipeline\work\locks\auto_cycle.lock"
+if (Test-Path -LiteralPath $lockGap) {
+  Remove-Item -LiteralPath $lockGap -Force -ErrorAction SilentlyContinue
+}
 
 Write-Host "==== 1/4 git pull ===="
 if (Test-Path -LiteralPath (Join-Path $Repo ".git")) {
@@ -66,6 +78,14 @@ if ($LASTEXITCODE -ne 0) {
   Write-Host "DUNG: G: chua san. Mo Google Drive Desktop roi chay lai. KHONG bat hourly."
   exit 2
 }
+
+Write-Host "==== 2b/4 LOC UNDER 18 (park tre) ===="
+$codeU18 = Invoke-PythonLive @(".\pipeline\move_under18.py", "--disk-scan")
+if ($codeU18 -ne 0) {
+  Write-Host "DUNG: loc UNDER 18 loi. KHONG bat hourly. Exit=$codeU18"
+  exit $codeU18
+}
+& python ".\pipeline\print_counts.py" | ForEach-Object { Write-Host $_ }
 
 $code = 0
 
