@@ -31,7 +31,7 @@ TINH NANG DA TRIEN KHAI (branch cursor/drive-hourly-pipeline-df0f)
 8. 2 bot song song: inbox (INBOX_CLS) + missing (MISSING CSV)
    - Claim PDF/pid tranh trung lap
    - Merge cases.csv khi 2 bot chay
-9. Hourly: quet INBOX_CLS + rematch MISSING (CSV, khong list 10k G:)
+9. Hourly: 2 bot INBOX_CLS + MISSING rematch (2 TK, 2500 MISSING/vong)
 10. Lan dau: full-scan toan folder; sau do hourly nhe
 11. Urea: dien khi PDF co (mg/dL -> mmol/L)
 

@@ -14,8 +14,10 @@ Set-Location $Repo
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUTF8 = "1"
 $env:PYTHONUNBUFFERED = "1"
-if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdk_Thuankieu" }
-if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "pkdk_Thuankieu#2026" }
+if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdkthuankieu" }
+if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "P@ssw0rd" }
+if (-not $env:MEDINET_USER_2) { $env:MEDINET_USER_2 = "pkdk_Thuankieu" }
+if (-not $env:MEDINET_PASS_2) { $env:MEDINET_PASS_2 = "pkdk_Thuankieu#2026" }
 
 $LockDir = Join-Path $Repo "pipeline\work\locks"
 
