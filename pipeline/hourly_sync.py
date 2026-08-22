@@ -5,8 +5,8 @@ Flow each hour (laptop on + Task Scheduler + Google Drive sync):
 1) Scan local Drive INBOX_CLS + MISSING + ERROR PDFs (not PROCESSED)
 2) Re-match TTHC by ho+ten (token cuoi) + nam_sinh (rule cu ~8000 file dung)
 3) Date index: 01/07/2026 → today (rolling)
-4) If TTHC found + FULL labs → import → PROCESSED
-5) If TTHC found + PARTIAL labs → import available fields → ERROR
+4) If TTHC found (exact ho+ten+nam sinh) + FULL labs → dien → PROCESSED
+5) If TTHC found + PARTIAL labs → dien phan co → ERROR
 6) If no TTHC → move/keep MISSING (list for TTHC team)
 7) Write result Excel + heartbeat under local pipeline/work/build (never G:)
 
@@ -209,9 +209,15 @@ def main() -> int:
     ap.add_argument(
         "--audit-processed",
         action="store_true",
-        help="Re-check PROCESSED; no TTHC match → move MISSING",
+        help="Re-check PROCESSED; no strict TTHC match -> move MISSING",
     )
     ap.add_argument("--register-only", action="store_true", help="Only register inbox files, no import")
+    ap.add_argument(
+        "--bot",
+        choices=["all", "inbox", "missing"],
+        default="all",
+        help="Parallel bot: inbox=INBOX_CLS only; missing=MISSING CSV only",
+    )
     args = ap.parse_args()
 
     cfg = load_config()
@@ -244,6 +250,7 @@ def main() -> int:
         full_scan=args.full_scan,
         audit_processed=args.audit_processed,
         missing_budget=args.missing_budget,
+        bot_role=args.bot,
     )
     safe_print(f"Done: {summary}")
     if summary.get("abort"):

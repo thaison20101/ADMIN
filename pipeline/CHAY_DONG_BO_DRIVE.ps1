@@ -70,6 +70,10 @@ Write-Host "==== Cap nhat config.local.json + login ===="
 & python ".\pipeline\ensure_config.py"
 
 Write-Host ""
+Write-Host "==== Cap nhat TIEN DO -> build for Supper Data ===="
+& python ".\pipeline\super_data_status.py" --publish
+
+Write-Host ""
 Write-Host "========== XONG =========="
 Write-Host "Hai may (cung Google Drive) se thay cung folder INBOX/MISSING/ERROR/PROCESSED."
 Write-Host "Chi chay HOURLY tren 1 may de tranh import trung."

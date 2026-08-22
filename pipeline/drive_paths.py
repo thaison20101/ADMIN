@@ -251,6 +251,16 @@ def ensure_standard_folders(pipeline: Path, build: Path) -> dict[str, Path]:
         p = build / name
         p.mkdir(parents=True, exist_ok=True)
         folders[f"build_{name}"] = p
+    # Mirror build subfolders on G: (build for Supper Data) when Drive live
+    try:
+        from super_data_status import ensure_super_data_dirs, g_super_data_build_live
+
+        g_build = g_super_data_build_live()
+        if g_build is not None:
+            ensure_super_data_dirs(g_build)
+            folders["g_super_data_build"] = g_build
+    except Exception:
+        pass
     return folders
 
 

@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
-"""One automated cycle: PDF CLS → match Medinet → import.
+"""One automated cycle: PDF CLS → match Medinet → điền CLS (fill).
 
 Routing:
-  FULL (mau + sinh hoa, bo qua Ure) → import → PROCESSED
-  PARTIAL / URINE_ONLY → import phan co → ERROR
-  Khong co TTHC → MISSING (bao bo phan nhap TTHC)
+  FULL (mau + sinh hoa, bo qua Ure) → điền đủ → PROCESSED / UNDER 18
+  PARTIAL / URINE_ONLY → điền phần có trong PDF → ERROR
+  Khong co TTHC (ho+ten+nam sinh khop chinh xac) → MISSING
 
 Scan:
   --full-scan (lan dau / bat so): TOAN BO folder duoi pipeline root
-    (gom INBOX, MISSING, ERROR, PROCESSED, folder khac) — khong bo sot BN cu
-  mac dinh / hourly: chi INBOX_CLS + MISSING
-
-Khop TTHC: ten (ho+ten) + nam sinh + ngay in KQ (~ NgayKham, cho phep in truoc).
-Ky quet ngay: 01/07/2026 → hom nay (rolling).
+  mac dinh / hourly: chi INBOX_CLS + MISSING (CSV rematch)
 """
 
 from __future__ import annotations
@@ -51,6 +47,7 @@ from phase_b_preview import (  # noqa: E402
     match_patient,
     resolve_name_year,
     search_patient_live,
+    verify_tthc_record,
 )
 from win_console import safe_print, setup_utf8_stdio  # noqa: E402
 
@@ -101,17 +98,32 @@ def _collect_scan_dirs(
     *,
     full_scan: bool,
     repair: bool = False,
+    bot_role: str = "all",
 ) -> list[Path]:
     """Folders whose PDFs are registered + re-queued this run.
 
-    full_scan=True → TOAN BO (ke ca PROCESSED + UNDER 18) — urea/BN cu.
-    repair → INBOX_CLS + ERROR + PROCESSED + UNDER 18.
-    hourly → chi INBOX_CLS tren disk; MISSING rematch tu CSV.
+    bot_role inbox  → chi INBOX_CLS (+ ERROR khi full/repair)
+    bot_role missing → chi MISSING (+ PROCESSED khi full audit)
+    bot_role all   → mac dinh cu
     """
     from drive_paths import UNDER18_FOLDER, discover_inbox_dirs
 
+    role = (bot_role or "all").lower()
     inbox_dirs = discover_inbox_dirs(sync, inbox)
     under18 = sync / UNDER18_FOLDER
+
+    if role == "inbox":
+        dirs = list(inbox_dirs)
+        if full_scan or repair:
+            dirs.append(error_dir)
+        return _uniq_dirs(dirs)
+
+    if role == "missing":
+        dirs = [missing]
+        if full_scan:
+            dirs.extend([processed, under18])
+        return _uniq_dirs([d for d in dirs if d])
+
     if not full_scan:
         if repair:
             return _uniq_dirs(list(inbox_dirs) + [error_dir, processed, under18])
@@ -335,6 +347,36 @@ def _route_after_import(
     safe_print(f"  {tag} coverage={coverage} kid={is_kid} {row.get('ho_ten')} pid={pid}")
 
 
+def _route_pdf_review(
+    *,
+    pdf: Path,
+    row: dict,
+    under18_dir: Path,
+    stats: Counter,
+    moves: list[str],
+    note: str,
+    status: str = "PARSE_ERROR",
+) -> None:
+    """Park PDF in UNDER 18 for manual review (loi PDF / thieu nam sinh)."""
+    row["status"] = status
+    row["notes"] = note[:200]
+    try:
+        under18_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    moved = _move_pdf(pdf, under18_dir)
+    if moved:
+        row["source_file"] = str(moved)
+        row["file_name"] = moved.name
+        stats["routed_review_u18"] += 1
+        moves.append(
+            f"REVIEW_U18\t{row.get('ho_ten') or ''}\t{pdf.name}\t->\tUNDER 18/{moved.name}"
+        )
+        safe_print(f"  REVIEW_U18 {note} {row.get('ho_ten') or pdf.name}")
+    else:
+        stats["review_u18_move_fail"] += 1
+
+
 def run_auto_cycle(
     *,
     dry_run: bool = False,
@@ -345,15 +387,21 @@ def run_auto_cycle(
     audit_processed: bool = False,
     missing_budget: int = -1,
     sleep_s: float = 0.05,
+    bot_role: str = "all",
 ) -> dict:
-    """Process PDFs. Hourly = INBOX+MISSING; full_scan = TOAN BO (ke ca PROCESSED)."""
+    """Process PDFs. bot_role: all | inbox | missing (2 bot song song)."""
     from single_instance import acquire_lock, release_lock
 
-    lock = acquire_lock("auto_cycle")
+    role = (bot_role or "all").lower()
+    if role not in {"all", "inbox", "missing"}:
+        role = "all"
+    lock_name = "auto_cycle" if role == "all" else f"auto_cycle_{role}"
+    lock = acquire_lock(lock_name)
     if lock is None:
-        safe_print("ABORT: da co bot khac dang chay (pipeline/work/locks/auto_cycle.lock).")
-        safe_print("Chi 1 cua so! Dong bot thu 2 (ghi de cases.csv, DELTA=0 / sai so).")
-        return {"abort": "another_instance_running"}
+        safe_print(f"ABORT: da co bot {role} khac dang chay (locks/{lock_name}.lock).")
+        if role == "all":
+            safe_print("Chi 1 cua so! Dong bot thu 2 (ghi de cases.csv, DELTA=0 / sai so).")
+        return {"abort": "another_instance_running", "bot_role": role}
     try:
         return _run_auto_cycle_inner(
             dry_run=dry_run,
@@ -364,6 +412,7 @@ def run_auto_cycle(
             audit_processed=audit_processed,
             missing_budget=missing_budget,
             sleep_s=sleep_s,
+            bot_role=role,
         )
     finally:
         release_lock(lock)
@@ -379,6 +428,7 @@ def _run_auto_cycle_inner(
     audit_processed: bool = False,
     missing_budget: int = -1,
     sleep_s: float = 0.05,
+    bot_role: str = "all",
 ) -> dict:
     """Process PDFs. Hourly = INBOX+MISSING; full_scan = TOAN BO (ke ca PROCESSED)."""
     cfg = load_config()
@@ -417,9 +467,11 @@ def _run_auto_cycle_inner(
         safe_print(f"WARN migrate inbox: {e}")
 
     # Plan MISSING rematch budget early (TTHC often added after park in MISSING)
-    # <0 (default): hourly 1500 / repair 0 / full-scan all
-    # 0: no MISSING rematch (INBOX-only round)
-    # >0: that cap
+    role = (bot_role or "all").lower()
+    if role == "inbox":
+        missing_budget = 0
+    elif role == "missing" and missing_budget < 0:
+        missing_budget = 2500
     if missing_budget < 0:
         if full_scan:
             mb_plan = 100000
@@ -433,11 +485,15 @@ def _run_auto_cycle_inner(
     rematch_missing_left = mb_plan
     missing_left = mb_plan
 
-    # full-scan luon kem audit PROCESSED de bat BN cu bi sai / thieu TTHC
-    if full_scan:
+    # full-scan: audit PROCESSED — chi bot missing/all (inbox khong audit)
+    if full_scan and role != "inbox":
         audit_processed = True
+    elif role == "inbox":
+        audit_processed = False
 
     mode = "FULL_SCAN" if full_scan else ("REPAIR" if repair else "HOURLY")
+    if role != "all":
+        mode = f"{mode}_{role.upper()}"
     scan_dirs = _collect_scan_dirs(
         sync,
         inbox,
@@ -446,11 +502,12 @@ def _run_auto_cycle_inner(
         processed,
         full_scan=full_scan,
         repair=repair,
+        bot_role=role,
     )
-    safe_print(f"Mode: {mode} | scan dirs ({len(scan_dirs)}): {[d.name for d in scan_dirs]}")
+    safe_print(f"Mode: {mode} | bot={role} | scan dirs ({len(scan_dirs)}): {[d.name for d in scan_dirs]}")
     safe_print(f"MISSING rematch budget this run: {missing_budget}")
-    safe_print("Match TTHC: ho + ten (full name tokens dau+cuoi) + nam sinh")
-    safe_print("START: INBOX_CLS disk + MISSING CSV | FULL->PROCESSED/UNDER18 PARTIAL->ERROR")
+    safe_print("Match TTHC: CHINH XAC ho+ten + nam sinh (folded)")
+    safe_print("DIEN CLS tu PDF | FULL->PROCESSED/UNDER18 | PARTIAL->ERROR | no TTHC->MISSING")
     cases_path = ROOT / cfg.get("tracking", {}).get("cases_csv", "tracking/cases.csv")
     from hourly_sync import read_cases, register_new_files, write_cases  # local import
 
@@ -579,7 +636,7 @@ def _run_auto_cycle_inner(
     # Oldest last_checked first so 8 rounds of 2500 rotate through the backlog.
     csv_missing_queued = 0
     csv_missing_total = 0
-    if (not full_scan) and (not repair) and missing_budget > 0:
+    if role in {"all", "missing"} and (not full_scan) and (not repair) and missing_budget > 0:
         miss_rows = []
         for r in rows:
             src_u = (r.get("source_file") or "").replace("\\", "/").upper()
@@ -723,6 +780,18 @@ def _run_auto_cycle_inner(
     moves: list[str] = []
     imported_n = 0
     incomplete_n = 0
+    flush_every = 25
+    from claim_registry import claim_owner, release_claim, release_owner, try_claim
+
+    owner_tag = claim_owner(role)
+
+    def _flush_cases() -> None:
+        from single_instance import save_cases_merged
+
+        try:
+            save_cases_merged(cases_path, rows, write_cases)
+        except Exception as e:
+            safe_print(f"WARN flush cases: {e}")
 
     # PROCESSED rematch happens in the main loop when full_scan=True.
     # The old extra audit_processed pass re-parsed every PDF (and live-searched
@@ -766,6 +835,21 @@ def _run_auto_cycle_inner(
                         stats["audit_moved_missing"] += 1
                 else:
                     stats["audit_would_move_missing"] += 1
+            elif rec and not verify_tthc_record(
+                str(data.get("ho_ten") or ""),
+                str(data.get("nam_sinh") or ""),
+                rec,
+            ):
+                unmatched_lines.append(
+                    f"STRICT_REJECT_PROCESSED\t{data.get('ho_ten')}\t"
+                    f"year={data.get('nam_sinh')}\tweb={rec.get('HoTen')}\t{pdf.name}"
+                )
+                if not dry_run:
+                    moved = _move_pdf(pdf, missing)
+                    if moved:
+                        stats["audit_moved_missing"] += 1
+                else:
+                    stats["audit_would_move_missing"] += 1
             else:
                 stats["audit_ok"] += 1
             if i % 200 == 0:
@@ -774,6 +858,10 @@ def _run_auto_cycle_inner(
             f"Audit done: ok={stats['audit_ok']} moved_missing={stats['audit_moved_missing']} "
             f"parse_err={stats['audit_parse_error']}"
         )
+
+    def _release_pdf_claim(key: str) -> None:
+        if key:
+            release_claim("pdf", key, owner_tag)
 
     # Process INBOX / READY first, then WAITING_ADMIN, then incomplete repair last
     row_order = sorted(range(len(rows)), key=lambda i: (_row_priority(rows[i]), i))
@@ -784,6 +872,7 @@ def _run_auto_cycle_inner(
     for ri in row_order:
         row = rows[ri]
         status = (row.get("status") or "").upper()
+        file_key = ""
 
         # Attach file early — always re-check PDFs in current scan dirs
         pdf = _resolve_pdf(row, inbox, missing, processed, error_dir, under18_dir)
@@ -795,10 +884,23 @@ def _run_auto_cycle_inner(
         row["file_name"] = pdf.name
         row["source_file"] = str(pdf)
         src_u = str(pdf).replace("\\", "/").upper()
-        # UNDER 18: hourly skip (da import). Full/repair: kiem urea lai.
+        in_inbox = ("/INBOX" in src_u) or src_u.endswith("/INBOX_CLS") or "INBOX_CLS" in src_u
+        in_missing = "/MISSING/" in f"/{src_u}/" or src_u.endswith("/MISSING")
+        in_error = "/ERROR/" in f"/{src_u}/" or src_u.endswith("/ERROR")
+        in_processed = "/PROCESSED" in src_u
         in_under18 = (
             "/UNDER 18/" in src_u or "/UNDER_18/" in src_u or src_u.endswith("/UNDER 18")
         )
+        if role == "inbox" and not (in_inbox or ((full_scan or repair) and in_error)):
+            stats["skipped_bot_role"] += 1
+            continue
+        if role == "missing" and not (
+            in_missing
+            or (full_scan and (in_processed or in_under18))
+        ):
+            stats["skipped_bot_role"] += 1
+            continue
+        # UNDER 18: hourly skip (da import). Full/repair: kiem urea lai.
         if in_under18 and not full_scan and not repair:
             stats["skipped_under18"] += 1
             continue
@@ -860,12 +962,27 @@ def _run_auto_cycle_inner(
         if status not in PENDING | {"IMPORTED", "SKIP_ALREADY_CLS", "PARSE_ERROR"}:
             continue
 
+        file_key = str(row.get("file_hash") or pdf.name)
+        if not try_claim("pdf", file_key, owner_tag):
+            stats["skipped_claim"] += 1
+            continue
+
         try:
             data = extract_pdf(pdf)
         except Exception as e:
             row["status"] = "PARSE_ERROR"
             row["notes"] = f"parse:{e}"[:200]
             stats["parse_error"] += 1
+            _route_pdf_review(
+                pdf=pdf,
+                row=row,
+                under18_dir=under18_dir,
+                stats=stats,
+                moves=moves,
+                note=f"parse_exception:{e}"[:120],
+                status="PARSE_ERROR",
+            )
+            _release_pdf_claim(file_key)
             continue
 
         if not data.get("parse_ok"):
@@ -873,6 +990,16 @@ def _run_auto_cycle_inner(
             row["ho_ten"] = row.get("ho_ten") or data.get("ho_ten") or ""
             row["notes"] = "parse_ok=false"
             stats["parse_error"] += 1
+            _route_pdf_review(
+                pdf=pdf,
+                row=row,
+                under18_dir=under18_dir,
+                stats=stats,
+                moves=moves,
+                note="parse_ok=false",
+                status="PARSE_ERROR",
+            )
+            _release_pdf_claim(file_key)
             continue
 
         row["ho_ten"] = data.get("ho_ten") or row.get("ho_ten") or ""
@@ -896,6 +1023,26 @@ def _run_auto_cycle_inner(
             row["ho_ten"] = resolved_name
         if resolved_year:
             data["nam_sinh"] = resolved_year
+            row["nam_sinh"] = resolved_year
+
+        pdf_year_final = str(data.get("nam_sinh") or resolved_year or "").strip()
+        if not pdf_year_final:
+            stats["unmatched_no_year"] += 1
+            _route_pdf_review(
+                pdf=pdf,
+                row=row,
+                under18_dir=under18_dir,
+                stats=stats,
+                moves=moves,
+                note="no_nam_sinh_in_pdf",
+                status="WAITING_ADMIN",
+            )
+            unmatched_lines.append(
+                f"NO_YEAR\t{row.get('ho_ten') or data.get('ho_ten')}\t{pdf.name}"
+            )
+            _release_pdf_claim(file_key)
+            continue
+
         coverage = data.get("pdf_coverage") or classify_pdf_coverage(data.get("labs") or {})
         data["pdf_coverage"] = coverage
         st, rec = match_patient(data, index)
@@ -932,18 +1079,30 @@ def _run_auto_cycle_inner(
                         st = "SKIP_ALREADY_CLS"
                 stats["live_name_match"] += 1
 
+        # Strict TTHC: exact ho+ten + nam sinh (reject soft-only matches)
+        pdf_name_strict = str(data.get("ho_ten") or row.get("ho_ten") or "")
+        pdf_year_strict = str(data.get("nam_sinh") or resolved_year or "")
+        if rec and not verify_tthc_record(pdf_name_strict, pdf_year_strict, rec):
+            stats["tthc_strict_reject"] += 1
+            st, rec = "WAITING_ADMIN", None
+
         if st == "WAITING_ADMIN":
-            # PROCESSED already imported: index miss (window/page/cache) must
-            # NOT move the PDF to MISSING. Hourly does not re-scan PROCESSED.
-            # True wrong-name cases (TRAN SANH vs TRAN NGOC SANH) only move
-            # when we *found* a record and name filter rejected it — that
-            # still returns WAITING_ADMIN with no rec, same as miss, so we
-            # keep PROCESSED to avoid mass false MISSING. Inbox/ERROR still
-            # go to MISSING as before.
-            if "/PROCESSED" in src_u:
-                row["status"] = "IMPORTED"
-                row["notes"] = "keep_processed_index_miss"
-                stats["keep_processed_index_miss"] += 1
+            no_year = not pdf_year_strict
+            if no_year:
+                stats["unmatched_no_year"] += 1
+                _route_pdf_review(
+                    pdf=pdf,
+                    row=row,
+                    under18_dir=under18_dir,
+                    stats=stats,
+                    moves=moves,
+                    note="no_nam_sinh_tthc",
+                    status="WAITING_ADMIN",
+                )
+                unmatched_lines.append(
+                    f"NO_YEAR\t{row.get('ho_ten') or data.get('ho_ten')}\t{pdf.name}"
+                )
+                _release_pdf_claim(file_key)
                 continue
             row["status"] = "WAITING_ADMIN"
             row["has_admin_info"] = "NO"
@@ -961,6 +1120,16 @@ def _run_auto_cycle_inner(
                     row["file_name"] = moved.name
                     stats["moved_missing"] += 1
                     moves.append(f"NO_TTHC\t{row.get('ho_ten')}\t{pdf.name}\t->\tMISSING/{moved.name}")
+            elif "/PROCESSED" in src_u:
+                moved = _move_pdf(pdf, missing)
+                if moved:
+                    row["source_file"] = str(moved)
+                    row["file_name"] = moved.name
+                    stats["evicted_processed"] += 1
+                    moves.append(
+                        f"EVICT_PROCESSED\t{row.get('ho_ten')}\t{pdf.name}\t->\tMISSING/{moved.name}"
+                    )
+            _release_pdf_claim(file_key)
             continue
 
         # IMPORTANT: UI opens by phieukhamId — never use cdId as save key
@@ -1208,7 +1377,7 @@ def _run_auto_cycle_inner(
                 moves=moves,
                 nam_sinh=str(data.get("nam_sinh") or row.get("nam_sinh") or ""),
             )
-            safe_print(f"  SAVED {data.get('ho_ten')} pid={pid} fields={fields_sent} coverage={coverage}")
+            safe_print(f"  DIEN OK {data.get('ho_ten')} pid={pid} fields={fields_sent} coverage={coverage}")
         else:
             max_attempts = int(cfg.get("tracking", {}).get("max_import_attempts", 5))
             # repair: keep retrying instead of parking forever in ERROR
@@ -1237,8 +1406,15 @@ def _run_auto_cycle_inner(
         results.append(result_row)
         if sleep_s:
             time.sleep(sleep_s)
+        if imported_n and imported_n % flush_every == 0:
+            _flush_cases()
+        _release_pdf_claim(file_key)
 
-    write_cases(cases_path, rows)
+    release_owner(owner_tag)
+
+    from single_instance import save_cases_merged
+
+    save_cases_merged(cases_path, rows, write_cases)
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     # Always write Excel so hourly activity is visible even when 0 imports
@@ -1359,6 +1535,23 @@ def _run_auto_cycle_inner(
         safe_print(f"MISSING list ({len(unmatched_lines)}): {uout}")
     except Exception as e:
         safe_print(f"WARN unmatched list: {e}")
+
+    try:
+        from super_data_status import publish_super_data_status
+
+        g_status = publish_super_data_status(
+            local_build=build,
+            summary=summary,
+            counts_line=format_counts_line(counts1),
+            mode=mode,
+        )
+        if g_status:
+            safe_print(f"TIEN DO (G): {g_status}")
+        else:
+            safe_print(f"TIEN DO (local): {build / 'TIEN_DO_THEO_DOI.txt'}")
+    except Exception as e:
+        safe_print(f"WARN super_data status: {e}")
+
     return summary
 
 
@@ -1382,13 +1575,19 @@ def main() -> int:
     ap.add_argument(
         "--audit-processed",
         action="store_true",
-        help="Ra soat PROCESSED: khong khop TTHC (ten+nam sinh+ngay in KQ) → MISSING",
+        help="Ra soat PROCESSED: khong khop TTHC chinh xac → MISSING",
     )
     ap.add_argument(
         "--missing-budget",
         type=int,
         default=-1,
         help="Cap MISSING rematch (-1=hourly 1500; 0=none; >0=cap). INBOX unlimited.",
+    )
+    ap.add_argument(
+        "--bot",
+        choices=["all", "inbox", "missing"],
+        default="all",
+        help="Bot role for parallel runs: inbox=INBOX only; missing=MISSING only",
     )
     args = ap.parse_args()
     summary = run_auto_cycle(
@@ -1399,6 +1598,7 @@ def main() -> int:
         full_scan=args.full_scan,
         audit_processed=args.audit_processed,
         missing_budget=args.missing_budget,
+        bot_role=args.bot,
     )
     return 2 if summary.get("abort") else 0
 

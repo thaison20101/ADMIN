@@ -14,6 +14,7 @@ from pipeline.phase_b_preview import (  # noqa: E402
     _norm_gender,
     _phones_match,
     match_patient,
+    verify_tthc_record,
 )
 
 
@@ -38,6 +39,21 @@ def test_names_ho_ten_rule():
     assert _names_soft_match("NGUYỄN THỊ THƠM", "NGUYỄN VĂN THƠM")
     assert _names_soft_match("NGUYỄN THỊ THƠM", "NGUYEN THI THOM")
     assert not _names_soft_match("NGUYỄN THỊ KIỀU", "NGUYỄN THỊ KIỀU DIỄM")
+
+
+def test_verify_tthc_strict_exact():
+    rec = {"HoTen": "NGUYỄN HỒNG CÚC", "NgaySinh": "01/01/1975"}
+    assert verify_tthc_record("NGUYỄN HỒNG CÚC", "1975", rec)
+    assert not verify_tthc_record("NGUYỄN THỊ CÚC", "1975", rec)
+    assert not verify_tthc_record("NGUYỄN HỒNG CÚC", "1976", rec)
+    assert not verify_tthc_record("NGUYỄN HỒNG CÚC", "1975", None)
+
+
+def test_soft_match_differs_from_strict():
+    """Soft match may hit wrong person; strict gate must reject."""
+    rec = {"HoTen": "NGUYỄN VĂN CÚC", "NgaySinh": "15/06/1980"}
+    assert _names_soft_match("NGUYỄN HỒNG CÚC", "NGUYỄN VĂN CÚC")
+    assert not verify_tthc_record("NGUYỄN HỒNG CÚC", "1980", rec)
 
 
 def test_gender_and_phone_helpers():
@@ -158,6 +174,8 @@ def test_daterange_chunks():
 
 if __name__ == "__main__":
     test_names_ho_ten_rule()
+    test_verify_tthc_strict_exact()
+    test_soft_match_differs_from_strict()
     test_gender_and_phone_helpers()
     test_tran_sanh_matches_tran_ngoc_sanh_old_rule()
     test_thi_thom_matches_van_thom_old_rule()
@@ -398,6 +416,9 @@ if __name__ == "__main__":
             "CHAY_BO_SUNG_THIEU.ps1",
             "CHAY_LOC_UNDER18.ps1",
             "CHAY_TONG_HOP_VA_BAT_HOURLY.ps1",
+            "CHAY_FULL_ROI_HOURLY.ps1",
+            "CHAY_2_BOT_SONG_SONG.ps1",
+            "CAP_NHAT_TIEN_DO_SUPER_DATA.ps1",
             "TAM_NGUNG_HOURLY.ps1",
             "BAT_LAI_HOURLY.ps1",
             "run_hourly.ps1",

@@ -81,3 +81,44 @@ def release_lock(path: Path | None) -> None:
                 path.unlink(missing_ok=True)
     except Exception:
         pass
+
+
+def merge_cases_rows(base: list[dict], updates: list[dict]) -> list[dict]:
+    """Merge bot updates into ledger by case_key (parallel inbox+missing bots)."""
+    by_key: dict[str, dict] = {}
+    order: list[str] = []
+    for r in base:
+        k = str(r.get("case_key") or "")
+        if not k:
+            continue
+        if k not in by_key:
+            order.append(k)
+        by_key[k] = r
+    for r in updates:
+        k = str(r.get("case_key") or "")
+        if not k:
+            continue
+        if k not in by_key:
+            order.append(k)
+        by_key[k] = r
+    return [by_key[k] for k in order if k in by_key]
+
+
+def save_cases_merged(cases_path, rows: list[dict], write_fn) -> None:
+    """Atomic-ish save: re-read ledger, merge by case_key, write."""
+    from pathlib import Path
+
+    path = Path(cases_path)
+    lock = acquire_lock("cases_csv", stale_hours=0.25)
+    if lock is None:
+        # Fallback: direct write (single bot)
+        write_fn(path, rows)
+        return
+    try:
+        from hourly_sync import read_cases
+
+        current = read_cases(path)
+        merged = merge_cases_rows(current, rows)
+        write_fn(path, merged)
+    finally:
+        release_lock(lock)

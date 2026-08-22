@@ -203,6 +203,20 @@ def _fold_name(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def verify_tthc_record(
+    pdf_name: str,
+    pdf_year: str,
+    rec: dict | None,
+) -> bool:
+    """Strict TTHC: exact folded họ+tên + matching birth year."""
+    if not rec or not pdf_name or not pdf_year:
+        return False
+    rn = str(rec.get("HoTen") or "")
+    if _fold_name(pdf_name) != _fold_name(rn):
+        return False
+    return _year_from_ngaysinh(rec.get("NgaySinh")) == str(pdf_year).strip()
+
+
 def _year_from_ngaysinh(ns) -> str:
     """Extract birth year from Medinet NgaySinh.
 
