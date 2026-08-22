@@ -579,6 +579,147 @@ def load_or_fetch_unit_index(
     return idx
 
 
+def _tag_records_in_index(index: dict, account_id: str) -> None:
+    """Stamp _medinet_account on every record in index buckets."""
+    for key in ("by_phone", "by_name_year", "by_fold_year", "by_cccd", "by_maphieu", "by_pid"):
+        bucket = index.get(key) or {}
+        if not isinstance(bucket, dict):
+            continue
+        for _k, recs in bucket.items():
+            if isinstance(recs, list):
+                for r in recs:
+                    if isinstance(r, dict):
+                        r["_medinet_account"] = account_id
+            elif isinstance(recs, dict):
+                recs["_medinet_account"] = account_id
+
+
+def _merge_dict_of_lists(into: dict, from_: dict) -> None:
+    for k, recs in (from_ or {}).items():
+        if isinstance(recs, list):
+            into.setdefault(k, []).extend(recs)
+        elif isinstance(recs, dict):
+            into.setdefault(k, []).append(recs)
+
+
+def _merge_dict_single(into: dict, from_: dict) -> None:
+    for k, v in (from_ or {}).items():
+        if k not in into:
+            into[k] = v
+
+
+def merge_unit_indexes(idx_a: dict, idx_b: dict, id_a: str, id_b: str) -> dict:
+    """Union two unit indexes; each record tagged with owning Medinet account."""
+    _tag_records_in_index(idx_a, id_a)
+    _tag_records_in_index(idx_b, id_b)
+    merged = {
+        "by_phone": {},
+        "by_name_year": {},
+        "by_fold_year": {},
+        "by_cccd": {},
+        "by_maphieu": {},
+        "by_pid": {},
+        "no_cls_ids": set(),
+        "all_ids": set(),
+        "by_mau_count": {},
+    }
+    for key in ("by_phone", "by_name_year", "by_fold_year", "by_cccd", "by_maphieu"):
+        _merge_dict_of_lists(merged[key], idx_a.get(key) or {})
+        _merge_dict_of_lists(merged[key], idx_b.get(key) or {})
+    _merge_dict_single(merged["by_pid"], idx_a.get("by_pid") or {})
+    _merge_dict_single(merged["by_pid"], idx_b.get("by_pid") or {})
+    merged["no_cls_ids"] = set(idx_a.get("no_cls_ids") or set()) | set(
+        idx_b.get("no_cls_ids") or set()
+    )
+    merged["all_ids"] = set(idx_a.get("all_ids") or set()) | set(idx_b.get("all_ids") or set())
+    mc = dict(idx_a.get("by_mau_count") or {})
+    for mau, n in (idx_b.get("by_mau_count") or {}).items():
+        mc[mau] = mc.get(mau, 0) + n
+    merged["by_mau_count"] = mc
+    return merged
+
+
+def load_or_fetch_merged_unit_index(
+    accounts: list[dict],
+    date_from: str,
+    date_to: str,
+    *,
+    cache_dir: Path | None = None,
+    max_age_hours: float = 6,
+) -> dict:
+    """Build or load merged index from all Medinet accounts (TTHC split per user)."""
+    import pickle
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    if len(accounts) < 2:
+        tok = authenticate(accounts[0]["user"], accounts[0]["password"])
+        idx = fetch_unit_index(tok, date_from, date_to)
+        _tag_records_in_index(idx, accounts[0]["id"])
+        return idx
+
+    if cache_dir is None:
+        cache_dir = Path(__file__).resolve().parent / "work" / "index_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    id1 = accounts[0]["id"].replace("/", "_")
+    id2 = accounts[1]["id"].replace("/", "_")
+    key = f"v3_merged_{id1}_{id2}_{date_from.replace('/', '')}_{date_to.replace('/', '')}.pkl"
+    path = cache_dir / key
+    now = time.time()
+    if path.exists() and max_age_hours > 0:
+        age_h = (now - path.stat().st_mtime) / 3600.0
+        if age_h <= max_age_hours:
+            try:
+                with path.open("rb") as f:
+                    idx = pickle.load(f)
+                n = len(idx.get("all_ids") or [])
+                if n >= 50:
+                    safe_print(
+                        f"  Index MERGED CACHE hit age={age_h:.1f}h ids={n} file={path.name}",
+                        flush=True,
+                    )
+                    return idx
+            except Exception as e:
+                safe_print(f"  Merged index cache unreadable: {e} — rebuild")
+
+    safe_print(
+        f"  Index MERGED build: {accounts[0]['id']} + {accounts[1]['id']}",
+        flush=True,
+    )
+
+    def _fetch_one(acct: dict) -> tuple[str, dict]:
+        tok = authenticate(acct["user"], acct["password"])
+        idx = fetch_unit_index(tok, date_from, date_to)
+        n = len(idx.get("all_ids") or set())
+        safe_print(f"  INDEX {acct['id']} ids={n}", flush=True)
+        return acct["id"], idx
+
+    results: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        futs = [ex.submit(_fetch_one, a) for a in accounts[:2]]
+        for fut in as_completed(futs):
+            aid, idx = fut.result()
+            results[aid] = idx
+
+    merged = merge_unit_indexes(
+        results[accounts[0]["id"]],
+        results[accounts[1]["id"]],
+        accounts[0]["id"],
+        accounts[1]["id"],
+    )
+    safe_print(
+        f"  INDEX MERGED ids={len(merged.get('all_ids') or set())} "
+        f"no_cls={len(merged.get('no_cls_ids') or set())}",
+        flush=True,
+    )
+    try:
+        with path.open("wb") as f:
+            pickle.dump(merged, f, protocol=4)
+        safe_print(f"  Index MERGED CACHE wrote -> {path.name}", flush=True)
+    except Exception as e:
+        safe_print(f"  WARN merged index cache write: {e}")
+    return merged
+
+
 def resolve_name_year(row: dict) -> tuple[str, str]:
     """Return (ho_ten, nam_sinh) using PDF fields + filename hints.
 
@@ -970,6 +1111,50 @@ def search_patient_live(
     # Still ambiguous
     return "WAITING_ADMIN", None, token
 
+
+def search_patient_live_multi(
+    accounts: list[dict],
+    tokens: dict[str, str],
+    *,
+    name: str,
+    year: str,
+    date_from: str,
+    date_to: str,
+    ngay_co_kq: str = "",
+    gioi_tinh: str = "",
+    sdt: str = "",
+) -> tuple[str, dict | None, str]:
+    """Try live search on each Medinet account until strict name+year hit.
+
+    Returns (status, rec, account_id). Updates tokens dict in place.
+    """
+    for acct in accounts:
+        aid = acct["id"]
+        tok = tokens.get(aid) or ""
+        if not tok:
+            try:
+                tok = authenticate(acct["user"], acct["password"])
+                tokens[aid] = tok
+            except Exception:
+                continue
+        st, rec, new_tok = search_patient_live(
+            tok,
+            name=name,
+            year=year,
+            date_from=date_from,
+            date_to=date_to,
+            ngay_co_kq=ngay_co_kq,
+            gioi_tinh=gioi_tinh,
+            sdt=sdt,
+        )
+        tokens[aid] = new_tok
+        if st != "WAITING_ADMIN" and rec:
+            rec["_medinet_account"] = aid
+            if _fold_name(name) == _fold_name(str(rec.get("HoTen") or "")):
+                return st, rec, aid
+            # soft hit from live — still require exact for PROCESSED path later
+            return st, rec, aid
+    return "WAITING_ADMIN", None, ""
 
 
 def write_preview_excel(rows: list[dict], path: Path) -> None:

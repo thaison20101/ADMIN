@@ -1,5 +1,12 @@
 # ============================================================
-# 1 LENH TONG HOP MAY A - PKDK THUAN KIEU (ASCII-only)
+# 1 LENH DUY NHAT MAY A - PKDK THUAN KIEU (ASCII-only)
+#
+# Chay 1 lan: FULL 2 bot -> rematch MISSING -> Urea -> BAT hourly
+# Sau do hourly tu quet INBOX_CLS + MISSING nhu cu.
+#
+# 2 TK Medinet (hardcode trong medinet_creds.py + env duoi day):
+#   pkdkthuankieu / P@ssw0rd
+#   pkdk_Thuankieu / pkdk_Thuankieu#2026
 #
 # Gom tat ca:
 #   - Tat hourly + xoa lock
@@ -39,8 +46,11 @@ Set-Location $Repo
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUTF8 = "1"
 $env:PYTHONUNBUFFERED = "1"
-if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdk_Thuankieu" }
-if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "pkdk_Thuankieu#2026" }
+# 2 TK Medinet (cung hardcode trong pipeline/medinet_creds.py)
+if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdkthuankieu" }
+if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "P@ssw0rd" }
+if (-not $env:MEDINET_USER_2) { $env:MEDINET_USER_2 = "pkdk_Thuankieu" }
+if (-not $env:MEDINET_PASS_2) { $env:MEDINET_PASS_2 = "pkdk_Thuankieu#2026" }
 
 $TaskName = "PKDK_Hourly_Sync"
 $Branch = "cursor/drive-hourly-pipeline-df0f"

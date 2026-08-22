@@ -22,24 +22,27 @@ TINH NANG DA TRIEN KHAI (branch cursor/drive-hourly-pipeline-df0f)
 2. DIEN CLS tu PDF vao form Can lam sang (khong bo sot field, doi don vi)
 3. FULL TTHC + FULL CLS -> PROCESSED (nguoi lon) / UNDER 18 (tre FULL)
 4. Co TTHC + PARTIAL CLS -> dien phan co trong PDF -> ERROR
-5. Khong TTHC -> MISSING
+5. Khong TTHC tren CA 2 TK Medinet -> MISSING (NO_TTHC_BOTH)
 6. Loi PDF / khong co nam sinh -> UNDER 18 (folder kiem tra tay)
-7. 2 bot song song: inbox (INBOX_CLS) + missing (MISSING CSV)
+7. 2 TK Medinet (index + live search gop):
+   - pkdkthuankieu / P@ssw0rd
+   - pkdk_Thuankieu / pkdk_Thuankieu#2026
+   - TTHC nhap tren TK1 co the khong thay tren TK2 -> quet ca 2
+8. 2 bot song song: inbox (INBOX_CLS) + missing (MISSING CSV)
    - Claim PDF/pid tranh trung lap
    - Merge cases.csv khi 2 bot chay
-8. Hourly: quet INBOX_CLS + rematch MISSING (CSV, khong list 10k G:)
-9. Lan dau: full-scan toan folder; sau do hourly nhe
-10. Urea: dien khi PDF co (mg/dL -> mmol/L)
+9. Hourly: quet INBOX_CLS + rematch MISSING (CSV, khong list 10k G:)
+10. Lan dau: full-scan toan folder; sau do hourly nhe
+11. Urea: dien khi PDF co (mg/dL -> mmol/L)
 
-LENH CHAY MAY A
----------------
+LENH CHAY MAY A (1 LENH DUY NHAT)
+---------------------------------
 cd C:\\Users\\thais\\ADMIN
-git pull origin cursor/drive-hourly-pipeline-df0f
+powershell -ExecutionPolicy Bypass -File .\\pipeline\\CHAY_TONG_HOP_MOI.ps1
 
-Full 1 vong + bat hourly:
-  powershell -ExecutionPolicy Bypass -File .\\pipeline\\CHAY_FULL_ROI_HOURLY.ps1
+(Lenh tren: tat hourly -> pull -> full 2 bot -> rematch MISSING -> Urea -> bat hourly)
 
-2 bot song song (INBOX + MISSING):
+2 bot song song (INBOX + MISSING, khong full):
   powershell -ExecutionPolicy Bypass -File .\\pipeline\\CHAY_2_BOT_SONG_SONG.ps1
 
 Dong bo folder G:

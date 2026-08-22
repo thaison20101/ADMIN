@@ -43,10 +43,10 @@ from phase_b_import import write_result_excel  # noqa: E402
 from phase_b_preview import (  # noqa: E402
     build_root,
     load_config,
-    load_or_fetch_unit_index,
+    load_or_fetch_merged_unit_index,
     match_patient,
     resolve_name_year,
-    search_patient_live,
+    search_patient_live_multi,
     verify_tthc_record,
 )
 from win_console import safe_print, setup_utf8_stdio  # noqa: E402
@@ -740,14 +740,42 @@ def _run_auto_cycle_inner(
     if full_scan or repair:
         max_incomplete = max(max_incomplete, 2000)
 
-    from medinet_creds import get_medinet_creds
+    from medinet_creds import get_medinet_accounts
 
-    user, password = get_medinet_creds(cfg)
-    token_box = {"t": authenticate(user, password)}
+    accounts = get_medinet_accounts(cfg)
+    safe_print(
+        f"Medinet accounts: {accounts[0]['id']} + {accounts[1]['id']} (merged TTHC index)"
+    )
+    tokens: dict[str, str] = {}
+    for acct in accounts:
+        tokens[acct["id"]] = authenticate(acct["user"], acct["password"])
 
-    def reauth():
-        token_box["t"] = authenticate(user, password)
-        return token_box["t"]
+    def reauth_acct(aid: str) -> str:
+        for acct in accounts:
+            if acct["id"] == aid:
+                tokens[aid] = authenticate(acct["user"], acct["password"])
+                return tokens[aid]
+        tokens[accounts[0]["id"]] = authenticate(
+            accounts[0]["user"], accounts[0]["password"]
+        )
+        return tokens[accounts[0]["id"]]
+
+    def account_for(rec: dict | None) -> str:
+        if rec and rec.get("_medinet_account"):
+            return str(rec["_medinet_account"])
+        return accounts[0]["id"]
+
+    def token_for(rec: dict | None) -> str:
+        aid = account_for(rec)
+        return tokens.get(aid) or tokens[accounts[0]["id"]]
+
+    def make_reauth(rec: dict | None):
+        aid = account_for(rec)
+
+        def _r():
+            return reauth_acct(aid)
+
+        return _r
 
     date_from = cfg.get("medinet", {}).get("date_from") or "01/07/2026"
     # date_to empty / missing / stale → always hôm nay (rolling)
@@ -765,14 +793,15 @@ def _run_auto_cycle_inner(
         safe_print("Index: rematch — reuse cache <=3h (M2/M3/M4/M11)")
     else:
         index_max_age = 2.0
-    index = load_or_fetch_unit_index(
-        token_box["t"],
+    index = load_or_fetch_merged_unit_index(
+        accounts,
         date_from,
         date_to,
         cache_dir=cache_dir,
         max_age_hours=index_max_age,
     )
-    token_box["t"] = authenticate(user, password)
+    for acct in accounts:
+        tokens[acct["id"]] = authenticate(acct["user"], acct["password"])
 
     stats = Counter()
     results = []
@@ -812,8 +841,9 @@ def _run_auto_cycle_inner(
                 continue
             st, rec = match_patient(data, index)
             if st == "WAITING_ADMIN":
-                live_st, live_rec, token_box["t"] = search_patient_live(
-                    token_box["t"],
+                live_st, live_rec, live_acct = search_patient_live_multi(
+                    accounts,
+                    tokens,
                     name=str(data.get("ho_ten") or ""),
                     year=str(data.get("nam_sinh") or ""),
                     date_from=date_from,
@@ -1057,8 +1087,9 @@ def _run_auto_cycle_inner(
                 stats["unmatched_no_year"] += 1
             else:
                 stats["live_search_attempted"] += 1
-            live_st, live_rec, token_box["t"] = search_patient_live(
-                token_box["t"],
+            live_st, live_rec, live_acct = search_patient_live_multi(
+                accounts,
+                tokens,
                 name=live_name,
                 year=live_year,
                 date_from=date_from,
@@ -1069,11 +1100,13 @@ def _run_auto_cycle_inner(
             )
             if live_st != "WAITING_ADMIN" and live_rec:
                 st, rec = live_st, live_rec
+                stats[f"matched_{live_acct}"] += 1
                 # Re-check whether CLS already exists
                 pid_live = live_rec.get("phieukhamId") or live_rec.get("Id")
                 if pid_live not in (None, ""):
-                    existing_live, token_box["t"] = load_cls_view(
-                        token_box["t"], pid_live, reauth=reauth
+                    aid_live = account_for(live_rec)
+                    existing_live, tokens[aid_live] = load_cls_view(
+                        tokens[aid_live], pid_live, reauth=make_reauth(live_rec)
                     )
                     if cls_has_lab_values(existing_live):
                         st = "SKIP_ALREADY_CLS"
@@ -1106,10 +1139,11 @@ def _run_auto_cycle_inner(
                 continue
             row["status"] = "WAITING_ADMIN"
             row["has_admin_info"] = "NO"
-            row["notes"] = "no_tthc_match"
+            row["notes"] = "no_tthc_both_accounts"
             stats["waiting_admin"] += 1
+            stats["no_tthc_both_accounts"] += 1
             unmatched_lines.append(
-                f"NO_TTHC\t{row.get('ho_ten') or data.get('ho_ten')}\t"
+                f"NO_TTHC_BOTH\t{row.get('ho_ten') or data.get('ho_ten')}\t"
                 f"year={data.get('nam_sinh') or resolved_year}\t"
                 f"phone={data.get('sdt')}\t{pdf.name}"
             )
@@ -1145,13 +1179,19 @@ def _run_auto_cycle_inner(
         if rec:
             row["ma_phieu"] = rec.get("MaPhieu") or row.get("ma_phieu") or ""
             row["has_admin_info"] = "YES"
+            acct_id = account_for(rec)
+            row["notes"] = f"medinet_account={acct_id}"[:200]
+            stats[f"matched_{acct_id}"] += 1
 
         if st == "SKIP_ALREADY_CLS":
             # List says already has CLS — during repair/force fall through so we
             # can still fill missing urine (Âm tính→Negative) / Urê / etc.
             # Also when PDF still stuck in work folders: re-check gaps then move.
-            existing_early, token_box["t"] = (
-                load_cls_view(token_box["t"], pid, reauth=reauth) if pid else (None, token_box["t"])
+            aid = account_for(rec)
+            existing_early, tokens[aid] = (
+                load_cls_view(tokens[aid], pid, reauth=make_reauth(rec))
+                if pid
+                else (None, tokens[aid])
             )
             if not cls_has_lab_values(existing_early):
                 st = "READY_IMPORT"
@@ -1195,7 +1235,9 @@ def _run_auto_cycle_inner(
             stats["waiting_admin"] += 1
             continue
 
-        existing, token_box["t"] = load_cls_view(token_box["t"], pid, reauth=reauth)
+        existing, tokens[account_for(rec)] = load_cls_view(
+            token_for(rec), pid, reauth=make_reauth(rec)
+        )
         has_cls = cls_has_lab_values(existing)
 
         # Build payload early so repair can detect incomplete urine/chemistry
@@ -1312,17 +1354,22 @@ def _run_auto_cycle_inner(
             stats["dry_run"] += 1
             continue
 
-        ok, msg, _raw, token_box["t"] = insert_cls(token_box["t"], payload, reauth=reauth)
+        aid = account_for(rec)
+        ok, msg, _raw, tokens[aid] = insert_cls(
+            tokens[aid], payload, reauth=make_reauth(rec)
+        )
         time.sleep(0.05)
-        verified, vdetail, token_box["t"] = verify_cls_saved(
-            token_box["t"], pid, payload=payload, reauth=reauth
+        verified, vdetail, tokens[aid] = verify_cls_saved(
+            tokens[aid], pid, payload=payload, reauth=make_reauth(rec)
         )
         attempts = int(row.get("import_attempts") or 0) + 1
         row["import_attempts"] = str(attempts)
         msg = f"{msg}; {vdetail}"
 
         # Re-check web after save via Get+FormViewer (Get alone often omits Urobilinogen)
-        existing2, token_box["t"] = load_cls_view(token_box["t"], pid, reauth=reauth)
+        existing2, tokens[aid] = load_cls_view(
+            tokens[aid], pid, reauth=make_reauth(rec)
+        )
         # Ignore urine fields Medinet rejected during progressive retry
         dropped = []
         dm = re.search(r"dropped=([^:;]+)", msg or "")

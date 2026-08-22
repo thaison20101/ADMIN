@@ -393,6 +393,60 @@ if __name__ == "__main__":
 
     test_live_search_accepts_unique_without_date()
 
+    def test_merge_unit_indexes_tags_accounts():
+        from pipeline.phase_b_preview import merge_unit_indexes
+
+        idx_a = {
+            "by_name_year": {"NGUYEN VAN A|1964": [{"HoTen": "NGUYEN VAN A", "Id": 1}]},
+            "by_phone": {},
+            "by_fold_year": {},
+            "by_cccd": {},
+            "by_maphieu": {},
+            "by_pid": {"1": {"Id": 1}},
+            "no_cls_ids": {1},
+            "all_ids": {1},
+            "by_mau_count": {"M3": 1},
+        }
+        idx_b = {
+            "by_name_year": {"TRAN THI B|1970": [{"HoTen": "TRAN THI B", "Id": 2}]},
+            "by_phone": {},
+            "by_fold_year": {},
+            "by_cccd": {},
+            "by_maphieu": {},
+            "by_pid": {"2": {"Id": 2}},
+            "no_cls_ids": {2},
+            "all_ids": {2},
+            "by_mau_count": {"M4": 1},
+        }
+        merged = merge_unit_indexes(idx_a, idx_b, "acct1", "acct2")
+        assert len(merged["all_ids"]) == 2
+        assert merged["by_mau_count"]["M3"] == 1
+        assert merged["by_mau_count"]["M4"] == 1
+        rec_a = merged["by_name_year"]["NGUYEN VAN A|1964"][0]
+        rec_b = merged["by_name_year"]["TRAN THI B|1970"][0]
+        assert rec_a["_medinet_account"] == "acct1"
+        assert rec_b["_medinet_account"] == "acct2"
+
+    test_merge_unit_indexes_tags_accounts()
+
+    def test_get_medinet_accounts_two_hardcoded():
+        from pipeline.medinet_creds import get_medinet_accounts
+
+        accts = get_medinet_accounts({})
+        assert len(accts) >= 2
+        ids = {a["id"] for a in accts[:2]}
+        assert "pkdkthuankieu" in ids
+        assert "pkdk_Thuankieu" in ids
+
+    test_get_medinet_accounts_two_hardcoded()
+
+    def test_search_patient_live_multi_callable():
+        from pipeline.phase_b_preview import search_patient_live_multi
+
+        assert callable(search_patient_live_multi)
+
+    test_search_patient_live_multi_callable()
+
     def test_is_under18():
         from datetime import date
         from pipeline.move_under18 import is_under18
