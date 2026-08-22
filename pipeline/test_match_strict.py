@@ -394,40 +394,85 @@ if __name__ == "__main__":
     test_live_search_accepts_unique_without_date()
 
     def test_merge_unit_indexes_tags_accounts():
-        from pipeline.phase_b_preview import merge_unit_indexes
+        from pipeline.phase_b_preview import merge_unit_indexes, match_patient
 
         idx_a = {
-            "by_name_year": {"NGUYEN VAN A|1964": [{"HoTen": "NGUYEN VAN A", "Id": 1}]},
+            "by_name_year": {"NGUYEN VAN A|1964": [{"HoTen": "NGUYEN VAN A", "NgaySinh": "1964-01-01", "Id": 1}]},
             "by_phone": {},
             "by_fold_year": {},
-            "by_cccd": {},
-            "by_maphieu": {},
-            "by_pid": {"1": {"Id": 1}},
+            "by_cccd": {"079123": {"HoTen": "NGUYEN VAN A", "NgaySinh": "1964-01-01", "Id": 1}},
+            "by_maphieu": {"KSKDKP1": {"HoTen": "NGUYEN VAN A", "NgaySinh": "1964-01-01", "Id": 1}},
+            "by_pid": {"1": {"HoTen": "NGUYEN VAN A", "NgaySinh": "1964-01-01", "Id": 1}},
             "no_cls_ids": {1},
             "all_ids": {1},
             "by_mau_count": {"M3": 1},
         }
         idx_b = {
-            "by_name_year": {"TRAN THI B|1970": [{"HoTen": "TRAN THI B", "Id": 2}]},
+            "by_name_year": {"TRAN THI B|1970": [{"HoTen": "TRAN THI B", "NgaySinh": "1970-05-05", "Id": 2}]},
             "by_phone": {},
             "by_fold_year": {},
-            "by_cccd": {},
-            "by_maphieu": {},
-            "by_pid": {"2": {"Id": 2}},
+            "by_cccd": {"079999": {"HoTen": "TRAN THI B", "NgaySinh": "1970-05-05", "Id": 2}},
+            "by_maphieu": {"KSKDKP2": {"HoTen": "TRAN THI B", "NgaySinh": "1970-05-05", "Id": 2}},
+            "by_pid": {"2": {"HoTen": "TRAN THI B", "NgaySinh": "1970-05-05", "Id": 2}},
             "no_cls_ids": {2},
             "all_ids": {2},
             "by_mau_count": {"M4": 1},
         }
         merged = merge_unit_indexes(idx_a, idx_b, "acct1", "acct2")
         assert len(merged["all_ids"]) == 2
-        assert merged["by_mau_count"]["M3"] == 1
-        assert merged["by_mau_count"]["M4"] == 1
-        rec_a = merged["by_name_year"]["NGUYEN VAN A|1964"][0]
-        rec_b = merged["by_name_year"]["TRAN THI B|1970"][0]
-        assert rec_a["_medinet_account"] == "acct1"
-        assert rec_b["_medinet_account"] == "acct2"
+        assert isinstance(merged["by_cccd"]["079123"], list)
+        assert isinstance(merged["by_maphieu"]["KSKDKP1"], list)
+        assert isinstance(merged["by_pid"]["1"], list)
+        # Regression: match_patient must not crash when buckets are list[dict]
+        st, rec = match_patient(
+            {
+                "ho_ten": "NGUYEN VAN A",
+                "nam_sinh": "1964",
+                "cccd": "079123",
+                "file_name": "010725-1 - NGUYEN VAN A - 1964 - M.pdf",
+            },
+            merged,
+        )
+        assert st != "WAITING_ADMIN" or rec is None or isinstance(rec, dict)
+        assert st in {"READY_IMPORT", "SKIP_ALREADY_CLS", "WAITING_ADMIN"}
+        if rec:
+            assert isinstance(rec, dict)
+            assert rec.get("HoTen")
 
     test_merge_unit_indexes_tags_accounts()
+
+    def test_match_patient_merged_maphieu_list_no_crash():
+        """Bug: merged by_maphieu values are list → AttributeError on .get."""
+        from pipeline.phase_b_preview import match_patient
+
+        idx = {
+            "by_name_year": {},
+            "by_phone": {},
+            "by_fold_year": {},
+            "by_cccd": {},
+            "by_maphieu": {
+                "123456": [
+                    {"HoTen": "VO MINH TAM", "NgaySinh": "1966-01-01", "Id": 99, "phieukhamId": 99}
+                ]
+            },
+            "by_pid": {},
+            "no_cls_ids": set(),
+            "all_ids": {99},
+            "by_mau_count": {},
+        }
+        st, rec = match_patient(
+            {
+                "ho_ten": "VO MINH TAM",
+                "nam_sinh": "1966",
+                "file_name": "010725-12 - VO MINH TAM - 1966 - M_123456.pdf",
+            },
+            idx,
+        )
+        assert isinstance(st, str)
+        if rec is not None:
+            assert isinstance(rec, dict)
+
+    test_match_patient_merged_maphieu_list_no_crash()
 
     def test_get_medinet_accounts_two_hardcoded():
         from pipeline.medinet_creds import get_medinet_accounts

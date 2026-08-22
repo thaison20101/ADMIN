@@ -82,9 +82,20 @@ function Start-TwoBots {
   Write-Host ("Bot INBOX  PID={0} log={1}" -f $b1.Id, $logInbox)
   Write-Host ("Bot MISSING PID={0} log={1}" -f $b2.Id, $logMiss)
   Wait-Process -Id $b1.Id, $b2.Id -ErrorAction SilentlyContinue
-  $c1 = $b1.ExitCode; if ($null -eq $c1) { $c1 = 0 }
-  $c2 = $b2.ExitCode; if ($null -eq $c2) { $c2 = 0 }
-  return [Math]::Max($c1, $c2)
+  # Force refresh ExitCode (some PS versions leave null until HasExited checked)
+  $null = $b1.HasExited; $null = $b2.HasExited
+  $c1 = $b1.ExitCode
+  $c2 = $b2.ExitCode
+  if ($null -eq $c1) {
+    $err1 = Get-Content ($logInbox + ".err") -Raw -ErrorAction SilentlyContinue
+    $c1 = if ($err1 -match "Traceback|Error") { 1 } else { 0 }
+  }
+  if ($null -eq $c2) {
+    $err2 = Get-Content ($logMiss + ".err") -Raw -ErrorAction SilentlyContinue
+    $c2 = if ($err2 -match "Traceback|Error") { 1 } else { 0 }
+  }
+  Write-Host ("Bot exit: inbox={0} missing={1}" -f $c1, $c2)
+  return [Math]::Max([int]$c1, [int]$c2)
 }
 
 $header = @(

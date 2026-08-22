@@ -595,9 +595,10 @@ def _tag_records_in_index(index: dict, account_id: str) -> None:
 
 
 def _merge_dict_of_lists(into: dict, from_: dict) -> None:
+    """Merge bucket values into list-of-records (handles single-dict OR list)."""
     for k, recs in (from_ or {}).items():
         if isinstance(recs, list):
-            into.setdefault(k, []).extend(recs)
+            into.setdefault(k, []).extend(r for r in recs if isinstance(r, dict))
         elif isinstance(recs, dict):
             into.setdefault(k, []).append(recs)
 
@@ -608,8 +609,28 @@ def _merge_dict_single(into: dict, from_: dict) -> None:
             into[k] = v
 
 
+def _index_recs(bucket: dict | None, key: str) -> list[dict]:
+    """Normalize index bucket value to a list of record dicts.
+
+    Single-account indexes store by_cccd/by_maphieu/by_pid as one dict;
+    merged dual-account indexes store them as list[dict]. Match must accept both.
+    """
+    if not bucket or key not in bucket:
+        return []
+    val = bucket[key]
+    if isinstance(val, list):
+        return [r for r in val if isinstance(r, dict)]
+    if isinstance(val, dict):
+        return [val]
+    return []
+
+
 def merge_unit_indexes(idx_a: dict, idx_b: dict, id_a: str, id_b: str) -> dict:
-    """Union two unit indexes; each record tagged with owning Medinet account."""
+    """Union two unit indexes; each record tagged with owning Medinet account.
+
+    by_phone / by_name_year / by_fold_year / by_cccd / by_maphieu / by_pid
+    all become list-of-records after merge (same key may exist on both accounts).
+    """
     _tag_records_in_index(idx_a, id_a)
     _tag_records_in_index(idx_b, id_b)
     merged = {
@@ -623,11 +644,16 @@ def merge_unit_indexes(idx_a: dict, idx_b: dict, id_a: str, id_b: str) -> dict:
         "all_ids": set(),
         "by_mau_count": {},
     }
-    for key in ("by_phone", "by_name_year", "by_fold_year", "by_cccd", "by_maphieu"):
+    for key in (
+        "by_phone",
+        "by_name_year",
+        "by_fold_year",
+        "by_cccd",
+        "by_maphieu",
+        "by_pid",
+    ):
         _merge_dict_of_lists(merged[key], idx_a.get(key) or {})
         _merge_dict_of_lists(merged[key], idx_b.get(key) or {})
-    _merge_dict_single(merged["by_pid"], idx_a.get("by_pid") or {})
-    _merge_dict_single(merged["by_pid"], idx_b.get("by_pid") or {})
     merged["no_cls_ids"] = set(idx_a.get("no_cls_ids") or set()) | set(
         idx_b.get("no_cls_ids") or set()
     )
@@ -786,39 +812,41 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
 
     yr_target = year or fn_year
 
-    def _rec_year(rec: dict) -> str:
+    def _rec_year(rec) -> str:
+        if not isinstance(rec, dict):
+            return ""
         return _year_from_ngaysinh(rec.get("NgaySinh"))
 
-    def _year_ok(rec: dict) -> bool:
-        if not yr_target:
+    def _year_ok(rec) -> bool:
+        if not isinstance(rec, dict) or not yr_target:
             return False
         return _rec_year(rec) == yr_target
 
-    def _rec_ngaykham(rec: dict) -> date | None:
+    def _rec_ngaykham(rec) -> date | None:
+        if not isinstance(rec, dict):
+            return None
         return _parse_any_date(rec.get("NgayKham") or rec.get("KSKDK_NgayKham") or rec.get("NgayTao"))
 
     strong = []  # CCCD / MaPhieu / explicit pid — still verify year when we have one
-    if cccd and cccd in index.get("by_cccd", {}):
-        strong.append(index["by_cccd"][cccd])
+    if cccd:
+        strong.extend(_index_recs(index.get("by_cccd"), cccd))
     for mp in filter(None, [sid, row.get("ma_phieu")]):
         mp = str(mp).strip()
-        if mp and mp in index["by_maphieu"]:
-            strong.append(index["by_maphieu"][mp])
-        if mp and mp in index.get("by_pid", {}):
-            strong.append(index["by_pid"][mp])
+        if not mp:
+            continue
+        strong.extend(_index_recs(index.get("by_maphieu"), mp))
+        strong.extend(_index_recs(index.get("by_pid"), mp))
     for m in re.finditer(r"KSKDKP\d+", stem, re.I):
         mp = m.group(0).upper()
-        if mp in index["by_maphieu"]:
-            strong.append(index["by_maphieu"][mp])
+        strong.extend(_index_recs(index.get("by_maphieu"), mp))
     for m in re.finditer(r"_(\d{5,7})(?:_|\.|$)", stem):
         token = m.group(1)
-        if token in index.get("by_pid", {}):
-            strong.append(index["by_pid"][token])
+        strong.extend(_index_recs(index.get("by_pid"), token))
 
     candidates = []
     # Phone: only keep same birth year when year known (avoid wrong twin-name)
-    if phone and phone in index["by_phone"]:
-        for rec in index["by_phone"][phone]:
+    if phone:
+        for rec in _index_recs(index.get("by_phone"), phone):
             if not yr_target or _year_ok(rec):
                 candidates.append(rec)
 
@@ -826,15 +854,13 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
     if yr_target:
         for nm in filter(None, [name, fn_name]):
             key = f"{nm}|{yr_target}"
-            if key in index["by_name_year"]:
-                candidates.extend(index["by_name_year"][key])
+            candidates.extend(_index_recs(index.get("by_name_year"), key))
             fk = f"{_fold_name(nm)}|{yr_target}"
-            if fk in index.get("by_fold_year", {}):
-                candidates.extend(index["by_fold_year"][fk])
-            for k, recs in index.get("by_fold_year", {}).items():
+            candidates.extend(_index_recs(index.get("by_fold_year"), fk))
+            for k, recs in (index.get("by_fold_year") or {}).items():
                 kn, ky = (k.split("|", 1) + [""])[:2]
                 if ky == yr_target and _names_soft_match(nm, kn):
-                    candidates.extend(recs)
+                    candidates.extend(_index_recs({k: recs}, k))
 
     # Lab SID in "DDMMYY-SID - NAME - YEAR - M/F" is NOT phieukhamId
     lab_sid = ""
@@ -849,13 +875,13 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
             continue
         if lab_sid and token == lab_sid:
             continue
-        if token in index.get("by_pid", {}):
-            digit_hits.append(index["by_pid"][token])
-        if token in index["by_maphieu"]:
-            digit_hits.append(index["by_maphieu"][token])
+        digit_hits.extend(_index_recs(index.get("by_pid"), token))
+        digit_hits.extend(_index_recs(index.get("by_maphieu"), token))
 
     fold_target = name or fn_name
     for rec in digit_hits:
+        if not isinstance(rec, dict):
+            continue
         if yr_target and not _year_ok(rec):
             continue
         if fold_target and not _names_soft_match(fold_target, str(rec.get("HoTen") or "")):
@@ -864,6 +890,8 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
 
     # Strong keys: prefer year agreement; if year known and conflicts → drop
     for rec in strong:
+        if not isinstance(rec, dict):
+            continue
         if yr_target and not _year_ok(rec):
             # Unique id with conflicting year: still trust id (CCCD/MaPhieu/pid)
             # only when name also soft-matches or no name available
@@ -875,6 +903,8 @@ def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
     seen = set()
     uniq = []
     for c in candidates:
+        if not isinstance(c, dict):
+            continue
         pid = c.get("phieukhamId") or c.get("Id")
         if pid in seen:
             continue
