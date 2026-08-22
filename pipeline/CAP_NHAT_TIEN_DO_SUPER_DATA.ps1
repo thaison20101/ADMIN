@@ -11,7 +11,7 @@ $env:PYTHONUTF8 = "1"
 
 & python ".\pipeline\assert_g_pipeline.py"
 if ($LASTEXITCODE -ne 0) {
-  Write-Host "G: chua mount — chi ghi local pipeline\work\build"
+  Write-Host "G: chua mount - chi ghi local pipeline\work\build"
 }
 
 & python ".\pipeline\super_data_status.py" --publish
