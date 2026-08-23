@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""One automated cycle: PDF CLS → match Medinet → điền CLS (fill).
+"""One automated cycle: PDF CLS → match Medinet (2 TK) → dual-write CLS.
 
-Routing:
-  FULL (mau + sinh hoa, bo qua Ure) → điền đủ → PROCESSED / UNDER 18
-  PARTIAL / URINE_ONLY → điền phần có trong PDF → ERROR
-  Khong co TTHC (ho+ten+nam sinh khop chinh xac) → MISSING
+Routing (single path):
+  2 TK TTHC + FULL → điền cả 2 → PROCESSED / UNDER 18
+  1 TK TTHC + FULL → điền TK đó → TK1 / TK2
+  TTHC + PARTIAL / mẫu khác → điền phần có → ERROR
+  Trùng tên không phân biệt → UNDER 18
+  Không TTHC cả 2 TK → MISSING
 
 Scan:
-  --full-scan (lan dau / bat so): TOAN BO folder duoi pipeline root
-  mac dinh / hourly: chi INBOX_CLS + MISSING (CSV rematch)
+  --full-scan: TOAN BO folder
+  hourly: INBOX_CLS + MISSING CSV rematch + TK1/TK2 CSV rematch
 """
 
 from __future__ import annotations
@@ -44,10 +46,15 @@ from phase_b_preview import (  # noqa: E402
     build_root,
     load_config,
     load_or_fetch_merged_unit_index,
-    match_patient,
     resolve_name_year,
     search_patient_live_multi,
-    verify_tthc_record,
+)
+from tthc_match import (  # noqa: E402
+    ACCOUNT_TK1,
+    ACCOUNT_TK2,
+    account_folder_name,
+    accounts_label,
+    resolve_tthc_matches,
 )
 from win_console import safe_print, setup_utf8_stdio  # noqa: E402
 
@@ -230,6 +237,10 @@ def _src_bucket(src: str) -> str:
         return "missing"
     if "/ERROR/" in f"/{u}/" or u.endswith("/ERROR"):
         return "error"
+    if "/TK1/" in f"/{u}/" or u.endswith("/TK1"):
+        return "tk1"
+    if "/TK2/" in f"/{u}/" or u.endswith("/TK2"):
+        return "tk2"
     if "/PROCESSED" in u:
         return "processed"
     return "other"
@@ -237,7 +248,16 @@ def _src_bucket(src: str) -> str:
 
 def counts_from_rows(rows: list[dict]) -> dict[str, int]:
     """Folder counts from tracking CSV (no G: listing)."""
-    out = {"inbox": 0, "missing": 0, "error": 0, "processed": 0, "under18": 0, "other": 0}
+    out = {
+        "inbox": 0,
+        "missing": 0,
+        "error": 0,
+        "processed": 0,
+        "under18": 0,
+        "tk1": 0,
+        "tk2": 0,
+        "other": 0,
+    }
     for r in rows:
         b = _src_bucket(r.get("source_file") or "")
         out[b] = out.get(b, 0) + 1
@@ -249,6 +269,7 @@ def format_counts_line(c: dict[str, int], *, tag: str = "COUNTS") -> str:
         f"{tag}\tinbox={c.get('inbox', 0)}\tmissing={c.get('missing', 0)}\t"
         f"error={c.get('error', 0)}\tprocessed={c.get('processed', 0)}"
         f"\tunder18={c.get('under18', 0)}"
+        f"\ttk1={c.get('tk1', 0)}\ttk2={c.get('tk2', 0)}"
     )
 
 
@@ -302,10 +323,24 @@ def _route_after_import(
     note: str,
     moves: list[str],
     nam_sinh: str = "",
+    tk1_dir: Path | None = None,
+    tk2_dir: Path | None = None,
+    n_accounts: int = 1,
+    primary_account: str = "",
+    sample_kind: str = "BLOOD_URINE",
+    force_error: bool = False,
 ) -> None:
-    """FULL adult → PROCESSED; FULL under18 → UNDER 18; PARTIAL → ERROR."""
+    """FULL+2TK → PROCESSED/U18; FULL+1TK → TK1/TK2; PARTIAL/OTHER → ERROR."""
     is_kid = _patient_under18(nam_sinh or row.get("nam_sinh") or "", pdf.name)
-    if coverage == "FULL":
+    other_sample = sample_kind == "OTHER" or force_error
+    if other_sample or coverage not in {"FULL"}:
+        dest = error_dir
+        row["status"] = "ERROR_IMPORT"
+        row["notes"] = f"imported_{coverage.lower()}_to_error:{note}"[:200]
+        stats["imported_partial_to_error"] += 1
+        stats["routed_error"] += 1
+        tag = "ERROR"
+    elif n_accounts >= 2:
         if is_kid:
             dest = under18_dir
             tag = "UNDER18"
@@ -315,15 +350,22 @@ def _route_after_import(
             tag = "PROCESSED"
             stats["routed_processed"] += 1
         row["status"] = "IMPORTED"
-        row["notes"] = f"imported_full:{note}"[:200]
+        row["notes"] = f"imported_full_dual:{note}"[:200]
         stats["imported"] += 1
     else:
-        dest = error_dir
-        row["status"] = "ERROR_IMPORT"
-        row["notes"] = f"imported_{coverage.lower()}_to_error:{note}"[:200]
-        stats["imported_partial_to_error"] += 1
-        stats["routed_error"] += 1
-        tag = "ERROR"
+        # 1 TK FULL → TK1 or TK2 archive
+        folder = account_folder_name(primary_account or ACCOUNT_TK1)
+        if folder == "TK2" and tk2_dir is not None:
+            dest = tk2_dir
+            tag = "TK2"
+            stats["routed_tk2"] += 1
+        else:
+            dest = tk1_dir if tk1_dir is not None else processed
+            tag = "TK1"
+            stats["routed_tk1"] += 1
+        row["status"] = "IMPORTED"
+        row["notes"] = f"imported_full_{tag.lower()}:{note}"[:200]
+        stats["imported"] += 1
     try:
         dest.mkdir(parents=True, exist_ok=True)
     except Exception:
@@ -332,19 +374,14 @@ def _route_after_import(
     if moved:
         row["source_file"] = str(moved)
         row["file_name"] = moved.name
-        if tag in {"PROCESSED", "UNDER18"}:
-            try:
-                for folder in (error_dir,):
-                    for dup in folder.glob(Path(pdf.name).name):
-                        if dup.resolve() != Path(moved).resolve():
-                            dup.unlink(missing_ok=True)
-            except Exception:
-                pass
         moves.append(f"{tag}\t{row.get('ho_ten')}\t{pdf.name}\t->\t{dest.name}/{moved.name}")
     elif pdf.exists():
         row["notes"] = f"{row['notes']};move_failed"[:200]
         moves.append(f"{tag}_MOVE_FAIL\t{row.get('ho_ten')}\t{pdf.name}\t->\t{dest.name}")
-    safe_print(f"  {tag} coverage={coverage} kid={is_kid} {row.get('ho_ten')} pid={pid}")
+    safe_print(
+        f"  {tag} coverage={coverage} accounts={n_accounts} kid={is_kid} "
+        f"{row.get('ho_ten')} pid={pid}"
+    )
 
 
 def _route_pdf_review(
@@ -453,7 +490,9 @@ def _run_auto_cycle_inner(
     from drive_paths import UNDER18_FOLDER, migrate_stray_inbox
 
     under18_dir = sync / UNDER18_FOLDER
-    for p in (inbox, processed, error_dir, missing, under18_dir):
+    tk1_dir = sync / "TK1"
+    tk2_dir = sync / "TK2"
+    for p in (inbox, processed, error_dir, missing, under18_dir, tk1_dir, tk2_dir):
         try:
             p.mkdir(parents=True, exist_ok=True)
         except Exception as e:
@@ -484,6 +523,9 @@ def _run_auto_cycle_inner(
     missing_budget = mb_plan
     rematch_missing_left = mb_plan
     missing_left = mb_plan
+    # TK1/TK2 rematch when opposite account gets TTHC later (CSV only)
+    rematch_tk_budget = 0 if role == "inbox" else (800 if not full_scan and not repair else 0)
+    rematch_tk_left = rematch_tk_budget
 
     # full-scan: audit PROCESSED — chi bot missing/all (inbox khong audit)
     if full_scan and role != "inbox":
@@ -505,9 +547,9 @@ def _run_auto_cycle_inner(
         bot_role=role,
     )
     safe_print(f"Mode: {mode} | bot={role} | scan dirs ({len(scan_dirs)}): {[d.name for d in scan_dirs]}")
-    safe_print(f"MISSING rematch budget this run: {missing_budget}")
-    safe_print("Match TTHC: CHINH XAC ho+ten + nam sinh (folded)")
-    safe_print("DIEN CLS tu PDF | FULL->PROCESSED/UNDER18 | PARTIAL->ERROR | no TTHC->MISSING")
+    safe_print(f"MISSING rematch budget this run: {missing_budget} | TK1/TK2 CSV: {rematch_tk_budget}")
+    safe_print("Match TTHC: ho+ten day du + nam/SDT/CCCD (nori) | dual-write 2 TK")
+    safe_print("FULL 2TK->PROCESSED | FULL 1TK->TK1/TK2 | PARTIAL/OTHER->ERROR | no TTHC->MISSING")
     cases_path = ROOT / cfg.get("tracking", {}).get("cases_csv", "tracking/cases.csv")
     from hourly_sync import read_cases, register_new_files, write_cases  # local import
 
@@ -677,6 +719,37 @@ def _run_auto_cycle_inner(
             f"tracked={csv_missing_total} budget={missing_budget}"
         )
 
+    # Rematch TK1/TK2 from CSV when opposite account later gets TTHC
+    csv_tk_queued = 0
+    if role in {"all", "missing"} and rematch_tk_budget > 0:
+        tk_rows = []
+        for r in rows:
+            src_u = (r.get("source_file") or "").replace("\\", "/").upper()
+            if "/TK1/" in f"/{src_u}/" or src_u.endswith("/TK1"):
+                tk_rows.append(r)
+            elif "/TK2/" in f"/{src_u}/" or src_u.endswith("/TK2"):
+                tk_rows.append(r)
+        tk_rows.sort(
+            key=lambda r: (
+                r.get("last_checked_at") or "",
+                r.get("file_name") or r.get("source_file") or "",
+            )
+        )
+        for r in tk_rows:
+            if rematch_tk_left <= 0:
+                break
+            old = (r.get("status") or "").upper()
+            if old not in {"IMPORTED", "SKIP_ALREADY_CLS", "READY_IMPORT", "WAITING_ADMIN"}:
+                continue
+            r["status"] = "READY_IMPORT"
+            r["import_attempts"] = "0"
+            r["notes"] = f"csv_tk12_rematch:{old}"[:200]
+            rematch_tk_left -= 1
+            csv_tk_queued += 1
+        safe_print(
+            f"TK1/TK2 rematch from CSV: queued={csv_tk_queued} budget={rematch_tk_budget}"
+        )
+
     requeued_err = 0
     for r in rows:
         src = (r.get("source_file") or "").replace("\\", "/")
@@ -839,8 +912,8 @@ def _run_auto_cycle_inner(
             if not data.get("parse_ok"):
                 stats["audit_parse_error"] += 1
                 continue
-            st, rec = match_patient(data, index)
-            if st == "WAITING_ADMIN":
+            tthc_a = resolve_tthc_matches(data, index, accounts=accounts)
+            if tthc_a.status == "WAITING_ADMIN":
                 live_st, live_rec, live_acct = search_patient_live_multi(
                     accounts,
                     tokens,
@@ -853,26 +926,27 @@ def _run_auto_cycle_inner(
                     sdt=str(data.get("sdt") or ""),
                 )
                 if live_st != "WAITING_ADMIN" and live_rec:
-                    st, rec = live_st, live_rec
-            if st == "WAITING_ADMIN":
+                    live_rec["_medinet_account"] = live_acct
+                    tthc_a = resolve_tthc_matches(
+                        data,
+                        {
+                            "by_fold_year": {
+                                f"x|{data.get('nam_sinh') or 'x'}": [live_rec]
+                            },
+                            "by_name_year": {},
+                        },
+                        accounts=accounts,
+                    )
+                    if tthc_a.status != "READY_IMPORT":
+                        from tthc_match import TTHCMatchResult
+
+                        tthc_a = TTHCMatchResult(
+                            "READY_IMPORT", [live_rec], "audit_live"
+                        )
+            if tthc_a.status != "READY_IMPORT" or not tthc_a.matches:
                 unmatched_lines.append(
                     f"NO_TTHC_FROM_PROCESSED\t{data.get('ho_ten')}\t"
                     f"year={data.get('nam_sinh')}\tngay_kq={data.get('ngay_co_kq')}\t{pdf.name}"
-                )
-                if not dry_run:
-                    moved = _move_pdf(pdf, missing)
-                    if moved:
-                        stats["audit_moved_missing"] += 1
-                else:
-                    stats["audit_would_move_missing"] += 1
-            elif rec and not verify_tthc_record(
-                str(data.get("ho_ten") or ""),
-                str(data.get("nam_sinh") or ""),
-                rec,
-            ):
-                unmatched_lines.append(
-                    f"STRICT_REJECT_PROCESSED\t{data.get('ho_ten')}\t"
-                    f"year={data.get('nam_sinh')}\tweb={rec.get('HoTen')}\t{pdf.name}"
                 )
                 if not dry_run:
                     moved = _move_pdf(pdf, missing)
@@ -921,11 +995,15 @@ def _run_auto_cycle_inner(
         in_under18 = (
             "/UNDER 18/" in src_u or "/UNDER_18/" in src_u or src_u.endswith("/UNDER 18")
         )
+        in_tk1 = "/TK1/" in f"/{src_u}/" or src_u.endswith("/TK1")
+        in_tk2 = "/TK2/" in f"/{src_u}/" or src_u.endswith("/TK2")
         if role == "inbox" and not (in_inbox or ((full_scan or repair) and in_error)):
             stats["skipped_bot_role"] += 1
             continue
         if role == "missing" and not (
             in_missing
+            or in_tk1
+            or in_tk2
             or (full_scan and (in_processed or in_under18))
         ):
             stats["skipped_bot_role"] += 1
@@ -934,9 +1012,9 @@ def _run_auto_cycle_inner(
         if in_under18 and not full_scan and not repair:
             stats["skipped_under18"] += 1
             continue
-        # Hourly: INBOX_CLS + MISSING. Full-scan: moi folder. Repair: INBOX+ERROR+PROCESSED+U18.
+        # Hourly: INBOX + MISSING + TK1/TK2 CSV rematch. Full-scan: moi folder.
         if not full_scan and not repair and not (
-            ("/INBOX" in src_u) or ("/MISSING" in src_u)
+            ("/INBOX" in src_u) or ("/MISSING" in src_u) or in_tk1 or in_tk2
         ):
             continue
         if not full_scan and repair and not (
@@ -961,6 +1039,8 @@ def _run_auto_cycle_inner(
             or ("/INBOX" in src_u)
             or ("/MISSING" in src_u)
             or ("/ERROR" in src_u)
+            or ("/TK1" in src_u)
+            or ("/TK2" in src_u)
         )
 
         # Done rows in work folders must still be re-checked against the current
@@ -971,8 +1051,7 @@ def _run_auto_cycle_inner(
             stats["skipped_parse"] += 1
             continue
 
-        # Hourly rule: moi PDF trong INBOX/MISSING luon duoc kiem tra lai TTHC.
-        # Chi skip IMPORTED/SKIP khi file da nam PROCESSED.
+        # Hourly: recheck INBOX/MISSING/TK1/TK2. Skip IMPORTED only in PROCESSED.
         if status in {"IMPORTED", "SKIP_ALREADY_CLS"} and not repair and not stuck_in_work:
             notes_peek = str(row.get("notes") or "")
             needs_recheck = any(
@@ -984,6 +1063,7 @@ def _run_auto_cycle_inner(
                     "import_fail",
                     "queued_max",
                     "disk_",
+                    "csv_tk12",
                 )
             )
             if not needs_recheck:
@@ -1038,8 +1118,6 @@ def _run_auto_cycle_inner(
         data["source_file"] = str(pdf)
         if row.get("ma_phieu"):
             data["ma_phieu"] = row.get("ma_phieu")
-        # Sync name/year from filename when PDF body omits nam_sinh
-        # (live search previously skipped year="" → mass WAITING_ADMIN).
         resolved_name, resolved_year = resolve_name_year(
             {
                 "ho_ten": data.get("ho_ten") or row.get("ho_ten") or "",
@@ -1055,407 +1133,260 @@ def _run_auto_cycle_inner(
             data["nam_sinh"] = resolved_year
             row["nam_sinh"] = resolved_year
 
-        pdf_year_final = str(data.get("nam_sinh") or resolved_year or "").strip()
-        if not pdf_year_final:
-            stats["unmatched_no_year"] += 1
+        coverage = data.get("pdf_coverage") or classify_pdf_coverage(data.get("labs") or {})
+        data["pdf_coverage"] = coverage
+        sample_kind = str(data.get("sample_kind") or "BLOOD_URINE")
+        row["last_checked_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # ---- Single match path: resolve_tthc_matches (2 TK) ----
+        tthc = resolve_tthc_matches(data, index, accounts=accounts)
+        if tthc.status == "WAITING_ADMIN" and tthc.mode in {
+            "no_name_in_index",
+            "params_conflict",
+            "no_account_match",
+        }:
+            # Live search both accounts then re-resolve on a synthetic mini index
+            live_name = str(data.get("ho_ten") or row.get("ho_ten") or "")
+            live_year = str(data.get("nam_sinh") or resolved_year or "")
+            if live_name:
+                stats["live_search_attempted"] += 1
+                live_st, live_rec, live_acct = search_patient_live_multi(
+                    accounts,
+                    tokens,
+                    name=live_name,
+                    year=live_year,
+                    date_from=date_from,
+                    date_to=date_to,
+                    ngay_co_kq=str(data.get("ngay_co_kq") or ""),
+                    gioi_tinh=str(data.get("gioi_tinh") or ""),
+                    sdt=str(data.get("sdt") or ""),
+                )
+                if live_st != "WAITING_ADMIN" and live_rec:
+                    live_rec["_medinet_account"] = live_acct or live_rec.get(
+                        "_medinet_account"
+                    )
+                    from phase_b_preview import _fold_name as _fn
+                    from phase_b_preview import _year_from_ngaysinh as _yf
+
+                    ry = live_year or _yf(live_rec.get("NgaySinh")) or "xxxx"
+                    fk = f"{_fn(live_name)}|{ry}"
+                    mini = {
+                        "by_fold_year": {fk: [live_rec]},
+                        "by_name_year": {},
+                        "by_phone": {},
+                        "by_cccd": {},
+                        "by_maphieu": {},
+                        "by_pid": {},
+                    }
+                    tthc2 = resolve_tthc_matches(data, mini, accounts=accounts)
+                    if tthc2.status == "READY_IMPORT" and tthc2.matches:
+                        tthc = tthc2
+                        stats["live_name_match"] += 1
+                    elif _fn(str(live_rec.get("HoTen") or "")) == _fn(live_name):
+                        from tthc_match import TTHCMatchResult
+
+                        tthc = TTHCMatchResult(
+                            "READY_IMPORT", [live_rec], f"live_{live_acct}"
+                        )
+                        stats["live_name_match"] += 1
+
+        if tthc.status == "AMBIGUOUS_NAME":
+            stats["ambiguous_name"] += 1
             _route_pdf_review(
                 pdf=pdf,
                 row=row,
                 under18_dir=under18_dir,
                 stats=stats,
                 moves=moves,
-                note="no_nam_sinh_in_pdf",
+                note=f"ambiguous_name:{tthc.mode}",
                 status="WAITING_ADMIN",
             )
             unmatched_lines.append(
-                f"NO_YEAR\t{row.get('ho_ten') or data.get('ho_ten')}\t{pdf.name}"
+                f"AMBIGUOUS\t{row.get('ho_ten')}\t{tthc.mode}\t{pdf.name}"
             )
             _release_pdf_claim(file_key)
             continue
 
-        coverage = data.get("pdf_coverage") or classify_pdf_coverage(data.get("labs") or {})
-        data["pdf_coverage"] = coverage
-        st, rec = match_patient(data, index)
-        row["last_checked_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        # Live name+year search when day-index missed (common if NgaySinh format
-        # or paging skipped the patient). Fixes cases like TRỊNH THẾ NỮ.
-        if st == "WAITING_ADMIN":
-            live_name = str(data.get("ho_ten") or row.get("ho_ten") or "")
-            live_year = str(data.get("nam_sinh") or resolved_year or "")
-            if not live_year:
-                stats["unmatched_no_year"] += 1
-            else:
-                stats["live_search_attempted"] += 1
-            live_st, live_rec, live_acct = search_patient_live_multi(
-                accounts,
-                tokens,
-                name=live_name,
-                year=live_year,
-                date_from=date_from,
-                date_to=date_to,
-                ngay_co_kq=str(data.get("ngay_co_kq") or ""),
-                gioi_tinh=str(data.get("gioi_tinh") or ""),
-                sdt=str(data.get("sdt") or ""),
-            )
-            if live_st != "WAITING_ADMIN" and live_rec:
-                st, rec = live_st, live_rec
-                stats[f"matched_{live_acct}"] += 1
-                # Re-check whether CLS already exists
-                pid_live = live_rec.get("phieukhamId") or live_rec.get("Id")
-                if pid_live not in (None, ""):
-                    aid_live = account_for(live_rec)
-                    existing_live, tokens[aid_live] = load_cls_view(
-                        tokens[aid_live], pid_live, reauth=make_reauth(live_rec)
-                    )
-                    if cls_has_lab_values(existing_live):
-                        st = "SKIP_ALREADY_CLS"
-                stats["live_name_match"] += 1
-
-        # Strict TTHC: exact ho+ten + nam sinh (reject soft-only matches)
-        pdf_name_strict = str(data.get("ho_ten") or row.get("ho_ten") or "")
-        pdf_year_strict = str(data.get("nam_sinh") or resolved_year or "")
-        if rec and not verify_tthc_record(pdf_name_strict, pdf_year_strict, rec):
-            stats["tthc_strict_reject"] += 1
-            st, rec = "WAITING_ADMIN", None
-
-        if st == "WAITING_ADMIN":
-            no_year = not pdf_year_strict
-            if no_year:
-                stats["unmatched_no_year"] += 1
-                _route_pdf_review(
-                    pdf=pdf,
-                    row=row,
-                    under18_dir=under18_dir,
-                    stats=stats,
-                    moves=moves,
-                    note="no_nam_sinh_tthc",
-                    status="WAITING_ADMIN",
-                )
-                unmatched_lines.append(
-                    f"NO_YEAR\t{row.get('ho_ten') or data.get('ho_ten')}\t{pdf.name}"
-                )
-                _release_pdf_claim(file_key)
-                continue
+        if tthc.status != "READY_IMPORT" or not tthc.matches:
             row["status"] = "WAITING_ADMIN"
             row["has_admin_info"] = "NO"
-            row["notes"] = "no_tthc_both_accounts"
+            row["notes"] = f"no_tthc:{tthc.mode}"[:200]
             stats["waiting_admin"] += 1
             stats["no_tthc_both_accounts"] += 1
             unmatched_lines.append(
                 f"NO_TTHC_BOTH\t{row.get('ho_ten') or data.get('ho_ten')}\t"
                 f"year={data.get('nam_sinh') or resolved_year}\t"
-                f"phone={data.get('sdt')}\t{pdf.name}"
+                f"phone={data.get('sdt')}\tmode={tthc.mode}\t{pdf.name}"
             )
-            if "/MISSING" not in src_u:
+            if "/MISSING" not in src_u and "/TK1" not in src_u and "/TK2" not in src_u:
                 moved = _move_pdf(pdf, missing)
                 if moved:
                     row["source_file"] = str(moved)
                     row["file_name"] = moved.name
                     stats["moved_missing"] += 1
                     moves.append(f"NO_TTHC\t{row.get('ho_ten')}\t{pdf.name}\t->\tMISSING/{moved.name}")
-            elif "/PROCESSED" in src_u:
-                moved = _move_pdf(pdf, missing)
-                if moved:
-                    row["source_file"] = str(moved)
-                    row["file_name"] = moved.name
-                    stats["evicted_processed"] += 1
-                    moves.append(
-                        f"EVICT_PROCESSED\t{row.get('ho_ten')}\t{pdf.name}\t->\tMISSING/{moved.name}"
-                    )
             _release_pdf_claim(file_key)
             continue
 
-        # IMPORTANT: UI opens by phieukhamId — never use cdId as save key
-        pid = rec.get("phieukhamId") if rec else None
-        if pid in (None, ""):
-            pid = rec.get("Id") if rec else None
-        cdid = rec.get("cdId") if rec else None
-        # Guard: cdId must not be mistaken for phieukhamId
-        if rec and cdid not in (None, "") and pid not in (None, "") and int(pid) == int(cdid):
-            # extremely rare; keep phieukhamId field explicitly
-            pid = rec.get("phieukhamId") or pid
-        pid = str(pid or "")
-        if rec:
-            row["ma_phieu"] = rec.get("MaPhieu") or row.get("ma_phieu") or ""
-            row["has_admin_info"] = "YES"
-            acct_id = account_for(rec)
-            row["notes"] = f"medinet_account={acct_id}"[:200]
-            stats[f"matched_{acct_id}"] += 1
+        matches = tthc.matches
+        n_accts = len(matches)
+        label = accounts_label(matches)
+        row["has_admin_info"] = "YES"
+        row["notes"] = f"tthc_accounts={label};mode={tthc.mode}"[:200]
+        stats[f"tthc_mode_{tthc.mode}"] += 1
+        for mrec in matches:
+            stats[f"matched_{mrec.get('_medinet_account') or 'unknown'}"] += 1
 
-        if st == "SKIP_ALREADY_CLS":
-            # List says already has CLS — during repair/force fall through so we
-            # can still fill missing urine (Âm tính→Negative) / Urê / etc.
-            # Also when PDF still stuck in work folders: re-check gaps then move.
-            aid = account_for(rec)
-            existing_early, tokens[aid] = (
-                load_cls_view(tokens[aid], pid, reauth=make_reauth(rec))
-                if pid
-                else (None, tokens[aid])
-            )
-            if not cls_has_lab_values(existing_early):
-                st = "READY_IMPORT"
-            elif force or repair or stuck_in_work:
-                st = "READY_IMPORT"  # re-evaluate incompleteness below
-            else:
-                # Already on web and not stuck — still route by PDF coverage
-                payload_early = labs_to_form_payload(
-                    data.get("labs") or {},
-                    phieukham_id=pid,
-                    gioi_tinh=data.get("gioi_tinh") or "",
-                )
-                miss_e = [
-                    k
-                    for k in cls_missing_lab_fields(existing_early, payload_early)
-                ]
-                missing_wo_urea = [k for k in miss_e if k != "SinhHoaMau_Ure"]
-                payload_has_urea = payload_early.get("SinhHoaMau_Ure") not in (None, "")
-                urea_missing_only = ("SinhHoaMau_Ure" in miss_e) and (not missing_wo_urea)
-                if missing_wo_urea or (urea_missing_only and payload_has_urea):
-                    st = "READY_IMPORT"
-                else:
-                    _route_after_import(
-                        pdf=pdf,
-                        row=row,
-                        pid=pid,
-                        coverage=coverage,
-                        processed=processed,
-                        error_dir=error_dir,
-                        under18_dir=under18_dir,
-                        stats=stats,
-                        note="already_has_cls",
-                        moves=moves,
-                        nam_sinh=str(row.get("nam_sinh") or data.get("nam_sinh") or ""),
-                    )
-                    continue
-
-        if not pid:
-            row["status"] = "WAITING_ADMIN"
-            row["notes"] = "missing_phieukhamId"
-            stats["waiting_admin"] += 1
-            continue
-
-        existing, tokens[account_for(rec)] = load_cls_view(
-            token_for(rec), pid, reauth=make_reauth(rec)
-        )
-        has_cls = cls_has_lab_values(existing)
-
-        # Build payload early so repair can detect incomplete urine/chemistry
-        payload = labs_to_form_payload(
-            data.get("labs") or {},
-            phieukham_id=pid,
-            gioi_tinh=data.get("gioi_tinh") or "",
-        )
-        payload["LoaiKham"] = 5152
-        if cdid not in (None, ""):
-            payload["cdId"] = int(cdid)
-        fields_sent = len([k for k in payload if k in LAB_TO_FORM.values()])
-        missing_on_web = cls_missing_lab_fields(existing, payload) if has_cls else []
-        # Hourly: defer Urobilinogen-only gaps to CHAY_REPAIR_URO.ps1
-        # (otherwise hundreds of REPAIR incomplete burn all import slots)
-        if not repair and missing_on_web == ["NuocTieu_Urobilinogen"]:
-            stats["defer_urobilinogen"] += 1
-            missing_on_web = []
-        notes_prev = str(row.get("notes") or "")
-        looks_incomplete = has_cls and web_cls_looks_incomplete(existing, payload)
-        if not repair and looks_incomplete:
-            # same defer if the only payload gap is urobilinogen
-            miss2 = cls_missing_lab_fields(existing, payload)
-            miss2 = [k for k in miss2 if k not in {"NuocTieu_Urobilinogen"}]
-            if not miss2 and "NuocTieu_Urobilinogen" in (cls_missing_lab_fields(existing, payload) or []):
-                looks_incomplete = False
-                stats["defer_urobilinogen"] += 1
-        needs_urine_fix = (
-            "SET-no-urine-text" in notes_prev
-            or "SET-urine-all-dropped" in notes_prev
-            or "incomplete_after_save" in notes_prev
-            or looks_incomplete
-            or (has_cls and bool(missing_on_web))
-            or (has_cls and cls_urine_incomplete(existing, payload) and repair)
-        )
-        force_this = force or needs_urine_fix
-
-        if has_cls and not force_this:
-            # Web already has all PDF fields (Ure ignored) — route by PDF coverage
-            missing_all = cls_missing_lab_fields(existing, payload)
-            missing_wo_urea = [k for k in missing_all if k != "SinhHoaMau_Ure"]
-            payload_has_urea = payload.get("SinhHoaMau_Ure") not in (None, "")
-            urea_missing_only = ("SinhHoaMau_Ure" in missing_all) and (not missing_wo_urea)
-            if missing_wo_urea or (urea_missing_only and payload_has_urea):
-                # If web thiếu đúng Urea mà PDF có Urea → vẫn ép import để fill Urea.
-                row["status"] = "READY_IMPORT"
-                if missing_wo_urea:
-                    row["notes"] = f"incomplete_keep_work:{','.join(missing_wo_urea[:8])}"[:200]
-                else:
-                    row["notes"] = "force_urea_missing_only"
-                stats["force_urea_repair"] += 1
-                stats["incomplete_block_move"] += 1
-                if "/PROCESSED" in src_u:
-                    moved_back = _move_pdf(pdf, inbox, pid=pid)
-                    if moved_back:
-                        row["source_file"] = str(moved_back)
-                        row["file_name"] = moved_back.name
-                continue
-            row["imported_at"] = row.get("imported_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            _route_after_import(
-                pdf=pdf,
-                row=row,
-                pid=pid,
-                coverage=coverage,
-                processed=processed,
-                error_dir=error_dir,
-                under18_dir=under18_dir,
-                stats=stats,
-                note="already_on_web",
-                moves=moves,
-                nam_sinh=str(data.get("nam_sinh") or row.get("nam_sinh") or ""),
-            )
-            continue
-        if not has_cls or needs_urine_fix:
-            why = "empty-on-web" if not has_cls else f"incomplete:{','.join(missing_on_web[:8]) or 'heuristic'}"
-            if repair or needs_urine_fix:
-                safe_print(f"  REPAIR {why} {row.get('ho_ten')} pid={pid} coverage={coverage}")
-                stats["repair_empty" if not has_cls else "repair_incomplete"] += 1
-            row["status"] = "READY_IMPORT"
-            if needs_urine_fix:
-                row["import_attempts"] = "0"
-
-        # Cap incomplete overwrites so NEW inbox imports still get slots
-        if has_cls and needs_urine_fix:
-            if incomplete_n >= max_incomplete:
-                row["status"] = "READY_IMPORT"
-                row["notes"] = "queued_incomplete_cap"
-                stats["queued_incomplete"] += 1
-                continue
-            incomplete_n += 1
+        # OTHER sample (Huyết Trắng etc.) with TTHC → ERROR after optional fill
+        force_error = sample_kind == "OTHER"
 
         if imported_n >= max_per_run:
             row["status"] = "READY_IMPORT"
             row["notes"] = "queued_max_per_run"
             stats["queued"] += 1
+            _release_pdf_claim(file_key)
             continue
-
-        result_row = {
-            "file_name": pdf.name,
-            "ho_ten": data.get("ho_ten"),
-            "nam_sinh": data.get("nam_sinh"),
-            "mau_kham": data.get("mau_kham"),
-            "medinet_MaPhieu": row.get("ma_phieu"),
-            "phieukhamId": pid,
-            "cdId": cdid or "",
-            "fields_sent": fields_sent,
-        }
 
         if dry_run:
             row["status"] = "READY_IMPORT"
-            row["notes"] = "dry_run"
-            result_row.update({"import_status": "DRY_RUN", "message": "dry_run", "verified": "NO"})
-            results.append(result_row)
+            row["notes"] = f"dry_run;{row['notes']}"[:200]
             stats["dry_run"] += 1
+            _release_pdf_claim(file_key)
             continue
 
-        aid = account_for(rec)
-        ok, msg, _raw, tokens[aid] = insert_cls(
-            tokens[aid], payload, reauth=make_reauth(rec)
-        )
-        time.sleep(0.05)
-        verified, vdetail, tokens[aid] = verify_cls_saved(
-            tokens[aid], pid, payload=payload, reauth=make_reauth(rec)
-        )
+        # ---- Dual-write CLS to every matched account ----
+        filled_ok = 0
+        last_pid = ""
+        last_msg = ""
+        primary_aid = str(matches[0].get("_medinet_account") or ACCOUNT_TK1)
+        any_incomplete = False
+
+        for mrec in matches:
+            aid = str(mrec.get("_medinet_account") or primary_aid)
+            pid = str(mrec.get("phieukhamId") or mrec.get("Id") or "")
+            cdid = mrec.get("cdId")
+            if not pid:
+                continue
+            last_pid = pid
+            primary_aid = aid
+            row["ma_phieu"] = mrec.get("MaPhieu") or row.get("ma_phieu") or ""
+
+            existing, tokens[aid] = load_cls_view(
+                tokens[aid], pid, reauth=make_reauth(mrec)
+            )
+            payload = labs_to_form_payload(
+                data.get("labs") or {},
+                phieukham_id=pid,
+                gioi_tinh=data.get("gioi_tinh") or "",
+            )
+            payload["LoaiKham"] = 5152
+            if cdid not in (None, ""):
+                payload["cdId"] = int(cdid)
+            fields_sent = len([k for k in payload if k in LAB_TO_FORM.values()])
+            has_cls = cls_has_lab_values(existing)
+            missing_on_web = cls_missing_lab_fields(existing, payload) if has_cls else []
+            missing_wo_urea = [k for k in missing_on_web if k != "SinhHoaMau_Ure"]
+            needs_fill = (not has_cls) or bool(missing_wo_urea) or force or repair
+
+            if not needs_fill and fields_sent > 0:
+                filled_ok += 1
+                stats["skip_already_cls_acct"] += 1
+                continue
+
+            if fields_sent <= 0 and sample_kind == "OTHER":
+                # no blood/urine labs to send — still route ERROR
+                filled_ok += 1
+                last_msg = "other_sample_no_labs"
+                continue
+
+            ok, msg, _raw, tokens[aid] = insert_cls(
+                tokens[aid], payload, reauth=make_reauth(mrec)
+            )
+            time.sleep(0.05)
+            verified, vdetail, tokens[aid] = verify_cls_saved(
+                tokens[aid], pid, payload=payload, reauth=make_reauth(mrec)
+            )
+            last_msg = f"{msg};{vdetail}"
+            existing2, tokens[aid] = load_cls_view(
+                tokens[aid], pid, reauth=make_reauth(mrec)
+            )
+            still = cls_missing_lab_fields(existing2, payload)
+            still_wo = [k for k in still if k != "SinhHoaMau_Ure"]
+            if ok and verified and fields_sent > 0 and not still_wo:
+                filled_ok += 1
+                safe_print(
+                    f"  DIEN OK [{aid}] {data.get('ho_ten')} pid={pid} "
+                    f"fields={fields_sent} coverage={coverage}"
+                )
+            elif ok and fields_sent > 0:
+                filled_ok += 1
+                any_incomplete = True
+                safe_print(
+                    f"  DIEN PARTIAL [{aid}] {data.get('ho_ten')} pid={pid} "
+                    f"missing={still_wo[:6]}"
+                )
+            else:
+                stats["error_import"] += 1
+                safe_print(f"  ERROR [{aid}] {data.get('ho_ten')} pid={pid} msg={last_msg}")
+
         attempts = int(row.get("import_attempts") or 0) + 1
         row["import_attempts"] = str(attempts)
-        msg = f"{msg}; {vdetail}"
+        row["imported_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        row["notes"] = (
+            f"tthc_accounts={label};cls_filled={filled_ok}/{n_accts};"
+            f"mode={tthc.mode};{last_msg}"
+        )[:200]
 
-        # Re-check web after save via Get+FormViewer (Get alone often omits Urobilinogen)
-        existing2, tokens[aid] = load_cls_view(
-            tokens[aid], pid, reauth=make_reauth(rec)
-        )
-        # Ignore urine fields Medinet rejected during progressive retry
-        dropped = []
-        dm = re.search(r"dropped=([^:;]+)", msg or "")
-        if dm:
-            dropped = [x.strip() for x in dm.group(1).split(",") if x.strip()]
-        check_payload = {k: v for k, v in payload.items() if k not in dropped}
-        still_missing = cls_missing_lab_fields(existing2, check_payload)
-        urine_ok = not cls_urine_incomplete(existing2, check_payload)
-        partial_bad = ("SET-no-urine-text" in (msg or "")) or ("SET-urine-all-dropped" in (msg or ""))
+        route_coverage = coverage
+        if force_error:
+            route_coverage = "OTHER"
+        if any_incomplete and coverage == "FULL":
+            route_coverage = "PARTIAL"
 
-        if ok and verified and fields_sent > 0 and urine_ok and not partial_bad:
-            # keep urea in still_missing when PDF has it
-            if still_missing:
-                # PDF fields still empty on web — keep retrying (do not park yet)
-                row["status"] = "READY_IMPORT"
-                row["notes"] = f"incomplete_after_save:{','.join(still_missing[:10])};{msg}"[:200]
-                result_row.update(
-                    {
-                        "import_status": "ERROR_IMPORT",
-                        "message": row["notes"],
-                        "verified": "PARTIAL",
-                    }
-                )
-                stats["error_import"] += 1
-                safe_print(
-                    f"  INCOMPLETE {data.get('ho_ten')} pid={pid} missing={still_missing[:8]} coverage={coverage}"
-                )
-                results.append(result_row)
-                if sleep_s:
-                    time.sleep(sleep_s)
-                continue
-            # All PDF fields (except Ure) are on web → route by coverage
-            row["imported_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            result_row.update(
-                {
-                    "import_status": "IMPORTED" if coverage == "FULL" else f"IMPORTED_{coverage}",
-                    "message": f"{msg};coverage={coverage}",
-                    "verified": "YES",
-                }
-            )
-            imported_n += 1
+        if filled_ok > 0 or force_error:
+            imported_n += 1 if filled_ok else 0
             _route_after_import(
                 pdf=pdf,
                 row=row,
-                pid=pid,
-                coverage=coverage,
+                pid=last_pid,
+                coverage=route_coverage if route_coverage != "OTHER" else "PARTIAL",
                 processed=processed,
                 error_dir=error_dir,
                 under18_dir=under18_dir,
                 stats=stats,
-                note=msg or "imported",
+                note=row["notes"],
                 moves=moves,
                 nam_sinh=str(data.get("nam_sinh") or row.get("nam_sinh") or ""),
+                tk1_dir=tk1_dir,
+                tk2_dir=tk2_dir,
+                n_accounts=n_accts,
+                primary_account=primary_aid,
+                sample_kind=sample_kind,
+                force_error=force_error or route_coverage in {"PARTIAL", "URINE_ONLY", "EMPTY", "OTHER"},
             )
-            safe_print(f"  DIEN OK {data.get('ho_ten')} pid={pid} fields={fields_sent} coverage={coverage}")
-        else:
-            max_attempts = int(cfg.get("tracking", {}).get("max_import_attempts", 5))
-            # repair: keep retrying instead of parking forever in ERROR
-            if repair:
-                row["status"] = "READY_IMPORT"
-                row["import_attempts"] = "0"
-            else:
-                row["status"] = "ERROR_IMPORT" if attempts >= max_attempts else "READY_IMPORT"
-            row["notes"] = f"import_fail:{msg}"[:200]
-            result_row.update(
+            results.append(
                 {
-                    "import_status": "ERROR_IMPORT",
-                    "message": msg,
-                    "verified": "YES" if verified else "NO",
+                    "file_name": pdf.name,
+                    "ho_ten": data.get("ho_ten"),
+                    "nam_sinh": data.get("nam_sinh"),
+                    "tthc_accounts": label,
+                    "phieukhamId": last_pid,
+                    "import_status": "IMPORTED" if filled_ok else "ERROR_IMPORT",
+                    "message": row["notes"],
+                    "verified": "YES" if filled_ok else "NO",
                 }
             )
+        else:
+            row["status"] = "READY_IMPORT"
+            row["notes"] = f"import_fail_all:{last_msg}"[:200]
             stats["error_import"] += 1
-            # Hard fail only (non-repair): park PDF in ERROR for visibility
-            if (not repair) and row["status"] == "ERROR_IMPORT" and pdf.exists():
-                moved = _move_pdf(pdf, error_dir, pid=pid)
-                if moved:
-                    row["source_file"] = str(moved)
-                    moves.append(f"IMPORT_FAIL\t{data.get('ho_ten')}\t{pdf.name}\t->\tERROR/{moved.name}")
-            safe_print(f"  ERROR {data.get('ho_ten')} pid={pid} msg={msg}")
 
-        results.append(result_row)
         if sleep_s:
             time.sleep(sleep_s)
         if imported_n and imported_n % flush_every == 0:
             _flush_cases()
         _release_pdf_claim(file_key)
+        continue
 
     release_owner(owner_tag)
 

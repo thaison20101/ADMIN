@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Print COUNTS from tracking CSV (no 10k G: listing).
-
-Same line format as print_drive_dirs:
-  COUNTS\\tinbox=N\\tmissing=N\\terror=N\\tprocessed=N\\tunder18=N
-
-Usage: python pipeline/print_counts.py
-"""
+"""Print COUNTS from tracking CSV (no 10k G: listing)."""
 from __future__ import annotations
 
 import csv
@@ -26,13 +20,26 @@ def _bucket(src: str) -> str:
         return "missing"
     if "/ERROR/" in f"/{u}/" or u.endswith("/ERROR"):
         return "error"
+    if "/TK1/" in f"/{u}/" or u.endswith("/TK1"):
+        return "tk1"
+    if "/TK2/" in f"/{u}/" or u.endswith("/TK2"):
+        return "tk2"
     if "/PROCESSED" in u:
         return "processed"
     return "other"
 
 
 def counts_from_csv(path: Path) -> dict[str, int]:
-    out = {"inbox": 0, "missing": 0, "error": 0, "processed": 0, "under18": 0, "other": 0}
+    out = {
+        "inbox": 0,
+        "missing": 0,
+        "error": 0,
+        "processed": 0,
+        "under18": 0,
+        "tk1": 0,
+        "tk2": 0,
+        "other": 0,
+    }
     if not path.exists():
         return out
     with path.open(encoding="utf-8", newline="") as f:
@@ -48,6 +55,7 @@ def main() -> int:
     print(
         f"COUNTS\tinbox={c['inbox']}\tmissing={c['missing']}\t"
         f"error={c['error']}\tprocessed={c['processed']}\tunder18={c['under18']}"
+        f"\ttk1={c['tk1']}\ttk2={c['tk2']}"
     )
     return 0
 

@@ -492,6 +492,108 @@ if __name__ == "__main__":
 
     test_search_patient_live_multi_callable()
 
+    def test_tthc_match_phone_normalize_and_unique():
+        from pipeline.phase_b_preview import _fold_name
+        from pipeline.tthc_match import normalize_phone_digits, resolve_tthc_matches
+
+        assert normalize_phone_digits("0938 035 816") == "0938035816"
+        assert normalize_phone_digits(".") == ""
+
+        fold = _fold_name("ĐỖ THỊ BÍCH")
+        idx = {
+            "by_fold_year": {
+                f"{fold}|1970": [
+                    {
+                        "HoTen": "ĐỖ THỊ BÍCH",
+                        "NgaySinh": "1970-01-01",
+                        "Id": 1,
+                        "_medinet_account": "pkdkthuankieu",
+                    }
+                ]
+            },
+            "by_name_year": {},
+        }
+        r = resolve_tthc_matches({"ho_ten": "ĐỖ THỊ BÍCH", "nam_sinh": ""}, idx)
+        assert r.status == "READY_IMPORT", r
+        assert r.mode == "unique_name_no_params"
+
+        idx2 = {
+            "by_fold_year": {
+                f"{fold}|1970": [
+                    {
+                        "HoTen": "ĐỖ THỊ BÍCH",
+                        "NgaySinh": "1970-01-01",
+                        "Id": 1,
+                        "SDT": "0966253369",
+                        "_medinet_account": "pkdkthuankieu",
+                    }
+                ],
+                f"{fold}|1980": [
+                    {
+                        "HoTen": "ĐỖ THỊ BÍCH",
+                        "NgaySinh": "1980-01-01",
+                        "Id": 2,
+                        "_medinet_account": "pkdk_Thuankieu",
+                    }
+                ],
+            },
+            "by_name_year": {},
+        }
+        r2 = resolve_tthc_matches({"ho_ten": "ĐỖ THỊ BÍCH", "nam_sinh": ""}, idx2)
+        assert r2.status == "AMBIGUOUS_NAME", r2
+        r3 = resolve_tthc_matches(
+            {"ho_ten": "ĐỖ THỊ BÍCH", "sdt": "0966 253 369"}, idx2
+        )
+        assert r3.status == "READY_IMPORT", r3
+        assert len(r3.matches) == 1
+
+    test_tthc_match_phone_normalize_and_unique()
+
+    def test_tthc_dual_account_pick():
+        from pipeline.phase_b_preview import _fold_name
+        from pipeline.tthc_match import resolve_tthc_matches
+
+        fold = _fold_name("LẠC DŨNG CƯỜNG")
+        idx = {
+            "by_fold_year": {
+                f"{fold}|1990": [
+                    {
+                        "HoTen": "LẠC DŨNG CƯỜNG",
+                        "NgaySinh": "1990-01-05",
+                        "Id": 10,
+                        "_medinet_account": "pkdkthuankieu",
+                    },
+                    {
+                        "HoTen": "LẠC DŨNG CƯỜNG",
+                        "NgaySinh": "1990-01-05",
+                        "Id": 11,
+                        "_medinet_account": "pkdk_Thuankieu",
+                    },
+                ]
+            },
+            "by_name_year": {},
+        }
+        r = resolve_tthc_matches(
+            {
+                "ho_ten": "LẠC DŨNG CƯỜNG",
+                "nam_sinh": "1990",
+                "ngay_sinh": "05/01/1990",
+            },
+            idx,
+        )
+        assert r.status == "READY_IMPORT"
+        assert len(r.matches) == 2
+
+    test_tthc_dual_account_pick()
+
+    def test_classify_sample_other():
+        from pipeline.pdf_extract import classify_sample_kind
+
+        assert classify_sample_kind({"loai_mau": "Huyết Trắng"}, "") == "OTHER"
+        assert classify_sample_kind({"loai_mau": "Máu/Nước tiểu"}, "") == "BLOOD_URINE"
+
+    test_classify_sample_other()
+
     def test_is_under18():
         from datetime import date
         from pipeline.move_under18 import is_under18

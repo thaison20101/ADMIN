@@ -125,12 +125,16 @@ def parse_header(text: str) -> dict:
     info: dict = {
         "ho_ten": "",
         "nam_sinh": "",
+        "ngay_sinh": "",
         "gioi_tinh": "",
         "sid": "",
         "sdt": "",
         "dia_chi": "",
         "ngay_co_kq": "",
         "mau_kham": "",
+        "cccd": "",
+        "loai_mau": "",
+        "chan_doan": "",
     }
     m = re.search(
         r"Họ\s*tên:\s*(.+?)\s+Năm\s*sinh\s+(\d{4})\s+Giới\s*tính:\s*(\S+)",
@@ -141,24 +145,72 @@ def parse_header(text: str) -> dict:
         info["ho_ten"] = m.group(1).strip()
         info["nam_sinh"] = m.group(2)
         info["gioi_tinh"] = m.group(3).strip()
+    m_dob = re.search(
+        r"Ngày\s*sinh\s+(\d{1,2}/\d{1,2}/((?:19|20)\d{2}))",
+        text,
+        re.I,
+    )
+    if m_dob:
+        info["ngay_sinh"] = m_dob.group(1).strip()
+        if not info["nam_sinh"]:
+            info["nam_sinh"] = m_dob.group(2)
+        if not info["gioi_tinh"]:
+            m_gt = re.search(r"Giới\s*tính:\s*(\S+)", text, re.I)
+            if m_gt:
+                info["gioi_tinh"] = m_gt.group(1).strip()
+        if not info["ho_ten"]:
+            m_ht = re.search(r"Họ\s*tên:\s*(.+?)(?:\s+Ngày\s*sinh|\s+Năm\s*sinh)", text, re.I)
+            if m_ht:
+                info["ho_ten"] = m_ht.group(1).strip()
     m = re.search(r"SID:\s*(\S+)", text)
     if m:
         info["sid"] = m.group(1).rstrip("PID:")
-    m = re.search(r"Số\s*ĐT:\s*([\d\s]+)", text)
+    m = re.search(r"Số\s*ĐT:\s*([.\d\s]+)", text)
     if m:
-        info["sdt"] = re.sub(r"\s+", "", m.group(1))
+        raw_ph = m.group(1).strip()
+        info["sdt"] = re.sub(r"\s+", "", raw_ph) if re.search(r"\d", raw_ph) else ""
     m = re.search(r"Địa\s*chỉ:\s*(.+?)\s+SID:", text)
     if m:
         info["dia_chi"] = m.group(1).strip()
     m = re.search(r"Ngày\s*có\s*kết\s*quả:\s*([0-9/: ]+)", text)
     if m:
         info["ngay_co_kq"] = m.group(1).strip()
+    m = re.search(
+        r"Chẩn\s*đoán:\s*(.+?)(?:\s+BS\s+chỉ|\s+Loại\s+mẫu|$)",
+        text,
+        re.I | re.S,
+    )
+    if m:
+        info["chan_doan"] = m.group(1).strip()
+        cm = re.search(r"CCCD:\s*(\d{9,12})", info["chan_doan"], re.I)
+        if cm:
+            info["cccd"] = cm.group(1)
+    m = re.search(
+        r"Loại\s*mẫu:\s*(.+?)(?:\s+Chất\s+lượng|\s+Đơn\s+vị|$)",
+        text,
+        re.I | re.S,
+    )
+    if m:
+        info["loai_mau"] = m.group(1).strip()
     try:
         y = int(info["nam_sinh"])
         info["mau_kham"] = "M4" if y <= 1967 else "M3"
     except Exception:
         info["mau_kham"] = ""
     return info
+
+
+def classify_sample_kind(header: dict, text: str = "") -> str:
+    """BLOOD_URINE = standard CLS form; OTHER = e.g. Huyết Trắng → ERROR."""
+    loai = str(header.get("loai_mau") or "")
+    blob = f"{loai} {text[:800]}"
+    if re.search(r"Huyết\s*Trắng|Huyet\s*Trang|dịch\s*âm\s*đạo", blob, re.I):
+        return "OTHER"
+    if re.search(r"Máu|Nước\s*tiểu|Mau/Nuoc", blob, re.I):
+        return "BLOOD_URINE"
+    if text and re.search(r"(?m)^(Nước\s*tiểu|Sinh\s*hoá|Huyết\s*đồ)\b", text, re.I):
+        return "BLOOD_URINE"
+    return "OTHER"
 
 
 def _split_sections(text: str) -> tuple[str, str, str]:
@@ -579,11 +631,13 @@ def extract_pdf(path: Path) -> dict:
     labs_raw = parse_labs(text)
     labs = normalize_for_web(labs_raw)
     coverage = classify_pdf_coverage(labs)
+    sample_kind = classify_sample_kind(header, text)
     return {
         "source_file": str(path),
         "file_name": path.name,
         **header,
         "labs": labs,
         "pdf_coverage": coverage,
-        "parse_ok": bool(header.get("ho_ten") and labs),
+        "sample_kind": sample_kind,
+        "parse_ok": bool(header.get("ho_ten") and (labs or sample_kind == "OTHER")),
     }

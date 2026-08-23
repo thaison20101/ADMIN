@@ -22,7 +22,7 @@ PIPELINE_NAME = "PKDK_Thuankieu_Pipeline"
 STD_FOLDERS = ("INBOX_CLS", "MISSING", "ERROR", "PROCESSED")
 # Park under-18 AFTER successful FULL import (kids use M2 form, not M3/M4).
 UNDER18_FOLDER = "UNDER 18"
-EXTRA_FOLDERS = (UNDER18_FOLDER,)
+EXTRA_FOLDERS = (UNDER18_FOLDER, "TK1", "TK2")
 # May A only — never scan stray "inbox" / "INBOX" aliases (wrong folder).
 INBOX_FOLDER_NAME = "INBOX_CLS"
 LOCAL_BUILD = ROOT / "pipeline" / "work" / "build"

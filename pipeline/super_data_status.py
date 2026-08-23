@@ -18,32 +18,31 @@ G_SUPER_DATA_VARIANTS = (
 FEATURES_DONE = """
 TINH NANG DA TRIEN KHAI (branch cursor/drive-hourly-pipeline-df0f)
 ================================================================
-1. Khop TTHC: CHINH XAC ho + ten + nam sinh (verify_tthc_record)
-2. DIEN CLS tu PDF vao form Can lam sang (khong bo sot field, doi don vi)
-3. FULL TTHC + FULL CLS -> PROCESSED (nguoi lon) / UNDER 18 (tre FULL)
-4. Co TTHC + PARTIAL CLS -> dien phan co trong PDF -> ERROR
-5. Khong TTHC tren CA 2 TK Medinet -> MISSING (NO_TTHC_BOTH)
-6. Loi PDF / khong co nam sinh -> UNDER 18 (folder kiem tra tay)
-7. 2 TK Medinet (index + live search gop):
-   - pkdkthuankieu / P@ssw0rd
-   - pkdk_Thuankieu / pkdk_Thuankieu#2026
-   - TTHC nhap tren TK1 co the khong thay tren TK2 -> quet ca 2
-8. 2 bot song song: inbox (INBOX_CLS) + missing (MISSING CSV)
-   - Claim PDF/pid tranh trung lap
-   - Merge cases.csv khi 2 bot chay
-9. Hourly: 2 bot INBOX_CLS + MISSING rematch (2 TK, 2500 MISSING/vong)
-10. Lan dau: full-scan toan folder; sau do hourly nhe
-11. Urea: dien khi PDF co (mg/dL -> mmol/L)
+1. Match TTHC: ho+ten DAY DU + nam/SDT/CCCD (thieu 1 param van OK)
+2. Unique name khong param -> dien; trung ten >=2 -> UNDER 18
+3. Dual-write CLS: TTHC ca 2 TK -> dien CLS ca 2 TK
+4. 1 TK TTHC + FULL -> TK1 (pkdkthuankieu) / TK2 (pkdk_Thuankieu)
+5. 2 TK TTHC + FULL -> PROCESSED / UNDER 18
+6. PARTIAL / mau khac (Huyet Trang...) -> ERROR (dien phan co)
+7. Khong TTHC ca 2 TK -> MISSING
+8. Hourly: INBOX disk + MISSING CSV + TK1/TK2 CSV rematch
+   (khi TK kia nhap TTHC sau -> dual-write + move PROCESSED)
+9. 2 bot + 2 TK Medinet (index gop v3_merged)
 
 LENH CHAY MAY A (1 LENH DUY NHAT)
 ---------------------------------
 cd C:\\Users\\thais\\ADMIN
+git pull origin cursor/drive-hourly-pipeline-df0f
 powershell -ExecutionPolicy Bypass -File .\\pipeline\\CHAY_TONG_HOP_MOI.ps1
 
-(Lenh tren: tat hourly -> pull -> full 2 bot -> rematch MISSING -> Urea -> bat hourly)
+(Lenh tren: tat hourly -> pull -> full 2 bot -> rematch -> Urea -> bat hourly)
 
 2 bot song song (INBOX + MISSING, khong full):
   powershell -ExecutionPolicy Bypass -File .\\pipeline\\CHAY_2_BOT_SONG_SONG.ps1
+
+Tam ngung hourly:
+  powershell -ExecutionPolicy Bypass -File .\\pipeline\\TAM_NGUNG_HOURLY.ps1
+
 
 Dong bo folder G:
   powershell -ExecutionPolicy Bypass -File .\\pipeline\\CHAY_DONG_BO_DRIVE.ps1
@@ -56,9 +55,10 @@ FOLDER PDF
 G:\\Drive cua toi\\PKDK_Thuankieu_Pipeline\\
   INBOX_CLS  = PDF moi
   MISSING    = chua TTHC
-  ERROR      = PARTIAL / thieu field
-  PROCESSED  = FULL nguoi lon
-  UNDER 18   = tre FULL HOAC loi PDF / thieu nam sinh (kiem tra)
+  ERROR      = PARTIAL / mau khac
+  PROCESSED  = FULL ca 2 TK
+  TK1 / TK2  = FULL chi 1 TK (pkdkthuankieu / pkdk_Thuankieu)
+  UNDER 18   = tre FULL / trung ten / loi PDF
 
 FILE THEO DOI (local + copy sang G)
 -----------------------------------
