@@ -1,10 +1,11 @@
 # Windows hourly runner for Drive pipeline (MAY A ONLY)
-# 2 TK Medinet + 2 bot song song: INBOX_CLS + MISSING rematch
-# Rule: TTHC chinh xac ho+ten+nam sinh | DIEN CLS tu PDF
-#   FULL -> PROCESSED/UNDER 18 | PARTIAL+TTHC -> ERROR | no TTHC (2 TK) -> MISSING
+# 2 TK Medinet + 2 bot: INBOX_CLS + MISSING CSV + TK1/TK2 CSV rematch
+# Rule: ho+ten day du + nam/SDT/CCCD | dual-write CLS
+#   FULL 2TK -> PROCESSED/U18 | FULL 1TK -> TK1/TK2
+#   PARTIAL/mau khac -> ERROR | trung ten -> UNDER 18 | no TTHC -> MISSING
 #
 # Lan dau (chua FIRST_FULL_SCAN_DONE): full-scan 2 bot
-# Sau do: hourly INBOX disk + MISSING CSV rematch (2500/vong)
+# Sau do: hourly nhe
 #
 # Installed by: .\pipeline\install_hourly_task.ps1
 
