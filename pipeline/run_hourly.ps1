@@ -103,7 +103,7 @@ $header = @(
   "BuildRoot: $BuildRoot"
   "Accounts: pkdkthuankieu + pkdk_Thuankieu (merged TTHC index)"
   "INBOX: G:\Drive cua toi\PKDK_Thuankieu_Pipeline\INBOX_CLS"
-  "Rule: ho+ten+nam sinh | FULL->PROCESSED/U18 | PARTIAL->ERROR | no TTHC 2TK->MISSING"
+  "Rule: ho+ten+nam/SDT/CCCD | dual-write | 2TK->PROCESSED | 1TK->TK1/TK2 | PARTIAL->ERROR"
   "doFull=$doFull missing_budget=$MissingBudget"
 )
 $header | ForEach-Object { Write-Host $_ }
