@@ -18,10 +18,12 @@
 #   - Bat hourly ngay
 #   - Cap nhat TIEN_DO -> G:\Drive cua toi\build for Supper Data
 #
-# Rule:
-#   Khop CHINH XAC ho+ten+nam sinh | DIEN CLS tu PDF (doi don vi)
-#   FULL -> PROCESSED / UNDER 18 (tre) | PARTIAL+TTHC -> ERROR
-#   Khong TTHC -> MISSING | Loi PDF/khong nam sinh -> UNDER 18 (kiem tra)
+# Rule (dong bo run_hourly / auto_cycle):
+#   Match: ho+ten DAY DU + nam/ngay sinh/SDT/CCCD (thieu OK neu khong conflict)
+#   Unique ten khong param -> dien | trung ten >=2 -> UNDER 18
+#   Dual-write CLS ca 2 TK khi ca 2 co TTHC
+#   2TK+FULL -> PROCESSED/U18 | 1TK+FULL -> TK1/TK2
+#   PARTIAL/mau khac -> ERROR | no TTHC -> MISSING
 #
 #   cd C:\Users\thais\ADMIN
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_TONG_HOP_MOI.ps1
@@ -158,7 +160,8 @@ Write-Host ("COUNTS truoc: {0}" -f (Get-Counts).raw)
 # ---- 4 FULL SCAN 2 bot (nhieu vong) ----
 Write-Host ""
 Write-Host "==== 4/8 FULL SCAN + REPAIR (2 bot song song) ===="
-Write-Host "Rule: TTHC chinh xac | DIEN CLS | FULL->PROCESSED/U18 | PARTIAL->ERROR"
+Write-Host "Rule: ho+ten day du + nam/SDT/CCCD | dual-write 2 TK"
+  Write-Host "Route: 2TK+FULL->PROCESSED/U18 | 1TK+FULL->TK1/TK2 | PARTIAL/OTHER->ERROR | noTTHC->MISSING | trung ten->UNDER18"
 $code = 0
 for ($r = 1; $r -le $FullRounds; $r++) {
   Write-Host ("----- FULL vong {0}/{1} -----" -f $r, $FullRounds)
@@ -210,7 +213,7 @@ try {
     New-Item -ItemType Directory -Force -Path $fd | Out-Null
   }
   Set-Content -LiteralPath $FlagFull -Value ("done=" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss")) -Encoding utf8
-  Write-Host "OK: lan sau hourly chi INBOX_CLS + MISSING"
+  Write-Host "OK: lan sau hourly: INBOX disk + MISSING CSV + TK1/TK2 CSV rematch"
 } catch {
   Write-Host ("WARN flag: " + $_)
 }
@@ -238,8 +241,9 @@ Write-Host "  G:\Drive cua toi\build for Supper Data\last_counts.txt"
 Write-Host "  G:\Drive cua toi\build for Supper Data\logs\LAST_HOURLY_OK.txt"
 Write-Host ""
 Write-Host "Folder PDF:"
-Write-Host "  INBOX_CLS = moi | MISSING = chua TTHC | ERROR = PARTIAL"
-Write-Host "  PROCESSED = FULL nguoi lon | UNDER 18 = tre FULL hoac loi PDF/nam sinh"
+Write-Host "  INBOX_CLS = moi | MISSING = chua TTHC | ERROR = PARTIAL/mau khac"
+Write-Host "  PROCESSED = FULL ca 2 TK | TK1/TK2 = FULL chi 1 TK"
+Write-Host "  UNDER 18 = tre FULL / trung ten / loi PDF"
 Write-Host ""
 Write-Host "2 bot rieng (khong full): .\pipeline\CHAY_2_BOT_SONG_SONG.ps1"
 if ($code -ne 0) { exit $code }

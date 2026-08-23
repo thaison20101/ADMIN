@@ -548,8 +548,14 @@ def _run_auto_cycle_inner(
     )
     safe_print(f"Mode: {mode} | bot={role} | scan dirs ({len(scan_dirs)}): {[d.name for d in scan_dirs]}")
     safe_print(f"MISSING rematch budget this run: {missing_budget} | TK1/TK2 CSV: {rematch_tk_budget}")
-    safe_print("Match TTHC: ho+ten day du + nam/SDT/CCCD (nori) | dual-write 2 TK")
-    safe_print("FULL 2TK->PROCESSED | FULL 1TK->TK1/TK2 | PARTIAL/OTHER->ERROR | no TTHC->MISSING")
+    safe_print(
+        "Match TTHC: ho+ten DAY DU + nam/ngay sinh/SDT/CCCD "
+        "(thieu OK neu khong conflict) | dual-write 2 TK"
+    )
+    safe_print(
+        "Route: 2TK+FULL->PROCESSED/U18 | 1TK+FULL->TK1/TK2 | "
+        "PARTIAL/OTHER->ERROR | noTTHC->MISSING | trung ten->UNDER18"
+    )
     cases_path = ROOT / cfg.get("tracking", {}).get("cases_csv", "tracking/cases.csv")
     from hourly_sync import read_cases, register_new_files, write_cases  # local import
 

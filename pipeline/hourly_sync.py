@@ -2,16 +2,15 @@
 """Hourly pipeline: Drive INBOX_CLS + MISSING → match Medinet → auto-import CLS.
 
 Flow each hour (laptop on + Task Scheduler + Google Drive sync):
-1) Scan local Drive INBOX_CLS + MISSING + ERROR PDFs (not PROCESSED)
-2) Re-match TTHC by ho+ten (token cuoi) + nam_sinh (rule cu ~8000 file dung)
-3) Date index: 01/07/2026 → today (rolling)
-4) If TTHC found (exact ho+ten+nam sinh) + FULL labs → dien → PROCESSED
-5) If TTHC found + PARTIAL labs → dien phan co → ERROR
-6) If no TTHC → move/keep MISSING (list for TTHC team)
-7) Write result Excel + heartbeat under local pipeline/work/build (never G:)
+1) Scan INBOX_CLS disk; rematch MISSING + TK1/TK2 via cases.csv (no G: list TK)
+2) Match TTHC: ho+ten DAY DU + nam/ngay sinh/SDT/CCCD (thieu OK neu khong conflict)
+3) Unique ten khong param -> dien; trung ten >=2 -> UNDER 18
+4) Dual-write CLS ca 2 TK khi ca 2 co TTHC
+5) Route: 2TK+FULL->PROCESSED/U18 | 1TK+FULL->TK1/TK2
+   PARTIAL/OTHER->ERROR | noTTHC->MISSING
+6) Write result Excel + heartbeat under local pipeline/work/build (never G:)
 
-Full catch-up (bat so BN cu): python hourly_sync.py --full-scan --repair
-  → TOAN BO folder ke ca PROCESSED
+Full catch-up: python hourly_sync.py --full-scan --repair
 """
 
 from __future__ import annotations

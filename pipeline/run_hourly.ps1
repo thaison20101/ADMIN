@@ -1,8 +1,9 @@
 # Windows hourly runner for Drive pipeline (MAY A ONLY)
 # 2 TK Medinet + 2 bot: INBOX_CLS + MISSING CSV + TK1/TK2 CSV rematch
-# Rule: ho+ten day du + nam/SDT/CCCD | dual-write CLS
-#   FULL 2TK -> PROCESSED/U18 | FULL 1TK -> TK1/TK2
-#   PARTIAL/mau khac -> ERROR | trung ten -> UNDER 18 | no TTHC -> MISSING
+# Rule: ho+ten DAY DU + nam/ngay sinh/SDT/CCCD (thieu OK neu khong conflict)
+#   unique ten -> dien | trung ten >=2 -> UNDER 18 | dual-write CLS ca 2 TK
+#   2TK+FULL -> PROCESSED/U18 | 1TK+FULL -> TK1/TK2
+#   PARTIAL/mau khac -> ERROR | no TTHC -> MISSING
 #
 # Lan dau (chua FIRST_FULL_SCAN_DONE): full-scan 2 bot
 # Sau do: hourly nhe
@@ -103,7 +104,10 @@ $header = @(
   "BuildRoot: $BuildRoot"
   "Accounts: pkdkthuankieu + pkdk_Thuankieu (merged TTHC index)"
   "INBOX: G:\Drive cua toi\PKDK_Thuankieu_Pipeline\INBOX_CLS"
-  "Rule: ho+ten+nam/SDT/CCCD | dual-write | 2TK->PROCESSED | 1TK->TK1/TK2 | PARTIAL->ERROR"
+  "Rule: ho+ten DAY DU (exact) + nam/ngay sinh/SDT/CCCD (thieu OK neu khong conflict)"
+  "      unique ten khong param -> dien | trung ten >=2 -> UNDER 18"
+  "Route: 2TK+FULL->PROCESSED/U18 | 1TK+FULL->TK1/TK2 | PARTIAL/OTHER->ERROR | noTTHC->MISSING"
+  "Hourly: INBOX disk + MISSING CSV + TK1/TK2 CSV rematch (khong list G: TK1/TK2)"
   "doFull=$doFull missing_budget=$MissingBudget"
 )
 $header | ForEach-Object { Write-Host $_ }
@@ -131,7 +135,7 @@ if ($doFull) {
     } catch {}
   }
 } else {
-  Write-Host "MODE: HOURLY 2 BOT - INBOX_CLS disk + MISSING CSV rematch"
+  Write-Host "MODE: HOURLY 2 BOT - INBOX disk + MISSING CSV + TK1/TK2 CSV rematch"
   $code = Start-TwoBots
 }
 
