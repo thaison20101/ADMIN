@@ -29,23 +29,27 @@ TINH NANG DA TRIEN KHAI (branch cursor/drive-hourly-pipeline-df0f)
    (khi TK kia nhap TTHC sau -> dual-write + move PROCESSED)
 9. 2 bot + 2 TK Medinet (index gop v3_merged)
 
-LENH CHAY MAY A (1 LENH DUY NHAT)
----------------------------------
+CHI TIET RULE: pipeline\\RULE_DUNG.txt  (doc file nay neu so lay nham rule)
+
+LENH CHAY MAY A (CHI 2 LENH AN TOAN)
+------------------------------------
 cd C:\\Users\\thais\\ADMIN
 git pull origin cursor/drive-hourly-pipeline-df0f
+
+# Full 1 lan + bat hourly (dung):
 powershell -ExecutionPolicy Bypass -File .\\pipeline\\CHAY_TONG_HOP_MOI.ps1
 
-(Lenh tren: tat hourly -> pull -> full 2 bot -> rematch -> Urea -> bat hourly)
-
-2 bot song song (INBOX + MISSING, khong full):
-  powershell -ExecutionPolicy Bypass -File .\\pipeline\\CHAY_2_BOT_SONG_SONG.ps1
+# Hoac chi cai/bat hourly (Task Scheduler -> run_hourly.ps1):
+powershell -ExecutionPolicy Bypass -File .\\pipeline\\install_hourly_task.ps1
 
 Tam ngung hourly:
   powershell -ExecutionPolicy Bypass -File .\\pipeline\\TAM_NGUNG_HOURLY.ps1
 
+2 bot song song (khong full, van dung rule moi qua hourly_sync):
+  powershell -ExecutionPolicy Bypass -File .\\pipeline\\CHAY_2_BOT_SONG_SONG.ps1
 
-Dong bo folder G:
-  powershell -ExecutionPolicy Bypass -File .\\pipeline\\CHAY_DONG_BO_DRIVE.ps1
+SCRIPT CU (da redirect sang CHAY_TONG_HOP_MOI — khong con rule ho+ten+nam sinh):
+  CHAY_FULL_ROI_HOURLY / CHAY_TONG_HOP_VA_BAT_HOURLY / CHAY_GAP_ROI_HOURLY
 
 Cap nhat file theo doi len G (build for Supper Data):
   python pipeline/super_data_status.py --publish
