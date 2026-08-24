@@ -31,6 +31,12 @@ TINH NANG DA TRIEN KHAI (branch cursor/drive-hourly-pipeline-df0f)
 
 CHI TIET RULE: pipeline\\RULE_DUNG.txt  (doc file nay neu so lay nham rule)
 
+KIEM TRA PDF (KHONG IMPORT) — pipeline\\pdf_check\\
+-------------------------------------------------
+powershell -ExecutionPolicy Bypass -File .\\pipeline\\CHAY_PDF_CHECK.ps1
+Excel: pipeline\\work\\build\\excel_preview\\PDF_CHECK_*.xlsx
+(TTHC theo TK, PDF trung folder, da/chua CLS)
+
 LENH CHAY MAY A (CHI 2 LENH AN TOAN)
 ------------------------------------
 cd C:\\Users\\thais\\ADMIN

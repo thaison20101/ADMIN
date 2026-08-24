@@ -30,6 +30,14 @@ HOURLY
 INBOX disk + MISSING CSV + TK1/TK2 CSV rematch
 (Khong list folder TK1/TK2 tren G:)
 
+KIEM TRA TOAN BO PDF (KHONG IMPORT)
+-----------------------------------
+Folder code: pipeline\pdf_check\
+powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_PDF_CHECK.ps1
+# Nhanh (khong goi CLS):  ...\CHAY_PDF_CHECK.ps1 -SkipCls
+# Excel: pipeline\work\build\excel_preview\PDF_CHECK_*.xlsx
+# Sheets: All | Dup | NeedCLS | HasCLS | NoTTHC | Ambiguous | FolderMismatch
+
 LENH AN TOAN MAY A
 ------------------
 cd C:\Users\thais\ADMIN
