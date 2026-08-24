@@ -1,0 +1,64 @@
+RULE DUNG (branch cursor/drive-hourly-pipeline-df0f) — CHI 1 RULE
+================================================================
+Code path duy nhat: pipeline/tthc_match.py -> resolve_tthc_matches
+Hourly runner:      pipeline/run_hourly.ps1  (Task Scheduler)
+Full 1 lan:         pipeline/CHAY_TONG_HOP_MOI.ps1
+
+MATCH TTHC
+----------
+1. Ho+ten DAY DU (fold exact, khong soft-subset)
+2. Doi chieu nam sinh / ngay sinh / SDT / CCCD neu PDF co
+   - Thieu param OK neu khong conflict
+3. Unique ten, khong param -> dien
+4. Trung ten >=2, khong param -> UNDER 18
+
+DUAL-WRITE CLS
+--------------
+- TTHC ca 2 TK -> dien CLS ca 2 (pkdkthuankieu + pkdk_Thuankieu)
+- TTHC 1 TK    -> dien dung TK do
+
+ROUTE PDF
+---------
+2 TK + FULL          -> PROCESSED / UNDER 18 (tre)
+1 TK + FULL          -> TK1 (pkdkthuankieu) / TK2 (pkdk_Thuankieu)
+PARTIAL / mau khac   -> ERROR (vd Huyet Trang)
+Khong TTHC ca 2 TK   -> MISSING
+Trung ten / loi PDF  -> UNDER 18
+
+HOURLY
+------
+INBOX disk + MISSING CSV + TK1/TK2 CSV rematch
+(Khong list folder TK1/TK2 tren G:)
+
+KIEM TRA TOAN BO PDF (KHONG IMPORT)
+-----------------------------------
+Folder code: pipeline\pdf_check\
+powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_PDF_CHECK.ps1
+# Nhanh (khong goi CLS):  ...\CHAY_PDF_CHECK.ps1 -SkipCls
+# Excel: pipeline\work\build\excel_preview\PDF_CHECK_*.xlsx
+# Sheets: All | Dup | NeedCLS | HasCLS | NoTTHC | Ambiguous | FolderMismatch
+
+LENH AN TOAN MAY A
+------------------
+cd C:\Users\thais\ADMIN
+git pull origin cursor/drive-hourly-pipeline-df0f
+
+# Full 1 lan + bat hourly:
+powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_TONG_HOP_MOI.ps1
+
+# Chi cai/bat hourly (sau khi da pull):
+powershell -ExecutionPolicy Bypass -File .\pipeline\install_hourly_task.ps1
+
+KIEM TRA DUNG RULE SAU KHI CHAY
+-------------------------------
+Log/banner phai co:
+  Rule: ho+ten DAY DU ...
+  Route: 2TK+FULL->PROCESSED/U18 | 1TK+FULL->TK1/TK2 ...
+
+NEU THAY "ho+ten+nam sinh" / "FULL->PROCESSED" (khong co TK1/TK2)
+=> dang chay code CU — dung, git pull lai.
+
+SCRIPT CU (tu dong chuyen sang CHAY_TONG_HOP_MOI):
+  CHAY_FULL_ROI_HOURLY.ps1
+  CHAY_TONG_HOP_VA_BAT_HOURLY.ps1
+  CHAY_GAP_ROI_HOURLY.ps1

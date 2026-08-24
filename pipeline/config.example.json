@@ -1,0 +1,53 @@
+{
+  "drive": {
+    "root_folder_name": "PKDK_Thuankieu_Pipeline",
+    "inbox_folder": "INBOX_CLS",
+    "processed_folder": "PROCESSED",
+    "error_folder": "ERROR",
+    "missing_folder": "MISSING",
+    "local_sync_root": "G:/Drive của tôi/PKDK_Thuankieu_Pipeline",
+    "build_root": "pipeline/work/build",
+    "note": "May A only. Inbox=INBOX_CLS. Hourly: INBOX_CLS+MISSING. Full: all folders. Match: ho+ten+nam_sinh. FULL adult->PROCESSED; FULL kid->UNDER 18; PARTIAL->ERROR; no TTHC->MISSING. Date 01/07/2026->today."
+  },
+  "tracking": {
+    "cases_csv": "tracking/cases.csv",
+    "max_import_attempts": 5
+  },
+  "schedule": {
+    "every_minutes": 60
+  },
+  "medinet": {
+    "base_url": "https://quanlyskcd.medinet.org.vn",
+    "api_base": "https://be-qlskcd.medinet.org.vn",
+    "login_path": "/account/login",
+    "date_from": "01/07/2026",
+    "date_to": "",
+    "username": "",
+    "password": "",
+    "note": "date_from fixed 01/07/2026. date_to empty = hôm nay. username/password filled in config.local.json (gitignored) or MEDINET_USER / MEDINET_PASS env."
+  },
+  "routing": {
+    "m4_birth_year_max": 1967,
+    "m3_menu": "Khám sức khỏe -> Người từ đủ 18-59 tuổi (M3)",
+    "m4_menu": "Khám sức khỏe -> Người cao tuổi (M4)",
+    "m3_loai_kham": "Khám định kỳ",
+    "m3_forbid": "Khám tuyển"
+  },
+  "import_rules": {
+    "enabled": true,
+    "auto_hourly": true,
+    "max_imports_per_run": 80,
+    "form": "Khám cận lâm sàng",
+    "form_code": "KSKDK_Phieu_CanLamSang",
+    "form_id": 1000250,
+    "loai_kham_dinh_ky": 5152,
+    "urine_negative_map": {
+      "Âm tính": "Negative"
+    },
+    "nitrit_am_tinh_id": 5120,
+    "nitrit_duong_tinh_id": 5119,
+    "count_suffix_hash": true,
+    "preview_excel_before_import": false,
+    "note": "Hourly task runs pipeline/run_hourly.ps1 → auto parse+import READY cases. Manual: run_phase_b_import.ps1"
+  }
+}
