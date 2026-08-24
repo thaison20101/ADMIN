@@ -31,3 +31,9 @@
 #
 # Ket qua: pipeline\work\build\excel_preview\PDF_CHECK_*.xlsx
 # KHONG ghi G:, KHONG insert_cls, KHONG move file.
+# Excel: cot + sheet tieng Viet co dau
+
+DON G (import + move + dedupe):
+  powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DON_G.ps1
+  powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DON_G.ps1 -Apply -ResumeHourly
+  Chi tiet: pipeline\HUONG_DAN_DON_G.txt

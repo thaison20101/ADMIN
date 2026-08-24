@@ -34,9 +34,16 @@ KIEM TRA TOAN BO PDF (KHONG IMPORT)
 -----------------------------------
 Folder code: pipeline\pdf_check\
 powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_PDF_CHECK.ps1
-# Nhanh (khong goi CLS):  ...\CHAY_PDF_CHECK.ps1 -SkipCls
-# Excel: pipeline\work\build\excel_preview\PDF_CHECK_*.xlsx
-# Sheets: All | Dup | NeedCLS | HasCLS | NoTTHC | Ambiguous | FolderMismatch
+# Excel: pipeline\work\build\excel_preview\PDF_CHECK_*.xlsx (cot/sheet tieng Viet co dau)
+
+DON G (1 LAN — IMPORT + MOVE + DEDUPE)
+--------------------------------------
+# TRUOC: Pause Google Drive sync | TAM_NGUNG hourly tu dong trong script
+powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DON_G.ps1
+powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DON_G.ps1 -Apply -ResumeHourly
+# Excel: pipeline\work\build\excel_preview\REMEDIATE_*.xlsx (Chi tiet hanh dong)
+# Quet: PROCESSED->MISSING->UNDER 18->TK1->TK2 | filled_ok>=2 moi PROCESSED
+# INBOX trung ten folder khac -> tam o thu muc goc PKDK_Thuankieu_Pipeline
 
 LENH AN TOAN MAY A
 ------------------

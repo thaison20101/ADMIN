@@ -209,7 +209,7 @@ def main() -> int:
     safe_print("")
     safe_print(f"Excel: {out_xlsx}")
     safe_print(f"Summary: {out_txt}")
-    safe_print("Sheets: All | Dup | NeedCLS | HasCLS | NoTTHC | Ambiguous | FolderMismatch | Summary")
+    safe_print("Sheets: Tất cả | Trùng tên | Cần điền CLS | Đã có CLS | Không TTHC | Mơ hồ | Sai folder | Tóm tắt")
     safe_print("DONE (no import, no move)")
     return 0
 
