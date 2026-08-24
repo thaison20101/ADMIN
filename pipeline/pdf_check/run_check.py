@@ -27,7 +27,7 @@ from check_tthc_cls import check_one_pdf  # noqa: E402
 from dedup import mark_duplicates  # noqa: E402
 from drive_paths import g_pipeline_live, local_work_build, resolve_g_sync  # noqa: E402
 from medinet_api import authenticate  # noqa: E402
-from medinet_creds import get_medinet_accounts  # noqa: E402
+from medinet_creds import MEDINET_ACCOUNTS  # noqa: E402
 from phase_b_preview import load_config, load_or_fetch_merged_unit_index  # noqa: E402
 from scan_pdfs import DEFAULT_FOLDERS, scan_pipeline_pdfs  # noqa: E402
 from write_excel import write_pdf_check_excel  # noqa: E402
@@ -102,12 +102,16 @@ def main() -> int:
     n_dup = sum(1 for r in scanned if r.get("is_dup_name") == "YES")
     safe_print(f"Dup name rows: {n_dup}")
 
-    accounts = get_medinet_accounts(cfg)
-    safe_print(f"Accounts: {accounts[0]['id']} + {accounts[1]['id']}")
+    # Always use the 2 hardcoded PKDK Medinet accounts (same as hourly/import).
+    # Do not take alternate accounts from config.local.json for this check tool.
+    accounts = [dict(a) for a in MEDINET_ACCOUNTS[:2]]
+    safe_print(
+        f"Accounts (hardcoded): {accounts[0]['user']} + {accounts[1]['user']}"
+    )
     tokens: dict[str, str] = {}
     for acct in accounts:
         tokens[acct["id"]] = authenticate(acct["user"], acct["password"])
-        safe_print(f"  Auth OK [{acct['id']}]")
+        safe_print(f"  Auth OK [{acct['id']}] user={acct['user']}")
 
     date_from = (cfg.get("medinet") or {}).get("date_from") or "01/07/2026"
     date_to = ((cfg.get("medinet") or {}).get("date_to") or "").strip() or _today_dmy()

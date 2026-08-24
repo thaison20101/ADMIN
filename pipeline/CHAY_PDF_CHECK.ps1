@@ -26,14 +26,16 @@ Set-Location $Repo
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUTF8 = "1"
 $env:PYTHONUNBUFFERED = "1"
-if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdkthuankieu" }
-if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "P@ssw0rd" }
-if (-not $env:MEDINET_USER_2) { $env:MEDINET_USER_2 = "pkdk_Thuankieu" }
-if (-not $env:MEDINET_PASS_2) { $env:MEDINET_PASS_2 = "pkdk_Thuankieu#2026" }
+# 2 TK Medinet (cung hardcode pipeline/medinet_creds.py + hourly) - luon dung 2 TK nay
+$env:MEDINET_USER = "pkdkthuankieu"
+$env:MEDINET_PASS = "P@ssw0rd"
+$env:MEDINET_USER_2 = "pkdk_Thuankieu"
+$env:MEDINET_PASS_2 = "pkdk_Thuankieu#2026"
 
 Write-Host "############################################################"
 Write-Host "#  PDF CHECK: TTHC 2 TK + CLS + DUP (KHONG IMPORT)         #"
 Write-Host "############################################################"
+Write-Host "TK1: pkdkthuankieu | TK2: pkdk_Thuankieu (hardcoded)"
 Write-Host "Rule match = resolve_tthc_matches (ho+ten DAY DU + nam/SDT/CCCD)"
 Write-Host "Excel: pipeline\work\build\excel_preview\PDF_CHECK_*.xlsx"
 

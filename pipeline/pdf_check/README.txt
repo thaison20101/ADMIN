@@ -11,6 +11,10 @@
 # Rule match = rule import: resolve_tthc_matches
 #   (ho+ten DAY DU + nam/ngay sinh/SDT/CCCD)
 #
+# 2 TK Medinet (hardcode, giong hourly):
+#   TK1 pkdkthuankieu / P@ssw0rd
+#   TK2 pkdk_Thuankieu / pkdk_Thuankieu#2026
+#
 # LENH MAY A
 # ----------
 #   cd C:\Users\thais\ADMIN
