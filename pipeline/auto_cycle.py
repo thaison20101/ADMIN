@@ -995,6 +995,31 @@ def _run_auto_cycle_inner(
         row["source_file"] = str(pdf)
         src_u = str(pdf).replace("\\", "/").upper()
         in_inbox = ("/INBOX" in src_u) or src_u.endswith("/INBOX_CLS") or "INBOX_CLS" in src_u
+
+        # INBOX trùng tên với folder khác → giữ tạm ở thư mục gốc pipeline
+        if in_inbox and not full_scan and not repair:
+            try:
+                _pdf_check = Path(__file__).resolve().parent / "pdf_check"
+                if str(_pdf_check) not in sys.path:
+                    sys.path.insert(0, str(_pdf_check))
+                from dedup import hold_inbox_duplicate_at_root, inbox_duplicate_exists  # noqa: E402
+
+                if inbox_duplicate_exists(sync, pdf.name, exclude=pdf):
+                    if dry_run:
+                        safe_print(f"  INBOX_DUP_HOLD_ROOT (dry) {pdf.name}")
+                        stats["inbox_dup_hold_root"] += 1
+                        continue
+                    moved_root = hold_inbox_duplicate_at_root(pdf, sync, dry_run=False)
+                    if moved_root:
+                        row["source_file"] = str(moved_root)
+                        row["file_name"] = moved_root.name
+                        row["notes"] = "inbox_dup_hold_root"[:200]
+                        stats["inbox_dup_hold_root"] += 1
+                        safe_print(f"  INBOX_DUP_HOLD_ROOT {pdf.name} -> {moved_root}")
+                    continue
+            except Exception as e:
+                safe_print(f"  WARN inbox_dup_check: {e}")
+
         in_missing = "/MISSING/" in f"/{src_u}/" or src_u.endswith("/MISSING")
         in_error = "/ERROR/" in f"/{src_u}/" or src_u.endswith("/ERROR")
         in_processed = "/PROCESSED" in src_u

@@ -3,8 +3,21 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
+import time
 from collections import defaultdict
 from pathlib import Path
+
+# Subfolders under PKDK_Thuankieu_Pipeline (flat PDF per folder).
+PIPELINE_SUBFOLDERS = (
+    "INBOX_CLS",
+    "MISSING",
+    "ERROR",
+    "PROCESSED",
+    "UNDER 18",
+    "TK1",
+    "TK2",
+)
 
 
 def sha256_file(path: Path, limit_mb: int = 32) -> str:
@@ -79,3 +92,57 @@ def mark_duplicates(
             row["file_hash"] = ""
 
     return out
+
+
+def _flat_pdf_exists(folder: Path, file_name: str) -> bool:
+    p = folder / file_name
+    try:
+        return p.is_file()
+    except OSError:
+        return False
+
+
+def inbox_duplicate_exists(sync_root: Path, file_name: str, *, exclude: Path | None = None) -> bool:
+    """True if file_name exists in any pipeline subfolder (except exclude path)."""
+    for sub in PIPELINE_SUBFOLDERS:
+        p = sync_root / sub / file_name
+        if exclude is not None:
+            try:
+                if p.resolve() == exclude.resolve():
+                    continue
+            except OSError:
+                if str(p) == str(exclude):
+                    continue
+        if _flat_pdf_exists(sync_root / sub, file_name):
+            return True
+    return False
+
+
+def hold_inbox_duplicate_at_root(
+    pdf: Path,
+    sync_root: Path,
+    *,
+    dry_run: bool = False,
+) -> Path | None:
+    """Move INBOX duplicate to pipeline root (same level as INBOX_CLS)."""
+    if not pdf.exists():
+        return None
+    dest = sync_root / pdf.name
+    if dest.exists():
+        stem, suf = pdf.stem, pdf.suffix
+        for i in range(1, 20):
+            alt = sync_root / f"{stem}_dup{i}{suf}"
+            if not alt.exists():
+                dest = alt
+                break
+    if dry_run:
+        return dest
+    last_err = None
+    for attempt in range(3):
+        try:
+            shutil.move(str(pdf), str(dest))
+            return dest
+        except OSError as e:
+            last_err = e
+            time.sleep(0.4 * (attempt + 1))
+    raise OSError(f"hold_inbox_dup_root fail {pdf.name}: {last_err}")
