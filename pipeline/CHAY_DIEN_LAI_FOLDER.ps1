@@ -1,5 +1,6 @@
 # ============================================================
-# DIEN LAI CLS TU PDF — khong move
+# DIEN LAI CLS TU PDF - khong move
+# ASCII-only for Windows PowerShell 5.1
 #
 # Buoc:
 #   1) Tat hourly + xoa lock
@@ -40,7 +41,7 @@ $Branch = "cursor/don-g-remediation-df0f"
 $LockDir = Join-Path $Repo "pipeline\work\locks"
 
 Write-Host "############################################################"
-Write-Host "#  DIEN LAI CLS — moi ket qua PDF (khong bo ngoai khoang) #"
+Write-Host "#  DIEN LAI CLS - moi ket qua PDF - khong bo ngoai khoang #"
 Write-Host "#  KHONG MOVE PDF                                         #"
 Write-Host "############################################################"
 
@@ -75,12 +76,12 @@ if ($Limit -gt 0) { $argsPy += @("--limit", "$Limit") }
 
 Write-Host ""
 if ($ToanBo) {
-  Write-Host "==== Quet TOAN BO (dien thieu, khong move) ===="
+  Write-Host "==== Quet TOAN BO - dien thieu, khong move ===="
 } else {
-  Write-Host "==== Quet folder 165 case Binh Tay (dien, khong move) ===="
+  Write-Host "==== Quet folder 165 case Binh Tay - dien, khong move ===="
 }
 if (-not $Apply) {
-  Write-Host "MODE: DRY-RUN (them -Apply de ghi Medinet)"
+  Write-Host "MODE: DRY-RUN - them -Apply de ghi Medinet"
 } else {
   Write-Host "MODE: APPLY"
 }
@@ -94,7 +95,7 @@ Write-Host "Excel: pipeline\work\build\excel_preview\REFILL_*.xlsx"
 
 if ($Apply -and $ResumeHourly) {
   Write-Host ""
-  Write-Host "==== 5) BAT LAI hourly (dien du + move nhu cu) ===="
+  Write-Host "==== 5) BAT LAI hourly - dien du + move nhu cu ===="
   & powershell -ExecutionPolicy Bypass -File ".\pipeline\BAT_LAI_HOURLY.ps1"
 }
 
