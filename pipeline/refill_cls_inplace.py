@@ -241,31 +241,35 @@ def refill_one(
         pdf_fields = _payload_lab_keys(payload)
         all_pdf_fields.extend(f"{aid}:{k}" for k in pdf_fields)
 
+        # Always compare web vs FULL PDF payload (every field PDF has).
+        pdf_has_urea = "Urea" in (data.get("labs") or {})
+
+        def _miss_wo_optional_urea(existing_row: dict | None) -> list[str]:
+            if not cls_has_lab_values(existing_row):
+                miss0 = list(pdf_fields)
+            else:
+                miss0 = cls_missing_lab_fields(existing_row, payload)
+            if not pdf_has_urea:
+                miss0 = [k for k in miss0 if k != "SinhHoaMau_Ure"]
+            return miss0
+
         if not apply:
-            # Dry-run: still load web to report missing
             try:
                 existing, tokens[aid] = load_cls_view(
                     tokens[aid], pid, reauth=make_reauth(aid)
                 )
-                miss = cls_missing_lab_fields(existing, payload)
-                if not cls_has_lab_values(existing):
-                    miss = pdf_fields
+                miss = _miss_wo_optional_urea(existing)
                 all_missing.extend(f"{aid}:{k}" for k in miss)
-                all_filled.extend(f"{aid}:{k}" for k in miss)
+                all_filled.extend(f"{aid}:{k}" for k in miss)  # would fill
             except Exception as e:
                 notes.append(f"{aid}:dry_load:{e}"[:40])
                 all_missing.extend(f"{aid}:{k}" for k in pdf_fields)
-                all_filled.extend(f"{aid}:{k}" for k in pdf_fields)
             continue
 
+        # APPLY: always insert full payload — never skip as "da_du"
         existing, tokens[aid] = load_cls_view(tokens[aid], pid, reauth=make_reauth(aid))
-        miss = cls_missing_lab_fields(existing, payload)
-        if not cls_has_lab_values(existing):
-            miss = pdf_fields
+        miss = _miss_wo_optional_urea(existing)
         all_missing.extend(f"{aid}:{k}" for k in miss)
-        if not miss and pdf_fields:
-            notes.append(f"{aid}:da_du")
-            continue
 
         ok, msg, _raw, tokens[aid] = insert_cls(
             tokens[aid], payload, reauth=make_reauth(aid)
@@ -275,13 +279,15 @@ def refill_one(
             tokens[aid], pid, payload=payload, reauth=make_reauth(aid)
         )
         existing2, tokens[aid] = load_cls_view(tokens[aid], pid, reauth=make_reauth(aid))
-        still = cls_missing_lab_fields(existing2, payload)
-        filled = [k for k in miss if k not in still]
+        still = _miss_wo_optional_urea(existing2)
+        filled = [k for k in pdf_fields if k not in still]
+        if not pdf_has_urea:
+            filled = [k for k in filled if k != "SinhHoaMau_Ure"]
         all_filled.extend(f"{aid}:{k}" for k in filled)
-        notes.append(f"{aid}:ok={ok};ver={verified};{vdetail}"[:80])
+        notes.append(f"{aid}:ok={ok};ver={verified};miss_truoc={len(miss)};{vdetail}"[:100])
         if still:
             row["Kết quả"] = "Một phần"
-            notes.append(f"{aid}:con_thieu={still[:8]}")
+            notes.append(f"{aid}:con_thieu={still[:12]}")
 
     row["Trường trên PDF"] = ", ".join(sorted(set(all_pdf_fields)))[:500]
     row["Thiếu trước"] = ", ".join(sorted(set(all_missing)))[:500]
@@ -291,8 +297,10 @@ def refill_one(
         if not all_pdf_fields:
             row["Kết quả"] = "Bỏ qua"
             row["Ghi chú"] = (row["Ghi chú"] + ";khong_co_truong_pdf")[:300]
-        elif not all_missing and apply:
-            row["Kết quả"] = "Đã đủ"
+        elif apply:
+            row["Kết quả"] = "Thành công"
+        else:
+            row["Kết quả"] = "Dry-run"
     return row
 
 
@@ -323,7 +331,7 @@ def write_refill_excel(rows: list[dict], out_path: Path) -> Path:
         ws_need.append([r.get(c, "") for c in ACTION_COLS])
 
     skip = [r for r in rows if r.get("Kết quả") == "Bỏ qua"]
-    ws_skip = wb.create_sheet("Không TTHC / Bỏ qua")
+    ws_skip = wb.create_sheet("Khong TTHC - Bo qua")
     ws_skip.append(ACTION_COLS)
     for c in ws_skip[1]:
         c.font = Font(bold=True)
@@ -393,7 +401,7 @@ def run_refill(
         mode = "APPLY" if apply else "DRY-RUN"
         safe_print(f"========== DIEN LAI CLS ({mode}) ==========")
         safe_print(f"SYNC: {sync}")
-        safe_print("Rule: moi ket qua PDF (trong/ngoai khoang) deu dien — KHONG MOVE")
+        safe_print("Rule: FULL PDF fields -> web (trong/ngoai khoang), KHONG MOVE, KHONG Excel")
 
         pdfs: list[tuple[str, Path]] = []
         for label, d in targets:
@@ -435,28 +443,38 @@ def run_refill(
                     f"scope={r.get('Phạm vi TTHC')} ketqua={r.get('Kết quả')}"
                 )
 
+        # No Excel this run (hourly later). Short console + txt log only.
         build = local_work_build()
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         tag = "TOANBO" if toan_bo else "FOLDER"
-        out_xlsx = build / "excel_preview" / f"REFILL_{tag}_{stamp}.xlsx"
-        write_refill_excel(results, out_xlsx)
         out_log = build / "logs" / f"REFILL_{tag}_{stamp}.txt"
+        counts = Counter(str(r.get("Kết quả") or "") for r in results)
         lines = [
             f"mode={mode}",
             f"toan_bo={toan_bo}",
             f"total={len(results)}",
             f"elapsed_s={time.time() - t0:.0f}",
-            f"excel={out_xlsx}",
+            "excel=SKIP",
             "",
             "ket_qua:",
         ]
-        for k, v in Counter(str(r.get("Kết quả") or "") for r in results).most_common():
+        for k, v in counts.most_common():
             lines.append(f"  {k}={v}")
+        # Sample partial cases for console follow-up
+        partials = [r for r in results if r.get("Kết quả") == "Một phần"][:20]
+        if partials:
+            lines.append("")
+            lines.append("mau_mot_phan:")
+            for r in partials:
+                lines.append(
+                    f"  {r.get('Họ tên')}|{r.get('Tên file')}|thieu={r.get('Thiếu trước')}"
+                )
         out_log.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        safe_print(f"Excel: {out_xlsx}")
         safe_print(f"Log: {out_log}")
-        safe_print(f"DONE ({mode}) — khong move PDF")
-        return {"ok": True, "excel": str(out_xlsx), "total": len(results)}
+        for k, v in counts.most_common():
+            safe_print(f"  {k}={v}")
+        safe_print(f"DONE ({mode}) - khong move PDF, khong Excel")
+        return {"ok": True, "log": str(out_log), "total": len(results), "counts": dict(counts)}
     finally:
         release_lock(lock)
 

@@ -84,8 +84,75 @@ def test_labs_to_form_includes_out_of_range():
     assert payload.get("CongThucMau_SLHC") == 5.14
 
 
+def test_parse_labs_quy_out_of_range_block():
+    """NGUYEN HUU QUY-like: MCV/MCH/MCHC outside ref — must still parse."""
+    text = """
+Họ tên: NGUYEN HUU QUY
+Năm sinh: 1961
+Huyết học Công thức máu
+Leukocytes (WBC) 8.35 ( 4.01 - 11.42 ) G/L
+Neutrophils 20.7 ( 40 - 74 ) %
+Neutrophils # 1.73 ( 1.7 - 7.5 ) G/L
+Monocytes 13.3 ( 3.4 - 9.0 ) %
+Monocytes # 1.11 ( 0.2 - 0.8 ) G/L
+Basophils 10.5 ( 0.0 - 1.5 ) %
+Basophils # 0.881 ( 0.0 - 0.1 ) G/L
+Lymphocytes 54.5 ( 19 - 48 ) %
+Lymphocytes # 4.55 ( 1.0 - 4.0 ) G/L
+Erythrocytes (RBC) 6.34 ( 4.01 - 5.79 ) T/L
+Hemoglobin (Hb) 113 ( 115 - 150 ) g/L
+Hematocrit (Hct) 0.44 ( 0.34 - 0.49 ) L/L
+MCV 70.0 ( 80.0 - 99.0 ) fL
+MCH 17.9 ( 27.0 - 33.0 ) pg
+MCHC 255 ( 320 - 360 ) g/L
+RDW 11.8 ( 11.5 - 14.5 ) %
+Platelets (PLT) 330 ( 146 - 429 ) G/L
+Sinh hóa
+Glucose 5.02 ( 3.9 - 6.4 ) mmol/L
+Creatinine 66.3 ( 62 - 106 ) umol/L
+AST (SGOT) 25.06 ( 0 - 40 ) U/L
+ALT (SGPT) 17.76 ( 0 - 41 ) U/L
+"""
+    labs = parse_labs(text)
+    norm = normalize_for_web(labs)
+    assert (norm.get("MCV") or {}).get("value_web") == "70"
+    assert (norm.get("MCH") or {}).get("value_web") == "17.9"
+    assert (norm.get("MCHC") or {}).get("value_web") == "255"
+    assert (norm.get("RDW") or {}).get("value_web") == "11.8"
+    assert (norm.get("RBC") or {}).get("value_web") == "6.34"
+    assert (norm.get("HGB") or {}).get("value_web") == "113"
+    assert (norm.get("Basophils_count") or {}).get("value_web") == "0.881"
+    from medinet_api import labs_to_form_payload
+
+    payload = labs_to_form_payload(norm, phieukham_id=1, gioi_tinh="Nam")
+    assert payload.get("XNM_MCV") == 70
+    assert payload.get("XNM_MCH") == 17.9
+    assert payload.get("XNM_MCHC") == 255
+    assert payload.get("XNM_RDW") == 11.8
+    assert payload.get("CongThucMau_SLHC") == 6.34
+
+
+def test_ghi_chu_after_ref_all_core_fields():
+    cases = [
+        (r"\bMCV\b", "MCV ( 80.0 - 99.0 ) fL 70.0", "70.0"),
+        (r"\bMCH\b", "MCH ( 27.0 - 33.0 ) pg 17.9", "17.9"),
+        (r"\bMCHC\b", "MCHC ( 320 - 360 ) g/L 255", "255"),
+        (r"Erythrocytes\s*\(?\s*RBC\s*\)?", "Erythrocytes (RBC) ( 4.01 - 5.79 ) T/L 6.34", "6.34"),
+        (r"Hemoglobin\s*\(?\s*H(?:GB|b)\s*\)?", "Hemoglobin (Hb) ( 115 - 150 ) g/L 113", "113"),
+        (r"Basophils\s*#", "Basophils # ( 0.0 - 0.1 ) G/L 0.881", "0.881"),
+        (r"Monocytes\s*#", "Monocytes # ( 0.2 - 0.8 ) G/L 1.11", "1.11"),
+        (r"AST\s*\(?\s*SGOT\s*\)?", "AST (SGOT) ( 0 - 40 ) U/L 25.06", "25.06"),
+    ]
+    for pat, line, expect in cases:
+        got = _parse_lab_line(line, pat)
+        assert got is not None, f"miss: {line}"
+        assert got[0] == expect, f"{line} -> {got[0]} want {expect}"
+
+
 if __name__ == "__main__":
     test_mchc_rdw_in_and_out_of_range_layouts()
     test_parse_labs_khoa_like_block()
     test_labs_to_form_includes_out_of_range()
+    test_parse_labs_quy_out_of_range_block()
+    test_ghi_chu_after_ref_all_core_fields()
     print("OK")

@@ -91,7 +91,7 @@ Write-Host ("CMD: python " + ($argsPy -join " "))
 $code = $LASTEXITCODE
 
 Write-Host ""
-Write-Host "Excel: pipeline\work\build\excel_preview\REFILL_*.xlsx"
+Write-Host "Log: pipeline\work\build\logs\REFILL_*.txt (khong Excel lan nay)"
 
 if ($Apply -and $ResumeHourly) {
   Write-Host ""
