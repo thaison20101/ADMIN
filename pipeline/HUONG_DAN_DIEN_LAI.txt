@@ -16,5 +16,5 @@
 # Dry-run truoc:
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_FOLDER.ps1
 #
-# Excel: KHONG xuat lan refill nay — hourly sau moi can report
+# Excel: KHONG xuat lan refill nay - hourly sau moi can report
 # Log: pipeline\work\build\logs\REFILL_*.txt

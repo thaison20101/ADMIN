@@ -266,25 +266,41 @@ def refill_one(
                 all_missing.extend(f"{aid}:{k}" for k in pdf_fields)
             continue
 
-        # APPLY: always insert full payload — never skip as "da_du"
+        # APPLY: always insert full payload — never skip as "da_du".
+        # Set (= Lưu): retry until Get+FormViewer shows ALL PDF fields (blood + urine).
         existing, tokens[aid] = load_cls_view(tokens[aid], pid, reauth=make_reauth(aid))
         miss = _miss_wo_optional_urea(existing)
         all_missing.extend(f"{aid}:{k}" for k in miss)
 
-        ok, msg, _raw, tokens[aid] = insert_cls(
-            tokens[aid], payload, reauth=make_reauth(aid)
-        )
-        time.sleep(0.05)
-        verified, vdetail, tokens[aid] = verify_cls_saved(
-            tokens[aid], pid, payload=payload, reauth=make_reauth(aid)
-        )
-        existing2, tokens[aid] = load_cls_view(tokens[aid], pid, reauth=make_reauth(aid))
-        still = _miss_wo_optional_urea(existing2)
+        still: list[str] = list(pdf_fields)
+        ok, msg, verified, vdetail = False, "", False, ""
+        max_set = 3
+        for attempt in range(max_set):
+            ok, msg, _raw, tokens[aid] = insert_cls(
+                tokens[aid], payload, reauth=make_reauth(aid)
+            )
+            time.sleep(0.12 * (attempt + 1))
+            verified, vdetail, tokens[aid] = verify_cls_saved(
+                tokens[aid], pid, payload=payload, reauth=make_reauth(aid)
+            )
+            existing2, tokens[aid] = load_cls_view(
+                tokens[aid], pid, reauth=make_reauth(aid)
+            )
+            still = _miss_wo_optional_urea(existing2)
+            if not still:
+                break
+            # Partial persist — retry full Set (urine format branches inside insert_cls)
+            notes.append(
+                f"{aid}:retry_set={attempt + 1}/{max_set};con_thieu={still[:8]}"
+            )
+
         filled = [k for k in pdf_fields if k not in still]
         if not pdf_has_urea:
             filled = [k for k in filled if k != "SinhHoaMau_Ure"]
         all_filled.extend(f"{aid}:{k}" for k in filled)
-        notes.append(f"{aid}:ok={ok};ver={verified};miss_truoc={len(miss)};{vdetail}"[:100])
+        notes.append(
+            f"{aid}:ok={ok};ver={verified};miss_truoc={len(miss)};{vdetail}"[:120]
+        )
         if still:
             row["Kết quả"] = "Một phần"
             notes.append(f"{aid}:con_thieu={still[:12]}")
@@ -298,6 +314,7 @@ def refill_one(
             row["Kết quả"] = "Bỏ qua"
             row["Ghi chú"] = (row["Ghi chú"] + ";khong_co_truong_pdf")[:300]
         elif apply:
+            # Only Thành công when every account finished with no remaining miss
             row["Kết quả"] = "Thành công"
         else:
             row["Kết quả"] = "Dry-run"

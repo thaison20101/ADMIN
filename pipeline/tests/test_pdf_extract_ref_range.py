@@ -8,7 +8,13 @@ from pathlib import Path
 PIPE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PIPE))
 
-from pdf_extract import _parse_lab_line, normalize_for_web, parse_labs  # noqa: E402
+from pdf_extract import (  # noqa: E402
+    _parse_lab_line,
+    _unglue_lab_text,
+    _value_from_row_cells,
+    normalize_for_web,
+    parse_labs,
+)
 
 
 def test_mchc_rdw_in_and_out_of_range_layouts():
@@ -28,7 +34,102 @@ def test_mchc_rdw_in_and_out_of_range_layouts():
         assert got is not None, f"miss: {line}"
         assert got[0] == expect, f"{line} -> {got[0]} want {expect}"
         # Must NOT return reference bounds
-        assert got[0] not in {"320", "360", "11.5", "14.5", "80.0", "99.0", "0.0", "0.1", "0.2", "0.8"}
+        assert got[0] not in {
+            "320",
+            "360",
+            "11.5",
+            "14.5",
+            "80.0",
+            "99.0",
+            "0.0",
+            "0.1",
+            "0.2",
+            "0.8",
+        }
+
+
+def test_right_shift_leftover_bounds_and_glued():
+    """Ghi chú layout: leftover bounds without dash, or Name glued to value."""
+    cases = [
+        (r"\bMCV\b", "MCV 80.0 99.0 70.0", "70.0"),
+        (r"\bMCHC\b", "MCHC 320 360 255", "255"),
+        (r"\bMCV\b", "MCV70.0 ( 80.0 - 99.0 ) fL", "70.0"),
+        (r"\bMCHC\b", "MCHC289 ( 320 - 360 ) g/L", "289"),
+        (r"\bMCH(?!C)\b", "MCH17.9 ( 27.0 - 33.0 ) pg", "17.9"),
+        (
+            r"Hemoglobin\s*\(?\s*H(?:GB|b)\s*\)?",
+            "Hemoglobin (Hb)102 ( 115 - 150 ) g/L",
+            "102",
+        ),
+        (r"\bRDW\b", "RDW ( 11.5 - 14.5 ) % 10.8", "10.8"),
+    ]
+    for pat, line, expect in cases:
+        got = _parse_lab_line(_unglue_lab_text(line), pat)
+        assert got is not None, f"miss: {line}"
+        assert got[0] == expect, f"{line} -> {got[0]} want {expect}"
+
+
+def test_table_row_ghi_chu_cell():
+    """Table cells: empty Kết quả, value in Ghi chú column."""
+    row = ["MCV", "", "70.0", "( 80.0 - 99.0 )", "fL"]
+    got = _value_from_row_cells(row)
+    assert got is not None
+    assert got[0] == "70.0"
+    row2 = ["Urobilinogen", "Âm tính", "", "( Âm tính )", ""]
+    got2 = _value_from_row_cells(row2)
+    assert got2 is not None
+    assert "âm" in got2[0].lower() or "am" in got2[0].lower()
+
+
+def test_parse_labs_blood_and_urine_together():
+    text = """
+Họ tên: NGUYEN THI THANH THUY
+Năm sinh: 1985
+Huyết học Công thức máu
+Leukocytes (WBC) 6.2 ( 4.01 - 11.42 ) G/L
+Erythrocytes (RBC) 4.5 ( 4.01 - 5.79 ) T/L
+Hemoglobin (Hb) 120 ( 115 - 150 ) g/L
+MCV ( 80.0 - 99.0 ) fL 70.0
+MCH ( 27.0 - 33.0 ) pg 17.9
+MCHC ( 320 - 360 ) g/L 255
+RDW ( 11.5 - 14.5 ) % 10.8
+Platelets (PLT) 250 ( 146 - 429 ) G/L
+Sinh hóa
+Glucose 5.02 ( 3.9 - 6.4 ) mmol/L
+Creatinine 66.3 ( 62 - 106 ) umol/L
+AST (SGOT) 25.06 ( 0 - 40 ) U/L
+ALT (SGPT) 17.76 ( 0 - 41 ) U/L
+Nước tiểu
+Urobilinogen Âm tính
+Glucose Âm tính
+Ketone Âm tính
+Bilirubin Âm tính
+Protein Âm tính
+Nitrite Âm tính
+pH 6.0
+Máu Âm tính
+Tỉ trọng 1.015
+Bạch cầu Âm tính
+"""
+    labs = parse_labs(text)
+    norm = normalize_for_web(labs)
+    assert (norm.get("MCV") or {}).get("value_web") == "70"
+    assert (norm.get("MCH") or {}).get("value_web") == "17.9"
+    assert (norm.get("MCHC") or {}).get("value_web") == "255"
+    assert (norm.get("RDW") or {}).get("value_web") == "10.8"
+    assert (norm.get("Urobilinogen") or {}).get("value_web") == "Negative"
+    assert (norm.get("Glucose_NT") or {}).get("value_web") == "Negative"
+    assert (norm.get("Ketone") or {}).get("value_web") == "Negative"
+    assert (norm.get("pH_NT") or {}).get("value_web") in {"6", "6.0"}
+    assert str((norm.get("Ti_trong") or {}).get("value_web") or "").startswith("1.01")
+    from medinet_api import labs_to_form_payload
+
+    payload = labs_to_form_payload(norm, phieukham_id=1, gioi_tinh="Nữ")
+    assert payload.get("XNM_MCV") == 70
+    assert payload.get("XNM_MCHC") == 255
+    assert payload.get("NuocTieu_Urobilinogen") == "Negative"
+    assert payload.get("NuocTieu_Duong") == "Negative"
+    assert payload.get("NuocTieu_pH") in {6, 6.0}
 
 
 def test_parse_labs_khoa_like_block():
@@ -137,8 +238,16 @@ def test_ghi_chu_after_ref_all_core_fields():
         (r"\bMCV\b", "MCV ( 80.0 - 99.0 ) fL 70.0", "70.0"),
         (r"\bMCH\b", "MCH ( 27.0 - 33.0 ) pg 17.9", "17.9"),
         (r"\bMCHC\b", "MCHC ( 320 - 360 ) g/L 255", "255"),
-        (r"Erythrocytes\s*\(?\s*RBC\s*\)?", "Erythrocytes (RBC) ( 4.01 - 5.79 ) T/L 6.34", "6.34"),
-        (r"Hemoglobin\s*\(?\s*H(?:GB|b)\s*\)?", "Hemoglobin (Hb) ( 115 - 150 ) g/L 113", "113"),
+        (
+            r"Erythrocytes\s*\(?\s*RBC\s*\)?",
+            "Erythrocytes (RBC) ( 4.01 - 5.79 ) T/L 6.34",
+            "6.34",
+        ),
+        (
+            r"Hemoglobin\s*\(?\s*H(?:GB|b)\s*\)?",
+            "Hemoglobin (Hb) ( 115 - 150 ) g/L 113",
+            "113",
+        ),
         (r"Basophils\s*#", "Basophils # ( 0.0 - 0.1 ) G/L 0.881", "0.881"),
         (r"Monocytes\s*#", "Monocytes # ( 0.2 - 0.8 ) G/L 1.11", "1.11"),
         (r"AST\s*\(?\s*SGOT\s*\)?", "AST (SGOT) ( 0 - 40 ) U/L 25.06", "25.06"),
@@ -151,6 +260,9 @@ def test_ghi_chu_after_ref_all_core_fields():
 
 if __name__ == "__main__":
     test_mchc_rdw_in_and_out_of_range_layouts()
+    test_right_shift_leftover_bounds_and_glued()
+    test_table_row_ghi_chu_cell()
+    test_parse_labs_blood_and_urine_together()
     test_parse_labs_khoa_like_block()
     test_labs_to_form_includes_out_of_range()
     test_parse_labs_quy_out_of_range_block()
