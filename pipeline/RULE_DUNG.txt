@@ -45,6 +45,15 @@ powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DON_G.ps1 -Apply -Resum
 # Quet: PROCESSED->MISSING->UNDER 18->TK1->TK2 | filled_ok>=2 moi PROCESSED
 # INBOX trung ten folder khac -> tam o thu muc goc PKDK_Thuankieu_Pipeline
 
+DIEN LAI CLS (KHONG MOVE) — folder 165 / toan bo
+-----------------------------------------------
+# Tat hourly -> dien du moi ket qua PDF (trong/ngoai khoang) -> bat hourly
+powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_FOLDER.ps1
+powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_FOLDER.ps1 -Apply
+powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_FOLDER.ps1 -ToanBo -Apply -ResumeHourly
+# Mac dinh: folder Binh Tay / Nguyen Duc Canh / 165 CASE
+# Excel: pipeline\work\build\excel_preview\REFILL_*.xlsx
+
 LENH AN TOAN MAY A
 ------------------
 cd C:\Users\thais\ADMIN
