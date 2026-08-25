@@ -70,8 +70,14 @@ VALUE_RE = re.compile(
 )
 _AM_TINH_RE = re.compile(r"âm\s*t[íi]nh|am\s*tinh", re.I)
 # PDF "Khoảng tham chiếu" e.g. ( 80.0 - 99.0 ) / (4.01-11.42)
+# Strip so the TRUE result (in-range OR out-of-range) is never confused with bounds.
+# Khoảng chỉ để bác sĩ xem — KHÔNG dùng để bỏ / skip chỉ số.
 _REF_RANGE_RE = re.compile(
     r"\(\s*[<>]?\d+(?:[.,]\d+)?\s*[-–—]\s*[<>]?\d+(?:[.,]\d+)?\s*\)"
+)
+# Bare "low - high" without parens (some pdfplumber extractions)
+_REF_RANGE_BARE_RE = re.compile(
+    r"(?<![.\d])[<>]?\d+(?:[.,]\d+)?\s*[-–—]\s*[<>]?\d+(?:[.,]\d+)?(?![.\d])"
 )
 _NUM_RE = re.compile(r"[<>]?\d+(?:[.,]\d+)?")
 
@@ -81,8 +87,16 @@ def _norm_num(s: str) -> str:
 
 
 def _strip_ref_ranges(s: str) -> str:
-    """Remove reference intervals so Ghi-chú abnormal values are not mistaken."""
-    return _REF_RANGE_RE.sub(" ", s or "")
+    """Remove reference intervals so the real result number remains.
+
+    Never drop the lab value because it is outside the interval — khoảng tham chiếu
+    is for doctors only. Both in-range and out-of-range results must be kept.
+    """
+    out = _REF_RANGE_RE.sub(" ", s or "")
+    # Bare "low - high" only when a 3rd number (true result) is also on the line
+    if len(list(_NUM_RE.finditer(out))) >= 3:
+        out = _REF_RANGE_BARE_RE.sub(" ", out)
+    return out
 
 
 def _normalize_val_token(val: str) -> str:

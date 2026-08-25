@@ -1314,6 +1314,8 @@ def _run_auto_cycle_inner(
             if cdid not in (None, ""):
                 payload["cdId"] = int(cdid)
             fields_sent = len([k for k in payload if k in LAB_TO_FORM.values()])
+            # Điền đủ mọi trường PDF có (kể cả ngoài khoảng tham chiếu).
+            # Urea chỉ bỏ qua khi đánh giá "đã đủ" — vẫn gửi nếu PDF có.
             has_cls = cls_has_lab_values(existing)
             missing_on_web = cls_missing_lab_fields(existing, payload) if has_cls else []
             missing_wo_urea = [k for k in missing_on_web if k != "SinhHoaMau_Ure"]

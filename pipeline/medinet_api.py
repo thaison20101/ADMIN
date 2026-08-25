@@ -236,6 +236,9 @@ def _lab_candidates(item) -> list:
 def labs_to_form_payload(labs: dict, *, phieukham_id: int | str, gioi_tinh: str = "") -> dict:
     """Build formData for Khám định kỳ CLS. Never maps to DHDL_ (Khám tuyển) fields.
 
+    Rule: mọi kết quả số có trên PDF (trong hay ngoài khoảng tham chiếu) đều phải
+    vào payload nếu có trong LAB_TO_FORM — không bỏ vì \"bất thường\".
+
     Urine TextBox: PDF 'Âm tính' / 'Am tinh' → exact string 'Negative'.
     Nitrit RadioGroup: int id 5120/5119 (never the string Negative).
     """
