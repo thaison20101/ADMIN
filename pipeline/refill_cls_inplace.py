@@ -304,6 +304,13 @@ def refill_one(
         if still:
             row["Kết quả"] = "Một phần"
             notes.append(f"{aid}:con_thieu={still[:12]}")
+        elif not verified:
+            # Get+FormViewer empty / mismatch — never false Thành công
+            row["Kết quả"] = "Một phần"
+            notes.append(f"{aid}:verify_fail:{vdetail}"[:80])
+        elif not ok:
+            row["Kết quả"] = "Một phần"
+            notes.append(f"{aid}:set_fail:{msg}"[:80])
 
     row["Trường trên PDF"] = ", ".join(sorted(set(all_pdf_fields)))[:500]
     row["Thiếu trước"] = ", ".join(sorted(set(all_missing)))[:500]
