@@ -5,7 +5,7 @@
 # Buoc:
 #   1) Tat hourly + xoa lock
 #   2) Diem du moi ket qua PDF (trong/ngoai khoang)
-#   3) Mac dinh: folder Binh Tay 165 case (chi dien)
+#   3) Mac dinh: folder 'first' (uu tien, khong move); fallback Binh Tay 165
 #   4) -ToanBo: quet PROCESSED/TK1/TK2/U18/ERROR/INBOX
 #   5) -ResumeHourly: bat lai hourly
 #
@@ -78,7 +78,7 @@ Write-Host ""
 if ($ToanBo) {
   Write-Host "==== Quet TOAN BO - dien thieu, khong move ===="
 } else {
-  Write-Host "==== Quet folder 165 case Binh Tay - dien, khong move ===="
+  Write-Host "==== Quet folder first (uu tien) / fallback 165 - dien, khong move ===="
 }
 if (-not $Apply) {
   Write-Host "MODE: DRY-RUN - them -Apply de ghi Medinet"

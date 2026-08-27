@@ -280,6 +280,48 @@ Bạch cầu Âm tính ( Âm tính < 15 ) Leu/µL
     assert float(payload.get("NuocTieu_TiTrong")) == 1.015
 
 
+def test_sci_unit_10e_not_picked_as_result():
+    """Regression Thu Ba: 10^9/L → 9, 10^12/L → 12 must never happen."""
+    cases = [
+        (
+            r"Leukocytes\s*\(?\s*WBC\s*\)?",
+            "Leukocytes (WBC) 6.85 ( 4.01 - 11.42 ) 10^9/L",
+            "6.85",
+            "G/L",
+        ),
+        (
+            r"Erythrocytes\s*\(?\s*RBC\s*\)?",
+            "Erythrocytes (RBC) 4.52 ( 4.01 - 5.79 ) 10^12/L",
+            "4.52",
+            "T/L",
+        ),
+        (
+            r"Platelets\s*\(?\s*PLT\s*\)?",
+            "Platelets (PLT) 250 ( 146 - 429 ) 10^9/L",
+            "250",
+            "G/L",
+        ),
+        (
+            r"Neutrophils\s*#",
+            "Neutrophils # 3.85 ( 1.7 - 7.5 ) 10^9/L",
+            "3.85",
+            "G/L",
+        ),
+        (
+            r"Leukocytes\s*\(?\s*WBC\s*\)?",
+            "Leukocytes (WBC) ( 4.01 - 11.42 ) 10^9/L 6.85",
+            "6.85",
+            "G/L",
+        ),
+    ]
+    for pat, line, expect, unit in cases:
+        got = _parse_lab_line(line, pat)
+        assert got is not None, f"miss: {line}"
+        assert got[0] == expect, f"{line} -> {got[0]} want {expect}"
+        assert got[0] not in {"9", "12", "10"}
+        assert got[1] == unit, f"{line} unit {got[1]} want {unit}"
+
+
 if __name__ == "__main__":
     test_mchc_rdw_in_and_out_of_range_layouts()
     test_glued_right_shifted_blood_values()
@@ -290,4 +332,5 @@ if __name__ == "__main__":
     test_parse_labs_quy_out_of_range_block()
     test_ghi_chu_after_ref_all_core_fields()
     test_urine_am_tinh_and_numbers_payload()
+    test_sci_unit_10e_not_picked_as_result()
     print("OK")

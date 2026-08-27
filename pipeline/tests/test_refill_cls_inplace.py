@@ -9,7 +9,22 @@ from pathlib import Path
 PIPE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PIPE))
 
-from refill_cls_inplace import find_priority_folder  # noqa: E402
+from refill_cls_inplace import find_first_folder, find_priority_folder  # noqa: E402
+
+
+def test_find_first_folder_preferred():
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "PROCESSED").mkdir()
+        binh = root / "P. BINH TAY - TRUONG THCS NGUYEN DUC CANH - 13-08-2026 - 165 CASE"
+        binh.mkdir()
+        first = root / "first"
+        first.mkdir()
+        (first / "a.pdf").write_bytes(b"%PDF")
+        assert find_first_folder(root) == first
+        found = find_priority_folder(root)
+        assert found is not None
+        assert found.name.lower() == "first"
 
 
 def test_find_binh_tay_folder():
@@ -35,6 +50,7 @@ def test_find_folder_ascii_fold():
 
 
 if __name__ == "__main__":
+    test_find_first_folder_preferred()
     test_find_binh_tay_folder()
     test_find_folder_ascii_fold()
     print("OK")

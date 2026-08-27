@@ -2,19 +2,20 @@
 # ================================
 #
 # 1) Tat hourly
-# 2) Diem du moi ket qua tren PDF (trong hay ngoai khoang tham chieu — khong bo)
-# 3) Uu tien folder:
-#    P. BINH TAY - TRUONG THCS NGUYEN DUC CANH - NGAY 13-08-2026 - 165 CASE
-#    (chi dien web, khong move — co the xoa folder sau)
+# 2) Diem du moi ket qua tren PDF (trong hay ngoai khoang tham chieu - khong bo)
+# 3) Uu tien folder: first (duoi sync root). Fallback: Binh Tay 165 CASE
 # 4) -ToanBo: dien thieu tren PROCESSED/TK1/TK2/...
 # 5) Bat lai hourly (rule move nhu cu)
 #
-# LENH 1 DONG (folder 165 Apply + toan bo + bat hourly):
+# LENH 1 DONG (first Apply + toan bo + bat hourly):
 #
 #   cd C:\Users\thais\ADMIN; git pull origin cursor/don-g-remediation-df0f; powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_FOLDER.ps1 -Apply; powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_FOLDER.ps1 -ToanBo -Apply -ResumeHourly
 #
 # Dry-run truoc:
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_FOLDER.ps1
 #
+# Audit parse (khong Medinet):
+#   python pipeline\audit_pdf_parse.py
+#
 # Excel: KHONG xuat lan refill nay - hourly sau moi can report
-# Log: pipeline\work\build\logs\REFILL_*.txt
+# Log: pipeline\work\build\logs\REFILL_*.txt / PARSE_AUDIT_*.txt

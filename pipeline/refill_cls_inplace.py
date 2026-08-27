@@ -56,6 +56,9 @@ DEFAULT_FOLDER_HINTS = (
     "165 CASE",
 )
 
+# Exact folder name under sync root — refill this first (no move).
+FIRST_FOLDER_NAMES = ("first", "First", "FIRST")
+
 TOAN_BO_FOLDERS = (
     "PROCESSED",
     "TK1",
@@ -89,8 +92,29 @@ def _fold(s: str) -> str:
     return re.sub(r"\s+", " ", s).upper().strip()
 
 
+def find_first_folder(sync: Path) -> Path | None:
+    """Find sync/<first> (case-insensitive exact name). Prefer this for refill."""
+    if not sync.exists():
+        return None
+    try:
+        children = list(sync.iterdir())
+    except OSError:
+        return None
+    wanted = {n.lower() for n in FIRST_FOLDER_NAMES}
+    for p in children:
+        try:
+            if p.is_dir() and p.name.lower() in wanted:
+                return p
+        except OSError:
+            continue
+    return None
+
+
 def find_priority_folder(sync: Path, hints: tuple[str, ...] = DEFAULT_FOLDER_HINTS) -> Path | None:
-    """Find Bình Tây 165-case folder under sync root (immediate children)."""
+    """Prefer folder `first`, else Bình Tây 165-case under sync root."""
+    first = find_first_folder(sync)
+    if first is not None:
+        return first
     if not sync.exists():
         return None
     best: Path | None = None
@@ -410,7 +434,7 @@ def run_refill(
             found = find_priority_folder(sync)
             if found is None:
                 safe_print(
-                    "ABORT: khong tim thay folder Binh Tay / Nguyen Duc Canh / 165 CASE"
+                    "ABORT: khong tim thay folder 'first' hoac Binh Tay / 165 CASE"
                 )
                 safe_print(f"SYNC={sync}")
                 try:
@@ -421,6 +445,8 @@ def run_refill(
                     pass
                 return {"abort": "folder_not_found"}
             targets.append((found.name, found))
+            if found.name.lower() == "first":
+                safe_print("Uu tien: folder first (khong move)")
 
         mode = "APPLY" if apply else "DRY-RUN"
         safe_print(f"========== DIEN LAI CLS ({mode}) ==========")

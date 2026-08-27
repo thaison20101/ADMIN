@@ -57,7 +57,8 @@ URINE_SPECS = [
     ("Protein_NT", r"(?:Đạm|Protein)"),
     ("Nitrite", r"Nitrite"),
     ("pH_NT", r"\bpH\b"),
-    ("Mau_NT", r"(?:Máu|Hồng cầu)"),
+    # Prefer Hồng cầu; bare Máu only as row start (not "Công thức máu")
+    ("Mau_NT", r"(?:Hồng\s*cầu|(?:^|\n)\s*Máu\b)"),
     ("Ti_trong", r"Tỉ\s*trọng"),
     ("Bach_cau_NT", r"Bạch\s*cầu"),
 ]
@@ -94,10 +95,20 @@ _REF_RANGE_BARE_RE = re.compile(
     r"(?<![.\d])[<>]?\d+(?:[.,]\d+)?\s*[-–—]\s*[<>]?\d+(?:[.,]\d+)?(?![.\d])"
 )
 _NUM_RE = re.compile(r"[<>]?\d+(?:[.,]\d+)?")
+# Unit tokens like 10^9/L / 10^12/L — digits must NOT be picked as lab results
+# (bug: WBC…10^9/L → 9, RBC…10^12/L → 12).
+_SCI_UNIT_RE = re.compile(
+    r"(?i)[×x*]?\s*10\s*\^\s*(?:9|12)\s*(?:/\\?\s*[Ll]|\\[Ll])?"
+)
 
 
 def _norm_num(s: str) -> str:
     return s.replace(",", ".").strip()
+
+
+def _strip_sci_units(s: str) -> str:
+    """Remove 10^9/L / 10^12/L so exponent digits are never chosen as results."""
+    return _SCI_UNIT_RE.sub(" ", s or "")
 
 
 def _strip_ref_ranges(s: str) -> str:
@@ -113,6 +124,14 @@ def _strip_ref_ranges(s: str) -> str:
     if len(list(_NUM_RE.finditer(out))) >= 3:
         out = _REF_RANGE_BARE_RE.sub(" ", out)
     return out
+
+
+def _clean_lab_rest(s: str) -> str:
+    """Strip refs + sci units; collapse whitespace for result picking."""
+    out = _strip_ref_ranges(s)
+    out = _strip_sci_units(out)
+    out = re.sub(r"[()]+", " ", out)
+    return re.sub(r"\s+", " ", out).strip()
 
 
 def _unglue_lab_text(text: str) -> str:
@@ -166,6 +185,11 @@ def _extract_unit(text: str) -> str:
     """Pick a likely unit token from leftover text after the value."""
     if not text:
         return ""
+    # Scientific count units → Medinet SI labels (check before stripping digits)
+    if re.search(r"(?i)10\s*\^\s*12", text):
+        return "T/L"
+    if re.search(r"(?i)10\s*\^\s*9", text):
+        return "G/L"
     # Prefer common lab units
     m = re.search(
         r"(?i)\b(g/L|g/dL|G/L|T/L|fL|pg|mmol/L|mcmol/L|umol/L|µmol/L|%|L/L)\b",
@@ -283,8 +307,8 @@ def classify_sample_kind(header: dict, text: str = "") -> str:
 def _split_sections(text: str) -> tuple[str, str, str]:
     """Return (huyet, sinhhoa, urine).
 
-    Avoid false split on header text like 'Loại mẫu: Máu/Nước tiểu'.
-    Prefer a real urine block (line 'Nước tiểu' then Phân tích / lab rows).
+    Avoid false split on header wrap like 'Loại mẫu: Máu/\\nNước tiểu …'.
+    Real urine section must show urine analytes (Urobilinogen / Ketone / …) nearby.
     """
     urine = ""
     body = text
@@ -292,6 +316,13 @@ def _split_sections(text: str) -> tuple[str, str, str]:
     for m in re.finditer(r"(?m)^(Nước\s*tiểu)\b", text, re.I):
         prefix = text[max(0, m.start() - 12) : m.start()]
         if re.search(r"Máu\s*/\s*$", prefix, re.I):
+            continue
+        after = text[m.start() : m.start() + 900]
+        if not re.search(
+            r"(?i)Urobilinogen|Ketone|Nitrite|Tỉ\s*trọng|Bạch\s*cầu|"
+            r"Hồng\s*cầu|Bilirubin|Phân\s*tích\s*nước\s*tiểu",
+            after,
+        ):
             continue
         m_urine = m
         break
@@ -340,22 +371,21 @@ def _parse_lab_line(line: str, name_pat: str) -> tuple[str, str] | None:
     if qm:
         return _normalize_val_token(qm.group("val")), ""
 
-    # Strip reference ranges, then take the first remaining number (= true result).
+    # Strip reference ranges + 10^N units, then take the true result number.
     # Works for both:
     #   MCV 76.7 ( 80.0 - 99.0 ) fL
     #   MCV ( 80.0 - 99.0 ) fL 76.7   ← value in Ghi chú
     #   MCV65.4 ( 80.0 - 99.0 ) fL    ← glued after unglue / lookahead
-    cleaned = _strip_ref_ranges(rest)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    # Drop stray parens left from partial ref strips
-    cleaned = re.sub(r"[()]+", " ", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    #   WBC 6.85 ( … ) 10^9/L        ← must NOT pick 9 from exponent
+    # Capture unit from raw rest before sci-strip (10^9 → G/L)
+    unit_hint = _extract_unit(rest)
+    cleaned = _clean_lab_rest(rest)
     nm = _pick_result_number(cleaned)
     if nm:
         val = _normalize_val_token(nm.group(0))
         after = cleaned[nm.end() :]
         before = cleaned[: nm.start()]
-        unit = _extract_unit(after) or _extract_unit(before)
+        unit = unit_hint or _extract_unit(after) or _extract_unit(before)
         return val, unit
 
     # No number outside refs → maybe only ref on this line (value on next line)
@@ -387,9 +417,7 @@ def _find_lab_in_text(section: str, pat: str) -> tuple[str, str] | None:
             ):
                 break
             # Skip pure reference-range / unit-only lines
-            nxt_clean = _strip_ref_ranges(nxt)
-            nxt_clean = re.sub(r"[()]+", " ", nxt_clean)
-            nxt_clean = re.sub(r"\s+", " ", nxt_clean).strip()
+            nxt_clean = _clean_lab_rest(nxt)
             if not nxt_clean or re.fullmatch(
                 r"(?i)(?:g/L|g/dL|G/L|T/L|fL|pg|mmol/L|%|L/L|mcmol/L|umol/L|µmol/L)",
                 nxt_clean,
@@ -404,9 +432,10 @@ def _find_lab_in_text(section: str, pat: str) -> tuple[str, str] | None:
                 val = _normalize_val_token(vm.group("val"))
                 unit = (vm.group("unit") or "").strip()
                 return val, unit
+            unit_hint = _extract_unit(nxt)
             nm = _pick_result_number(nxt_clean)
             if nm:
-                return _normalize_val_token(nm.group(0)), _extract_unit(
+                return _normalize_val_token(nm.group(0)), unit_hint or _extract_unit(
                     nxt_clean[nm.end() :]
                 )
     return None
@@ -446,7 +475,7 @@ _TABLE_NAME_PATS: list[tuple[str, re.Pattern[str]]] = [
     ("Protein_NT", re.compile(r"Đạm|Protein", re.I)),
     ("Nitrite", re.compile(r"Nitrite", re.I)),
     ("pH_NT", re.compile(r"\bpH\b", re.I)),
-    ("Mau_NT", re.compile(r"Máu|Hồng\s*cầu", re.I)),
+    ("Mau_NT", re.compile(r"Hồng\s*cầu|(?:^|\n)\s*Máu\b", re.I)),
     ("Ti_trong", re.compile(r"Tỉ\s*trọng", re.I)),
     ("Bach_cau_NT", re.compile(r"Bạch\s*cầu", re.I)),
 ]
@@ -475,14 +504,17 @@ def _value_from_row_cells(cells: list[str]) -> tuple[str, str] | None:
         if qm:
             return _normalize_val_token(qm.group("val")), ""
     blob = " ".join(rest_parts)
-    cleaned = _strip_ref_ranges(blob)
-    cleaned = re.sub(r"[()]+", " ", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    unit_hint = _extract_unit(blob)
+    cleaned = _clean_lab_rest(blob)
     nm = _pick_result_number(cleaned)
     if not nm:
         return None
     val = _normalize_val_token(nm.group(0))
-    unit = _extract_unit(cleaned[nm.end() :]) or _extract_unit(cleaned[: nm.start()])
+    unit = (
+        unit_hint
+        or _extract_unit(cleaned[nm.end() :])
+        or _extract_unit(cleaned[: nm.start()])
+    )
     if not val:
         return None
     return val, unit
@@ -602,6 +634,10 @@ def parse_labs(text: str) -> dict:
     for key, pat in URINE_SPECS:
         got = _find_lab_in_text(urine, pat)
         if got:
+            # Reject calendar years mistaken as Mau_NT (NĂM 2026)
+            if key == "Mau_NT" and re.fullmatch(r"(?:19|20)\d{2}", str(got[0])):
+                got = None
+        if got:
             labs[key] = {"value_raw": got[0], "unit_raw": got[1]}
 
     # Fallbacks when section split misses a line (common for Urobilinogen / Urea)
@@ -630,6 +666,8 @@ def parse_labs(text: str) -> dict:
                 # Prefer qualitative urine; skip bare chem numbers unless in urine block
                 if urine.strip() and not _find_lab_in_text(urine, pat):
                     continue
+            if key == "Mau_NT" and re.fullmatch(r"(?:19|20)\d{2}", str(got[0])):
+                continue
             labs[key] = {"value_raw": got[0], "unit_raw": got[1]}
     return labs
 
