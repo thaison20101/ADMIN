@@ -1,0 +1,39 @@
+# HUONG DAN DON G (1 LAN) — may A
+# =================================
+#
+# TRUOC KHI CHAY:
+#   1) cd C:\Users\thais\ADMIN
+#   2) git pull origin cursor/don-g-remediation-df0f
+#   3) Tam dung Google Drive sync:
+#      Google Drive tray -> Settings -> Pause syncing -> Until I resume
+#   4) Dam bao G:\Drive cua toi\PKDK_Thuankieu_Pipeline da offline
+#
+# 1 LENH DUY NHAT (dry-run truoc, roi Apply + bat hourly):
+#
+#   cd C:\Users\thais\ADMIN; git pull origin cursor/don-g-remediation-df0f; powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DON_G.ps1 -Apply -ResumeHourly
+#
+# Dry-run (khong ghi G:):
+#   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DON_G.ps1
+#
+# QUET 5 FOLDER (bo qua ERROR, INBOX_CLS):
+#   PROCESSED -> MISSING -> UNDER 18 -> TK1 -> TK2
+#
+# RULE:
+#   - 2 TK + FULL + filled_ok>=2 -> PROCESSED
+#   - 2 TK + filled_ok=1 -> TK1 hoac TK2 (TK da co CLS)
+#   - 1 TK + FULL -> TK1/TK2
+#   - Khong TTHC -> MISSING
+#   - Trung ten -> xoa ban thua (1 case / 1 folder)
+#
+# INBOX TRONG LUC DON G:
+#   Co the them PDF vao INBOX_CLS — script DON G khong quet INBOX.
+#   PDF INBOX se duoc hourly xu ly SAU khi bat lai hourly.
+#   Neu INBOX trung ten folder khac -> move tam ra thu muc goc pipeline.
+#
+# EXCEL (tieng Viet co dau):
+#   pipeline\work\build\excel_preview\REMEDIATE_*.xlsx
+#   Sheet: Chi tiet hanh dong
+#
+# SAU KHI XONG:
+#   1) Resume Google Drive sync
+#   2) Hourly tu quet INBOX + MISSING + TK1/TK2 nhu cu
