@@ -7,15 +7,16 @@
 # KHONG: tat hourly, xoa lock, ngat lenh dang chay, move PDF
 # CHI: dien CLS tu PDF trong folder PDF (rule parse/Set moi)
 #
+# Re-run an toan:
+#   - Case web da du -> "Da du" (khong Set lai)
+#   - Case truoc Bo qua (chua TTHC) nay co TTHC -> dien moi
+#
 # LENH 1 DONG:
 #
 #   cd C:\Users\thais\ADMIN; git pull origin cursor/don-g-remediation-df0f; powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_PDF.ps1 -Apply
 #
 # Dry-run:
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_PDF.ps1
-#
-# Tiep sau crash:
-#   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_PDF.ps1 -Apply -Continue
 # ============================================================
 
 param(
@@ -43,7 +44,7 @@ $FolderName = "PDF"
 
 Write-Host "############################################################"
 Write-Host "#  DIEN LAI CLS - CHI folder PDF - KHONG MOVE             #"
-Write-Host "#  KHONG tat hourly / KHONG xoa lock / KHONG ngat lenh    #"
+Write-Host "#  KHONG tat hourly / skip neu web da du / thu lai noTTHC  #"
 Write-Host "############################################################"
 
 if (-not $SkipPull) {
@@ -57,11 +58,12 @@ if ($LASTEXITCODE -ne 0) {
   exit 2
 }
 
-# Lock rieng: khong tranh / xoa lock refill ToanBo hay hourly
+# Lock rieng + skip-filled: khong ngat lenh khac; khong Set lai case da du
 $argsPy = @(
   "-u", ".\pipeline\refill_cls_inplace.py",
   "--folder", $FolderName,
-  "--lock-name", "refill_cls_pdf"
+  "--lock-name", "refill_cls_pdf",
+  "--skip-filled"
 )
 if ($Apply) { $argsPy += "--apply" }
 if ($Continue) { $argsPy += "--resume" }
@@ -70,8 +72,9 @@ if ($Limit -gt 0) { $argsPy += @("--limit", "$Limit") }
 Write-Host ""
 Write-Host "==== Quet CHI folder PDF - dien CLS, khong move ===="
 Write-Host "KHONG goi TAM_NGUNG_HOURLY / KHONG clear locks"
+Write-Host "skip-filled: Da du tren web -> bo qua; Bo qua/no_TTHC -> thu lai"
 if ($Continue) {
-  Write-Host "CONTINUE: skip PDF da checkpoint"
+  Write-Host "CONTINUE: skip PDF checkpoint Thanh cong/Da du"
 }
 if (-not $Apply) {
   Write-Host "MODE: DRY-RUN - them -Apply de ghi Medinet"

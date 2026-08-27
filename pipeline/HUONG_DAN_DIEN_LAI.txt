@@ -1,19 +1,15 @@
 # DIEN LAI CLS TU PDF (khong move)
 # ================================
 #
-# LENH 1 DONG - CHI folder PDF (khong tat hourly / khong ngat lenh dang chay):
+# LENH 1 DONG - CHI folder PDF (khong tat hourly; skip case da du; thu lai no-TTHC):
 #   cd C:\Users\thais\ADMIN; git pull origin cursor/don-g-remediation-df0f; powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_PDF.ps1 -Apply
 #
 # LENH 1 DONG - CHI folder first:
 #   cd C:\Users\thais\ADMIN; git pull origin cursor/don-g-remediation-df0f; powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_FIRST.ps1 -Apply -ResumeHourly
 #
-# LENH TIEP TUC ToanBo SAU CRASH (Exit=-1 / dung giua chung):
-#   cd C:\Users\thais\ADMIN; git pull origin cursor/don-g-remediation-df0f; powershell -ExecutionPolicy Bypass -File .\pipeline\TAM_NGUNG_HOURLY.ps1; powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_FOLDER.ps1 -ToanBo -Apply -Continue -ResumeHourly
-#
-# Luu y:
-# - CHAY_DIEN_LAI_PDF.ps1: KHONG goi TAM_NGUNG, KHONG xoa lock, KHONG move.
-# - Progress in moi 25 case; Exit=-1 = crash (CHUA xong).
-# - -Continue = --resume (bo qua PDF da checkpoint).
+# Luu y PDF folder:
+# - Re-run cung lenh: case web da du = "Da du" (khong Set lai).
+# - Case truoc "Bo qua" (chua TTHC) nay co TTHC = dien moi.
+# - Khong tat hourly / khong xoa lock.
 #
 # Log: pipeline\work\build\logs\REFILL_*.txt
-# Checkpoint PDF: pipeline\work\build\REFILL_CHECKPOINT_PDF.txt
