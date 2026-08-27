@@ -7,12 +7,16 @@
 # 4) -ToanBo: dien thieu tren PROCESSED/TK1/TK2/...
 # 5) Bat lai hourly (rule move nhu cu)
 #
-# LENH 1 DONG (first Apply + toan bo + bat hourly):
+# LENH 1 DONG - CHI folder first (TTHC da day, chay 1 lan):
+#
+#   cd C:\Users\thais\ADMIN; git pull origin cursor/don-g-remediation-df0f; powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_FIRST.ps1 -Apply -ResumeHourly
+#
+# LENH 1 DONG (first + toan bo + bat hourly):
 #
 #   cd C:\Users\thais\ADMIN; git pull origin cursor/don-g-remediation-df0f; powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_FOLDER.ps1 -Apply; powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_FOLDER.ps1 -ToanBo -Apply -ResumeHourly
 #
-# Dry-run truoc:
-#   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_FOLDER.ps1
+# Dry-run first:
+#   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_FIRST.ps1
 #
 # Audit parse (khong Medinet):
 #   python pipeline\audit_pdf_parse.py
