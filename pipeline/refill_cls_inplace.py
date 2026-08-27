@@ -716,6 +716,14 @@ def _write_refill_progress_log(
     ]
     for k, v in counts.most_common():
         lines.append(f"  {k}={v}")
+    skips = [r for r in results if r.get("Kết quả") == "Bỏ qua"]
+    if skips:
+        lines.append("")
+        lines.append(f"bo_qua ({len(skips)}):")
+        for r in skips:
+            lines.append(
+                f"  {r.get('Họ tên') or '?'}|{r.get('Tên file')}|ly_do={r.get('Ghi chú')}"
+            )
     partials = [r for r in results if r.get("Kết quả") == "Một phần"][:20]
     if partials:
         lines.append("")
@@ -732,6 +740,13 @@ def _write_refill_progress_log(
         safe_print(f"Log: {out_log}")
     except OSError as e:
         safe_print(f"Log write failed: {e}")
+    # Always echo skipped names to console
+    if skips:
+        safe_print(f"BO QUA chi tiet ({len(skips)}):")
+        for r in skips:
+            safe_print(
+                f"  - {r.get('Họ tên') or '?'} | {r.get('Tên file')} | {r.get('Ghi chú')}"
+            )
     return out_log
 
 
