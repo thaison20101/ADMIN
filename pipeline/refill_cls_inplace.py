@@ -406,6 +406,7 @@ def run_refill(
     toan_bo: bool = False,
     folder: str = "",
     limit: int = 0,
+    resume: bool = False,
 ) -> dict:
     lock = acquire_lock("refill_cls_inplace")
     if lock is None:
@@ -477,56 +478,168 @@ def run_refill(
 
         results: list[dict] = []
         t0 = time.time()
-        for i, (label, pdf) in enumerate(pdfs, 1):
-            r = refill_one(
-                pdf,
-                folder_label=label,
-                index=index,
-                accounts=accounts,
-                tokens=tokens,
-                apply=apply,
-            )
-            results.append(r)
-            if i == 1 or i % 25 == 0 or i == len(pdfs):
-                safe_print(
-                    f"  [{i}/{len(pdfs)}] {r.get('Họ tên') or pdf.name} "
-                    f"scope={r.get('Phạm vi TTHC')} ketqua={r.get('Kết quả')}"
+        build = local_work_build()
+        build.mkdir(parents=True, exist_ok=True)
+        (build / "logs").mkdir(parents=True, exist_ok=True)
+        tag = "TOANBO" if toan_bo else ("FIRST" if (folder.strip().lower() == "first") else "FOLDER")
+        ck_path = build / f"REFILL_CHECKPOINT_{tag}.txt"
+        done_keys: set[str] = set()
+        if resume and ck_path.exists():
+            try:
+                done_keys = {
+                    ln.strip()
+                    for ln in ck_path.read_text(encoding="utf-8").splitlines()
+                    if ln.strip() and not ln.startswith("#")
+                }
+                safe_print(f"RESUME: skip {len(done_keys)} pdf da xu ly ({ck_path.name})")
+            except OSError as e:
+                safe_print(f"RESUME: khong doc duoc checkpoint: {e}")
+
+        # Fresh run without --resume: start new checkpoint
+        if not resume:
+            try:
+                ck_path.write_text(
+                    f"# refill checkpoint {tag} {datetime.now().isoformat()}\n",
+                    encoding="utf-8",
                 )
+            except OSError:
+                pass
+
+        skipped = 0
+        try:
+            for i, (label, pdf) in enumerate(pdfs, 1):
+                key = str(pdf.resolve()) if pdf.exists() else str(pdf)
+                if resume and key in done_keys:
+                    skipped += 1
+                    if i == 1 or i % 100 == 0 or i == len(pdfs):
+                        safe_print(f"  [{i}/{len(pdfs)}] SKIP (resume) {pdf.name}")
+                    continue
+                try:
+                    r = refill_one(
+                        pdf,
+                        folder_label=label,
+                        index=index,
+                        accounts=accounts,
+                        tokens=tokens,
+                        apply=apply,
+                    )
+                except Exception as e:
+                    r = {
+                        "Tên file": pdf.name,
+                        "Họ tên": "",
+                        "Năm sinh": "",
+                        "Folder nguồn": label,
+                        "Phạm vi TTHC": "",
+                        "Trường trên PDF": "",
+                        "Thiếu trước": "",
+                        "Đã điền": "",
+                        "Kết quả": "Lỗi",
+                        "Ghi chú": f"crash:{e}"[:200],
+                    }
+                    safe_print(f"  [{i}/{len(pdfs)}] CRASH {pdf.name}: {e}")
+                results.append(r)
+                # Checkpoint every finished PDF so crash can --resume
+                try:
+                    with ck_path.open("a", encoding="utf-8") as fh:
+                        fh.write(key + "\n")
+                    done_keys.add(key)
+                except OSError:
+                    pass
+                if i == 1 or i % 25 == 0 or i == len(pdfs):
+                    safe_print(
+                        f"  [{i}/{len(pdfs)}] {r.get('Họ tên') or pdf.name} "
+                        f"scope={r.get('Phạm vi TTHC')} ketqua={r.get('Kết quả')}"
+                    )
+                    try:
+                        sys.stdout.flush()
+                    except Exception:
+                        pass
+        except KeyboardInterrupt:
+            safe_print(
+                f"STOPPED KeyboardInterrupt tai {len(results)} xu ly "
+                f"(skipped_resume={skipped}). Chay lai voi --resume."
+            )
+            _write_refill_progress_log(
+                build, tag, mode, toan_bo, results, t0, skipped, interrupted=True
+            )
+            return {
+                "abort": "interrupted",
+                "total": len(results),
+                "skipped": skipped,
+            }
+        except Exception as e:
+            safe_print(f"STOPPED exception: {e} (xu ly={len(results)}; --resume de tiep)")
+            _write_refill_progress_log(
+                build, tag, mode, toan_bo, results, t0, skipped, interrupted=True
+            )
+            return {"abort": f"crash:{e}", "total": len(results), "skipped": skipped}
 
         # No Excel this run (hourly later). Short console + txt log only.
-        build = local_work_build()
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        tag = "TOANBO" if toan_bo else "FOLDER"
-        out_log = build / "logs" / f"REFILL_{tag}_{stamp}.txt"
+        out_log = _write_refill_progress_log(
+            build, tag, mode, toan_bo, results, t0, skipped, interrupted=False
+        )
         counts = Counter(str(r.get("Kết quả") or "") for r in results)
-        lines = [
-            f"mode={mode}",
-            f"toan_bo={toan_bo}",
-            f"total={len(results)}",
-            f"elapsed_s={time.time() - t0:.0f}",
-            "excel=SKIP",
-            "",
-            "ket_qua:",
-        ]
-        for k, v in counts.most_common():
-            lines.append(f"  {k}={v}")
-        # Sample partial cases for console follow-up
-        partials = [r for r in results if r.get("Kết quả") == "Một phần"][:20]
-        if partials:
-            lines.append("")
-            lines.append("mau_mot_phan:")
-            for r in partials:
-                lines.append(
-                    f"  {r.get('Họ tên')}|{r.get('Tên file')}|thieu={r.get('Thiếu trước')}"
-                )
-        out_log.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        safe_print(f"Log: {out_log}")
         for k, v in counts.most_common():
             safe_print(f"  {k}={v}")
+        if skipped:
+            safe_print(f"  resume_skipped={skipped}")
         safe_print(f"DONE ({mode}) - khong move PDF, khong Excel")
-        return {"ok": True, "log": str(out_log), "total": len(results), "counts": dict(counts)}
+        return {
+            "ok": True,
+            "log": str(out_log),
+            "total": len(results),
+            "skipped": skipped,
+            "counts": dict(counts),
+        }
     finally:
         release_lock(lock)
+
+
+def _write_refill_progress_log(
+    build: Path,
+    tag: str,
+    mode: str,
+    toan_bo: bool,
+    results: list[dict],
+    t0: float,
+    skipped: int,
+    *,
+    interrupted: bool,
+) -> Path:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    suffix = "PARTIAL" if interrupted else tag
+    out_log = build / "logs" / f"REFILL_{suffix}_{stamp}.txt"
+    counts = Counter(str(r.get("Kết quả") or "") for r in results)
+    lines = [
+        f"mode={mode}",
+        f"toan_bo={toan_bo}",
+        f"interrupted={interrupted}",
+        f"total_processed={len(results)}",
+        f"resume_skipped={skipped}",
+        f"elapsed_s={time.time() - t0:.0f}",
+        "excel=SKIP",
+        "",
+        "ket_qua:",
+    ]
+    for k, v in counts.most_common():
+        lines.append(f"  {k}={v}")
+    partials = [r for r in results if r.get("Kết quả") == "Một phần"][:20]
+    if partials:
+        lines.append("")
+        lines.append("mau_mot_phan:")
+        for r in partials:
+            lines.append(
+                f"  {r.get('Họ tên')}|{r.get('Tên file')}|thieu={r.get('Thiếu trước')}"
+            )
+    if interrupted:
+        lines.append("")
+        lines.append("NOTE: chay lai voi --resume de bo qua PDF da checkpoint.")
+    try:
+        out_log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        safe_print(f"Log: {out_log}")
+    except OSError as e:
+        safe_print(f"Log write failed: {e}")
+    return out_log
 
 
 def main() -> int:
@@ -535,14 +648,24 @@ def main() -> int:
     ap.add_argument("--toan-bo", action="store_true", help="Quet PROCESSED/TK1/TK2/...")
     ap.add_argument("--folder", default="", help="Path hoac ten folder duoi sync")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument(
+        "--resume",
+        action="store_true",
+        help="Bo qua PDF da co trong checkpoint (tiep tuc sau crash)",
+    )
     args = ap.parse_args()
     res = run_refill(
         apply=bool(args.apply),
         toan_bo=bool(args.toan_bo),
         folder=str(args.folder or ""),
         limit=int(args.limit or 0),
+        resume=bool(args.resume),
     )
-    return 2 if res.get("abort") else 0
+    if res.get("abort") == "interrupted":
+        return 3
+    if res.get("abort"):
+        return 2
+    return 0
 
 
 if __name__ == "__main__":

@@ -77,14 +77,24 @@ if (-not $Apply) {
 Write-Host ("CMD: python " + ($argsPy -join " "))
 & python @argsPy
 $code = $LASTEXITCODE
+if ($null -eq $code) { $code = -1 }
 
 Write-Host ""
 Write-Host "Log: pipeline\work\build\logs\REFILL_*.txt (khong Excel lan nay)"
 
-if ($Apply -and $ResumeHourly) {
+if ($code -ne 0) {
+  Write-Host ""
+  Write-Host "!!!! Python Exit=$code - CHUA XONG folder first."
+  Write-Host "!!!! Exit=-1 thuong la crash/kill/OOM."
+}
+
+if ($Apply -and $ResumeHourly -and $code -eq 0) {
   Write-Host ""
   Write-Host "==== BAT LAI hourly ===="
   & powershell -ExecutionPolicy Bypass -File ".\pipeline\BAT_LAI_HOURLY.ps1"
+} elseif ($Apply -and $ResumeHourly -and $code -ne 0) {
+  Write-Host ""
+  Write-Host "==== BO QUA bat hourly vi refill Exit=$code ===="
 }
 
 Write-Host ("Exit=$code")

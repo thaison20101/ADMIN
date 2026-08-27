@@ -1,25 +1,17 @@
 # DIEN LAI CLS TU PDF (khong move)
 # ================================
 #
-# 1) Tat hourly
-# 2) Diem du moi ket qua tren PDF (trong hay ngoai khoang tham chieu - khong bo)
-# 3) Uu tien folder: first (duoi sync root). Fallback: Binh Tay 165 CASE
-# 4) -ToanBo: dien thieu tren PROCESSED/TK1/TK2/...
-# 5) Bat lai hourly (rule move nhu cu)
-#
-# LENH 1 DONG - CHI folder first (TTHC da day, chay 1 lan):
-#
+# LENH 1 DONG - CHI folder first:
 #   cd C:\Users\thais\ADMIN; git pull origin cursor/don-g-remediation-df0f; powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_FIRST.ps1 -Apply -ResumeHourly
 #
-# LENH 1 DONG (first + toan bo + bat hourly):
+# LENH TIEP TUC ToanBo SAU CRASH (Exit=-1 / dung giua chung):
+#   cd C:\Users\thais\ADMIN; git pull origin cursor/don-g-remediation-df0f; powershell -ExecutionPolicy Bypass -File .\pipeline\TAM_NGUNG_HOURLY.ps1; powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_FOLDER.ps1 -ToanBo -Apply -Continue -ResumeHourly
 #
-#   cd C:\Users\thais\ADMIN; git pull origin cursor/don-g-remediation-df0f; powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_FOLDER.ps1 -Apply; powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_FOLDER.ps1 -ToanBo -Apply -ResumeHourly
+# Luu y:
+# - Progress in moi 25 case; Exit=-1 = crash (CHUA xong), khong phai da het.
+# - -ResumeHourly chi chay khi python Exit=0.
+# - -Continue = --resume (bo qua PDF da ghi checkpoint).
+# - Lan crash TRUOC khi co checkpoint: phai chay lai ToanBo tu dau (khong -Continue).
 #
-# Dry-run first:
-#   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_DIEN_LAI_FIRST.ps1
-#
-# Audit parse (khong Medinet):
-#   python pipeline\audit_pdf_parse.py
-#
-# Excel: KHONG xuat lan refill nay - hourly sau moi can report
-# Log: pipeline\work\build\logs\REFILL_*.txt / PARSE_AUDIT_*.txt
+# Log: pipeline\work\build\logs\REFILL_*.txt
+# Checkpoint: pipeline\work\build\REFILL_CHECKPOINT_TOANBO.txt

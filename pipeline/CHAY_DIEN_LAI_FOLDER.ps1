@@ -19,6 +19,7 @@ param(
   [switch]$Apply,
   [switch]$ToanBo,
   [switch]$ResumeHourly,
+  [switch]$Continue,
   [switch]$SkipPull,
   [string]$Folder = "",
   [int]$Limit = 0
@@ -69,6 +70,7 @@ if ($LASTEXITCODE -ne 0) {
 $argsPy = @("-u", ".\pipeline\refill_cls_inplace.py")
 if ($Apply) { $argsPy += "--apply" }
 if ($ToanBo) { $argsPy += "--toan-bo" }
+if ($Continue) { $argsPy += "--resume" }
 if ($Folder -and $Folder.Trim().Length -gt 0) {
   $argsPy += @("--folder", $Folder.Trim())
 }
@@ -80,6 +82,9 @@ if ($ToanBo) {
 } else {
   Write-Host "==== Quet folder first (uu tien) / fallback 165 - dien, khong move ===="
 }
+if ($Continue) {
+  Write-Host "CONTINUE: skip PDF da checkpoint (sau crash)"
+}
 if (-not $Apply) {
   Write-Host "MODE: DRY-RUN - them -Apply de ghi Medinet"
 } else {
@@ -89,14 +94,27 @@ if (-not $Apply) {
 Write-Host ("CMD: python " + ($argsPy -join " "))
 & python @argsPy
 $code = $LASTEXITCODE
+if ($null -eq $code) { $code = -1 }
 
 Write-Host ""
 Write-Host "Log: pipeline\work\build\logs\REFILL_*.txt (khong Excel lan nay)"
 
-if ($Apply -and $ResumeHourly) {
+if ($code -ne 0) {
+  Write-Host ""
+  Write-Host "!!!! Python Exit=$code - CHUA XONG. Khong coi la hoan tat."
+  Write-Host "!!!! Neu dung giua chung: chay lai voi -Continue -ToanBo -Apply"
+  Write-Host "!!!! Exit=-1 thuong la crash/kill/OOM (khong phai da xong 100%)."
+}
+
+# Chi bat lai hourly khi refill THANH CONG (exit 0)
+if ($Apply -and $ResumeHourly -and $code -eq 0) {
   Write-Host ""
   Write-Host "==== 5) BAT LAI hourly - dien du + move nhu cu ===="
   & powershell -ExecutionPolicy Bypass -File ".\pipeline\BAT_LAI_HOURLY.ps1"
+} elseif ($Apply -and $ResumeHourly -and $code -ne 0) {
+  Write-Host ""
+  Write-Host "==== BO QUA bat hourly vi refill Exit=$code ===="
+  Write-Host "Hourly van dang TAT. Sua xong / -Continue xong moi -ResumeHourly."
 }
 
 Write-Host ("Exit=$code")
