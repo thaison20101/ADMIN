@@ -169,6 +169,7 @@ def refill_one(
     accounts: list[dict],
     tokens: dict[str, str],
     apply: bool,
+    skip_filled: bool = False,
 ) -> dict[str, Any]:
     row: dict[str, Any] = {
         "Tên file": pdf.name,
@@ -290,11 +291,16 @@ def refill_one(
                 all_missing.extend(f"{aid}:{k}" for k in pdf_fields)
             continue
 
-        # APPLY: always insert full payload — never skip as "da_du".
-        # Set (= Lưu): retry until Get+FormViewer shows ALL PDF fields (blood + urine).
+        # APPLY
         existing, tokens[aid] = load_cls_view(tokens[aid], pid, reauth=make_reauth(aid))
         miss = _miss_wo_optional_urea(existing)
         all_missing.extend(f"{aid}:{k}" for k in miss)
+
+        # skip_filled: web already has every PDF field → do not Set again
+        if skip_filled and pdf_fields and not miss:
+            all_filled.extend(f"{aid}:{k}" for k in pdf_fields)
+            notes.append(f"{aid}:da_du_skip")
+            continue
 
         still: list[str] = list(pdf_fields)
         ok, msg, verified, vdetail = False, "", False, ""
@@ -344,8 +350,10 @@ def refill_one(
         if not all_pdf_fields:
             row["Kết quả"] = "Bỏ qua"
             row["Ghi chú"] = (row["Ghi chú"] + ";khong_co_truong_pdf")[:300]
+        elif apply and skip_filled and all_pdf_fields and not all_missing:
+            # Had TTHC + web already complete — skipped Set
+            row["Kết quả"] = "Đã đủ"
         elif apply:
-            # Only Thành công when every account finished with no remaining miss
             row["Kết quả"] = "Thành công"
         else:
             row["Kết quả"] = "Dry-run"
@@ -408,6 +416,7 @@ def run_refill(
     limit: int = 0,
     resume: bool = False,
     lock_name: str = "refill_cls_inplace",
+    skip_filled: bool = False,
 ) -> dict:
     lock = acquire_lock(lock_name or "refill_cls_inplace")
     if lock is None:
@@ -454,6 +463,8 @@ def run_refill(
         safe_print(f"========== DIEN LAI CLS ({mode}) ==========")
         safe_print(f"SYNC: {sync}")
         safe_print("Rule: FULL PDF fields -> web (trong/ngoai khoang), KHONG MOVE, KHONG Excel")
+        if skip_filled:
+            safe_print("skip_filled=ON: web da du -> bo qua Set; Bo qua/no_TTHC se thu lai")
 
         pdfs: list[tuple[str, Path]] = []
         for label, d in targets:
@@ -492,15 +503,25 @@ def run_refill(
             )
         )
         ck_path = build / f"REFILL_CHECKPOINT_{tag}.txt"
-        done_keys: set[str] = set()
+        # Only skip these on --resume (NOT "Bỏ qua" — those must retry when TTHC appears)
+        _OK_STATUSES = {"Thành công", "Đã đủ"}
+        done_ok: set[str] = set()
         if resume and ck_path.exists():
             try:
-                done_keys = {
-                    ln.strip()
-                    for ln in ck_path.read_text(encoding="utf-8").splitlines()
-                    if ln.strip() and not ln.startswith("#")
-                }
-                safe_print(f"RESUME: skip {len(done_keys)} pdf da xu ly ({ck_path.name})")
+                for ln in ck_path.read_text(encoding="utf-8").splitlines():
+                    ln = ln.strip()
+                    if not ln or ln.startswith("#"):
+                        continue
+                    if "\t" in ln:
+                        path_s, st = ln.split("\t", 1)
+                        if st.strip() in _OK_STATUSES:
+                            done_ok.add(path_s.strip())
+                    else:
+                        # Legacy bare path = treated as OK (crash-continue)
+                        done_ok.add(ln)
+                safe_print(
+                    f"RESUME: skip {len(done_ok)} pdf da Thanh cong/Da du ({ck_path.name})"
+                )
             except OSError as e:
                 safe_print(f"RESUME: khong doc duoc checkpoint: {e}")
 
@@ -508,7 +529,8 @@ def run_refill(
         if not resume:
             try:
                 ck_path.write_text(
-                    f"# refill checkpoint {tag} {datetime.now().isoformat()}\n",
+                    f"# refill checkpoint {tag} {datetime.now().isoformat()}\n"
+                    f"# format: path<TAB>status  (chi Thanh cong/Da du de --resume)\n",
                     encoding="utf-8",
                 )
             except OSError:
@@ -518,10 +540,10 @@ def run_refill(
         try:
             for i, (label, pdf) in enumerate(pdfs, 1):
                 key = str(pdf.resolve()) if pdf.exists() else str(pdf)
-                if resume and key in done_keys:
+                if resume and key in done_ok:
                     skipped += 1
                     if i == 1 or i % 100 == 0 or i == len(pdfs):
-                        safe_print(f"  [{i}/{len(pdfs)}] SKIP (resume) {pdf.name}")
+                        safe_print(f"  [{i}/{len(pdfs)}] SKIP (resume OK) {pdf.name}")
                     continue
                 try:
                     r = refill_one(
@@ -531,6 +553,7 @@ def run_refill(
                         accounts=accounts,
                         tokens=tokens,
                         apply=apply,
+                        skip_filled=skip_filled,
                     )
                 except Exception as e:
                     r = {
@@ -547,17 +570,19 @@ def run_refill(
                     }
                     safe_print(f"  [{i}/{len(pdfs)}] CRASH {pdf.name}: {e}")
                 results.append(r)
-                # Checkpoint every finished PDF so crash can --resume
-                try:
-                    with ck_path.open("a", encoding="utf-8") as fh:
-                        fh.write(key + "\n")
-                    done_keys.add(key)
-                except OSError:
-                    pass
+                ket = str(r.get("Kết quả") or "")
+                # Checkpoint only OK — "Bỏ qua" (no TTHC) must be retryable next run
+                if ket in _OK_STATUSES:
+                    try:
+                        with ck_path.open("a", encoding="utf-8") as fh:
+                            fh.write(f"{key}\t{ket}\n")
+                        done_ok.add(key)
+                    except OSError:
+                        pass
                 if i == 1 or i % 25 == 0 or i == len(pdfs):
                     safe_print(
                         f"  [{i}/{len(pdfs)}] {r.get('Họ tên') or pdf.name} "
-                        f"scope={r.get('Phạm vi TTHC')} ketqua={r.get('Kết quả')}"
+                        f"scope={r.get('Phạm vi TTHC')} ketqua={ket}"
                     )
                     try:
                         sys.stdout.flush()
@@ -667,6 +692,11 @@ def main() -> int:
         default="refill_cls_inplace",
         help="Ten lock rieng (vd refill_cls_pdf) de khong ngat refill khac",
     )
+    ap.add_argument(
+        "--skip-filled",
+        action="store_true",
+        help="Web da du field PDF -> bo qua Set; case Bo qua/no_TTHC van thu lai",
+    )
     args = ap.parse_args()
     res = run_refill(
         apply=bool(args.apply),
@@ -675,6 +705,7 @@ def main() -> int:
         limit=int(args.limit or 0),
         resume=bool(args.resume),
         lock_name=str(args.lock_name or "refill_cls_inplace"),
+        skip_filled=bool(args.skip_filled),
     )
     if res.get("abort") == "interrupted":
         return 3
