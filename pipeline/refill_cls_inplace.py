@@ -407,10 +407,11 @@ def run_refill(
     folder: str = "",
     limit: int = 0,
     resume: bool = False,
+    lock_name: str = "refill_cls_inplace",
 ) -> dict:
-    lock = acquire_lock("refill_cls_inplace")
+    lock = acquire_lock(lock_name or "refill_cls_inplace")
     if lock is None:
-        safe_print("ABORT: refill dang chay (lock).")
+        safe_print(f"ABORT: refill dang chay (lock={lock_name or 'refill_cls_inplace'}).")
         return {"abort": "locked"}
     try:
         if sys.platform.startswith("win") and g_pipeline_live() is None:
@@ -481,7 +482,15 @@ def run_refill(
         build = local_work_build()
         build.mkdir(parents=True, exist_ok=True)
         (build / "logs").mkdir(parents=True, exist_ok=True)
-        tag = "TOANBO" if toan_bo else ("FIRST" if (folder.strip().lower() == "first") else "FOLDER")
+        tag = "TOANBO" if toan_bo else (
+            "FIRST"
+            if folder.strip().lower() == "first"
+            else (
+                "PDF"
+                if folder.strip().lower() == "pdf"
+                else "FOLDER"
+            )
+        )
         ck_path = build / f"REFILL_CHECKPOINT_{tag}.txt"
         done_keys: set[str] = set()
         if resume and ck_path.exists():
@@ -653,6 +662,11 @@ def main() -> int:
         action="store_true",
         help="Bo qua PDF da co trong checkpoint (tiep tuc sau crash)",
     )
+    ap.add_argument(
+        "--lock-name",
+        default="refill_cls_inplace",
+        help="Ten lock rieng (vd refill_cls_pdf) de khong ngat refill khac",
+    )
     args = ap.parse_args()
     res = run_refill(
         apply=bool(args.apply),
@@ -660,6 +674,7 @@ def main() -> int:
         folder=str(args.folder or ""),
         limit=int(args.limit or 0),
         resume=bool(args.resume),
+        lock_name=str(args.lock_name or "refill_cls_inplace"),
     )
     if res.get("abort") == "interrupted":
         return 3
