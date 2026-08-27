@@ -417,6 +417,7 @@ def run_refill(
     resume: bool = False,
     lock_name: str = "refill_cls_inplace",
     skip_filled: bool = False,
+    refresh_index: bool = False,
 ) -> dict:
     lock = acquire_lock(lock_name or "refill_cls_inplace")
     if lock is None:

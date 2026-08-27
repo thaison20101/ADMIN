@@ -58,12 +58,14 @@ if ($LASTEXITCODE -ne 0) {
   exit 2
 }
 
-# Lock rieng + skip-filled: khong ngat lenh khac; khong Set lai case da du
+# Lock rieng + skip-filled + refresh TTHC: khong ngat lenh khac;
+# khong Set lai case da du; fetch index moi de thay TTHC vua nhap
 $argsPy = @(
   "-u", ".\pipeline\refill_cls_inplace.py",
   "--folder", $FolderName,
   "--lock-name", "refill_cls_pdf",
-  "--skip-filled"
+  "--skip-filled",
+  "--refresh-index"
 )
 if ($Apply) { $argsPy += "--apply" }
 if ($Continue) { $argsPy += "--resume" }
@@ -73,6 +75,7 @@ Write-Host ""
 Write-Host "==== Quet CHI folder PDF - dien CLS, khong move ===="
 Write-Host "KHONG goi TAM_NGUNG_HOURLY / KHONG clear locks"
 Write-Host "skip-filled: Da du tren web -> bo qua; Bo qua/no_TTHC -> thu lai"
+Write-Host "refresh-index: fetch TTHC moi (khong dung cache cu)"
 if ($Continue) {
   Write-Host "CONTINUE: skip PDF checkpoint Thanh cong/Da du"
 }
