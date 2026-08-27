@@ -76,6 +76,7 @@ Write-Host "==== Quet CHI folder PDF - dien CLS, khong move ===="
 Write-Host "KHONG goi TAM_NGUNG_HOURLY / KHONG clear locks"
 Write-Host "skip-filled: Da du tren web -> bo qua; Bo qua/no_TTHC -> thu lai"
 Write-Host "refresh-index: fetch TTHC moi (khong dung cache cu)"
+Write-Host "skip-name: TRAN DUY NHAT (mac dinh)"
 if ($Continue) {
   Write-Host "CONTINUE: skip PDF checkpoint Thanh cong/Da du"
 }

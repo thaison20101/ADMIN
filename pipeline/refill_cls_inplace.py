@@ -49,6 +49,10 @@ from tthc_match import ACCOUNT_TK1, ACCOUNT_TK2, resolve_tthc_matches  # noqa: E
 from openpyxl import Workbook  # noqa: E402
 from openpyxl.styles import Font  # noqa: E402
 
+# Names to never fill (manual exclude). Fold-matched against PDF ho_ten / filename.
+DEFAULT_SKIP_NAMES = (
+    "TRAN DUY NHAT",
+)
 DEFAULT_FOLDER_HINTS = (
     "BINH TAY",
     "NGUYEN DUC CANH",
@@ -139,6 +143,22 @@ def find_priority_folder(sync: Path, hints: tuple[str, ...] = DEFAULT_FOLDER_HIN
     return None
 
 
+def _name_is_skipped(ho_ten: str, file_name: str, skip_folds: set[str]) -> bool:
+    if not skip_folds:
+        return False
+    for cand in (ho_ten, file_name):
+        f = _fold(cand)
+        if not f:
+            continue
+        if f in skip_folds:
+            return True
+        # filename often: "... - TRAN DUY NHAT - 1990 - M.pdf"
+        for sk in skip_folds:
+            if sk and sk in f:
+                return True
+    return False
+
+
 def list_pdfs_rglob(folder: Path) -> list[Path]:
     if not folder.exists():
         return []
@@ -170,6 +190,7 @@ def refill_one(
     tokens: dict[str, str],
     apply: bool,
     skip_filled: bool = False,
+    skip_folds: set[str] | None = None,
 ) -> dict[str, Any]:
     row: dict[str, Any] = {
         "Tên file": pdf.name,
@@ -206,6 +227,11 @@ def refill_one(
         data["nam_sinh"] = year
     row["Họ tên"] = str(data.get("ho_ten") or "")
     row["Năm sinh"] = str(data.get("nam_sinh") or "")
+
+    if skip_folds and _name_is_skipped(row["Họ tên"], pdf.name, skip_folds):
+        row["Kết quả"] = "Bỏ qua"
+        row["Ghi chú"] = "skip_name"
+        return row
 
     if not data.get("parse_ok"):
         row["Kết quả"] = "Lỗi"
@@ -418,6 +444,7 @@ def run_refill(
     lock_name: str = "refill_cls_inplace",
     skip_filled: bool = False,
     refresh_index: bool = False,
+    skip_names: list[str] | None = None,
 ) -> dict:
     lock = acquire_lock(lock_name or "refill_cls_inplace")
     if lock is None:
@@ -467,6 +494,14 @@ def run_refill(
         if skip_filled:
             safe_print("skip_filled=ON: web da du -> bo qua Set; Bo qua/no_TTHC se thu lai")
 
+        skip_folds = {_fold(n) for n in DEFAULT_SKIP_NAMES}
+        for n in skip_names or []:
+            f = _fold(n)
+            if f:
+                skip_folds.add(f)
+        if skip_folds:
+            safe_print(f"skip_names: {sorted(skip_folds)}")
+
         pdfs: list[tuple[str, Path]] = []
         for label, d in targets:
             found_pdfs = list_pdfs_rglob(d)
@@ -485,8 +520,12 @@ def run_refill(
         date_from = (cfg.get("medinet") or {}).get("date_from") or "01/07/2026"
         date_to = ((cfg.get("medinet") or {}).get("date_to") or "").strip() or _today_dmy()
         cache_dir = ROOT / "pipeline" / "work" / "index_cache"
+        # refresh_index=0h: bat buoc fetch lai TTHC (case moi nhap sau lan chay truoc)
+        idx_age = 0.0 if refresh_index else 3.0
+        if refresh_index:
+            safe_print("refresh_index=ON: fetch TTHC moi (khong dung cache 3h)")
         index = load_or_fetch_merged_unit_index(
-            accounts, date_from, date_to, cache_dir=cache_dir, max_age_hours=3.0
+            accounts, date_from, date_to, cache_dir=cache_dir, max_age_hours=idx_age
         )
 
         results: list[dict] = []
@@ -546,6 +585,24 @@ def run_refill(
                     if i == 1 or i % 100 == 0 or i == len(pdfs):
                         safe_print(f"  [{i}/{len(pdfs)}] SKIP (resume OK) {pdf.name}")
                     continue
+                # Quick name skip from filename before parse (Trần Duy Nhất, …)
+                if _name_is_skipped("", pdf.name, skip_folds):
+                    r = {
+                        "Tên file": pdf.name,
+                        "Họ tên": "",
+                        "Năm sinh": "",
+                        "Folder nguồn": label,
+                        "Phạm vi TTHC": "Không có",
+                        "Trường trên PDF": "",
+                        "Thiếu trước": "",
+                        "Đã điền": "",
+                        "Kết quả": "Bỏ qua",
+                        "Ghi chú": "skip_name",
+                    }
+                    results.append(r)
+                    if i == 1 or i % 25 == 0 or i == len(pdfs):
+                        safe_print(f"  [{i}/{len(pdfs)}] SKIP name {pdf.name}")
+                    continue
                 try:
                     r = refill_one(
                         pdf,
@@ -555,6 +612,7 @@ def run_refill(
                         tokens=tokens,
                         apply=apply,
                         skip_filled=skip_filled,
+                        skip_folds=skip_folds,
                     )
                 except Exception as e:
                     r = {
@@ -698,7 +756,19 @@ def main() -> int:
         action="store_true",
         help="Web da du field PDF -> bo qua Set; case Bo qua/no_TTHC van thu lai",
     )
+    ap.add_argument(
+        "--refresh-index",
+        action="store_true",
+        help="Fetch TTHC moi (khong dung cache 3h) — can khi vua nhap them benh nhan",
+    )
+    ap.add_argument(
+        "--skip-name",
+        action="append",
+        default=[],
+        help="Bo qua ten (co the lap lai). Mac dinh luon skip TRAN DUY NHAT",
+    )
     args = ap.parse_args()
+    extra_skips = [str(x) for x in (args.skip_name or []) if str(x).strip()]
     res = run_refill(
         apply=bool(args.apply),
         toan_bo=bool(args.toan_bo),
@@ -707,6 +777,8 @@ def main() -> int:
         resume=bool(args.resume),
         lock_name=str(args.lock_name or "refill_cls_inplace"),
         skip_filled=bool(args.skip_filled),
+        refresh_index=bool(args.refresh_index),
+        skip_names=extra_skips or None,
     )
     if res.get("abort") == "interrupted":
         return 3
