@@ -586,6 +586,47 @@ if __name__ == "__main__":
 
     test_tthc_dual_account_pick()
 
+    def test_year_unique_soft_overrides_params_conflict():
+        """Regression: TRƯƠNG QUANG CHƯƠNG — PDF CCCD/phone/DOB typo vs TTHC."""
+        from pipeline.phase_b_preview import _fold_name
+        from pipeline.tthc_match import resolve_tthc_matches
+
+        fold = _fold_name("TRƯƠNG QUANG CHƯƠNG")
+        rec = {
+            "HoTen": "TRƯƠNG QUANG CHƯƠNG",
+            "NgaySinh": "18/09/1999",
+            "CCCD": "079099001722",
+            "SDT": "0901111111",
+            "Id": 480710,
+            "phieukhamId": 480710,
+            "MaPhieu": "KSKDKP260892048",
+            "NgayKham": "23/08/2026",
+            "_medinet_account": "pkdkthuankieu",
+        }
+        idx = {"by_fold_year": {f"{fold}|1999": [rec]}, "by_name_year": {}}
+        base = {
+            "ho_ten": "TRƯƠNG QUANG CHƯƠNG",
+            "nam_sinh": "1999",
+            "file_name": "220826-480710 - TRUONG QUANG CHUONG - 1999 - M.pdf",
+        }
+        r_cccd = resolve_tthc_matches({**base, "cccd": "079099001799"}, idx)
+        assert r_cccd.status == "READY_IMPORT", r_cccd
+        assert r_cccd.mode == "year_unique_soft", r_cccd.mode
+        r_dob = resolve_tthc_matches({**base, "ngay_sinh": "01/01/1999"}, idx)
+        assert r_dob.status == "READY_IMPORT" and r_dob.mode == "year_unique_soft"
+        r_year = resolve_tthc_matches(
+            {
+                **base,
+                "nam_sinh": "1998",
+                "file_name": "220826-480710 - TRUONG QUANG CHUONG - 1998 - M.pdf",
+            },
+            idx,
+        )
+        assert r_year.status == "WAITING_ADMIN"
+        assert str(r_year.mode).startswith("params_conflict")
+
+    test_year_unique_soft_overrides_params_conflict()
+
     def test_classify_sample_other():
         from pipeline.pdf_extract import classify_sample_kind
 

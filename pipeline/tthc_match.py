@@ -154,6 +154,59 @@ def _params_compatible(rec: dict, row: dict) -> bool:
     return True
 
 
+def _params_conflict_reasons(rec: dict, row: dict) -> list[str]:
+    """Human-readable why _params_compatible failed (for logs)."""
+    reasons: list[str] = []
+    pdf_year = str(row.get("nam_sinh") or "").strip()
+    rec_y = _year_from_ngaysinh(rec.get("NgaySinh"))
+    ph = normalize_phone_digits(str(row.get("sdt") or ""))
+    rph = rec_phone_digits(rec)
+    cc = pdf_cccd_digits(row)
+    rcc = rec_cccd_digits(rec)
+    pdf_dob = str(row.get("ngay_sinh") or "").strip()
+    if ph and rph and rph != ph:
+        reasons.append(f"phone pdf={ph} tthc={rph}")
+    if cc and rcc and rcc != cc:
+        reasons.append(f"cccd pdf={cc} tthc={rcc}")
+    if pdf_dob:
+        rd = _parse_any_date(rec.get("NgaySinh"))
+        pd = _parse_any_date(pdf_dob)
+        if rd and pd and rd != pd:
+            reasons.append(f"dob pdf={pd.isoformat()} tthc={rd.isoformat()}")
+    if pdf_year and rec_y and rec_y != pdf_year:
+        reasons.append(f"year pdf={pdf_year} tthc={rec_y}")
+    return reasons or ["unknown"]
+
+
+def _unique_person_groups(recs: list[dict]) -> list[list[dict]]:
+    """Group dual-account copies of the same person (CCCD / DOB / year)."""
+    groups: list[list[dict]] = []
+    for rec in recs:
+        cc = rec_cccd_digits(rec)
+        dob = _parse_any_date(rec.get("NgaySinh"))
+        y = _year_from_ngaysinh(rec.get("NgaySinh"))
+        placed = False
+        for g in groups:
+            g0 = g[0]
+            g_cc = rec_cccd_digits(g0)
+            g_dob = _parse_any_date(g0.get("NgaySinh"))
+            g_y = _year_from_ngaysinh(g0.get("NgaySinh"))
+            same = False
+            if cc and g_cc and cc == g_cc:
+                same = True
+            elif dob and g_dob and dob == g_dob:
+                same = True
+            elif y and g_y and y == g_y and not cc and not g_cc:
+                same = True
+            if same:
+                g.append(rec)
+                placed = True
+                break
+        if not placed:
+            groups.append([rec])
+    return groups
+
+
 def resolve_tthc_matches(
     row: dict,
     index: dict,
@@ -181,13 +234,38 @@ def resolve_tthc_matches(
             pool = candidates
             mode = "unique_name_no_params"
         else:
-            return TTHCMatchResult("AMBIGUOUS_NAME", [], f"dup_name_{len(candidates)}")
+            # Dual-account same person OK
+            groups = _unique_person_groups(candidates)
+            if len(groups) == 1:
+                pool = groups[0]
+                mode = "unique_person_no_params"
+            else:
+                return TTHCMatchResult("AMBIGUOUS_NAME", [], f"dup_name_{len(candidates)}")
     else:
         pool = [c for c in candidates if _params_compatible(c, work)]
         if not pool:
-            return TTHCMatchResult("WAITING_ADMIN", [], "params_conflict")
+            # Soft fallback: exact name + birth year unique person.
+            # PDF phone/CCCD/DOB typos must not block CLS fill onto the right TTHC
+            # (e.g. TRƯƠNG QUANG CHƯƠNG 1999 — CCCD/phone on PDF ≠ form but year matches).
+            pdf_year = str(work.get("nam_sinh") or "").strip()
+            year_pool = [
+                c
+                for c in candidates
+                if pdf_year and _year_from_ngaysinh(c.get("NgaySinh")) == pdf_year
+            ]
+            groups = _unique_person_groups(year_pool) if year_pool else []
+            if len(groups) == 1:
+                pool = groups[0]
+                mode = "year_unique_soft"
+            else:
+                why = _params_conflict_reasons(candidates[0], work)
+                return TTHCMatchResult(
+                    "WAITING_ADMIN",
+                    [],
+                    f"params_conflict:{';'.join(why)}",
+                )
         if len(pool) == 1:
-            mode = "params_unique"
+            mode = mode or "params_unique"
         else:
             scored = sorted(pool, key=lambda r: score_tthc_candidate(r, work), reverse=True)
             top = score_tthc_candidate(scored[0], work)
@@ -224,10 +302,10 @@ def resolve_tthc_matches(
                             "AMBIGUOUS_NAME", [], f"tied_{len(tied)}"
                         )
                     pool = tied
-                    mode = "params_tied_multi_acct"
+                    mode = mode or "params_tied_multi_acct"
             else:
                 pool = [scored[0]]
-                mode = "params_top_score"
+                mode = mode or "params_top_score"
 
     allowed = {a["id"] for a in accounts} if accounts else None
     by_acct: dict[str, tuple[int, dict]] = {}

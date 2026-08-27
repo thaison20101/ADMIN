@@ -1171,11 +1171,12 @@ def _run_auto_cycle_inner(
 
         # ---- Single match path: resolve_tthc_matches (2 TK) ----
         tthc = resolve_tthc_matches(data, index, accounts=accounts)
-        if tthc.status == "WAITING_ADMIN" and tthc.mode in {
-            "no_name_in_index",
-            "params_conflict",
-            "no_account_match",
-        }:
+        mode0 = str(tthc.mode or "")
+        if tthc.status == "WAITING_ADMIN" and (
+            mode0 in {"no_name_in_index", "no_account_match"}
+            or mode0 == "params_conflict"
+            or mode0.startswith("params_conflict:")
+        ):
             # Live search both accounts then re-resolve on a synthetic mini index
             live_name = str(data.get("ho_ten") or row.get("ho_ten") or "")
             live_year = str(data.get("nam_sinh") or resolved_year or "")
