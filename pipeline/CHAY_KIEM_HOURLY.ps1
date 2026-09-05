@@ -118,6 +118,7 @@ Get-ChildItem -Path $logDirs -Filter "hourly*.log" -ErrorAction SilentlyContinue
 
 Write-Host ""
 Write-Host "==== GOI Y KHOI PHUC (neu nhay roi tat nhieu ngay) ===="
+Write-Host "  0) abort=cases_csv_encoding -> python .\pipeline\repair_cases_encoding.py"
 Write-Host "  1) Mo Google Drive Desktop, doi assert_g_pipeline.py = 0"
 Write-Host "  2) Stop-Process python -Force  (neu khong co tong hop dang chay)"
 Write-Host "  3) Remove-Item .\pipeline\work\locks\*.lock -Force"

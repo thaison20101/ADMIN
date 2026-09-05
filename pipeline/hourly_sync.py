@@ -78,11 +78,14 @@ def ensure_cases_csv(path: Path) -> None:
 
 def read_cases(path: Path) -> list[dict]:
     ensure_cases_csv(path)
-    with path.open(encoding="utf-8", newline="") as f:
+    from csv_io import open_csv_read
+
+    with open_csv_read(path, newline="") as f:
         return list(csv.DictReader(f))
 
 
 def write_cases(path: Path, rows: list[dict]) -> None:
+    """Rewrite ledger as clean UTF-8 (heals mixed-encoding corruption)."""
     ensure_cases_csv(path)
     fieldnames = [
         "case_key",
@@ -258,4 +261,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except UnicodeDecodeError as e:
+        safe_print(f"FATAL encoding: {e}")
+        safe_print("Fix: python pipeline/repair_cases_encoding.py")
+        raise SystemExit(1)

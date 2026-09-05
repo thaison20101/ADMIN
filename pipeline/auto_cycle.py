@@ -438,6 +438,10 @@ def run_auto_cycle(
     lock = acquire_lock(lock_name, stale_hours=2.5)
     if lock is None:
         safe_print(f"ABORT: da co bot {role} khac dang chay (locks/{lock_name}.lock).")
+        safe_print(
+            "Fix: Stop-Process python -Force; "
+            "Remove-Item .\\pipeline\\work\\locks\\*.lock -Force"
+        )
         if role == "all":
             safe_print("Chi 1 cua so! Dong bot thu 2 (ghi de cases.csv, DELTA=0 / sai so).")
         return {"abort": "another_instance_running", "bot_role": role}

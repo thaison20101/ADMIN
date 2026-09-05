@@ -54,6 +54,12 @@ def acquire_lock(name: str = "auto_cycle", *, stale_hours: float = 2.5) -> Path 
                 return path
             alive = _pid_alive(old_pid)
             if alive and age_h < stale_hours:
+                try:
+                    sys.stderr.write(
+                        f"LOCK_HELD name={name} by_pid={old_pid} age_h={age_h:.2f}\n"
+                    )
+                except Exception:
+                    pass
                 return None
             # Stale / dead owner — take over (log so hourly "flash" is diagnosable)
             reason = "dead_pid" if not alive else f"age_h={age_h:.2f}>={stale_hours}"

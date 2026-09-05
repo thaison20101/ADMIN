@@ -200,18 +200,35 @@ if ($doFull) {
   $code = Start-TwoBots
 }
 
-# Detect lock-abort from bot logs (flash-then-exit pattern)
+# Detect abort reason from bot logs + exit codes
 try {
   $blob = ""
-  if (Test-Path -LiteralPath ($logInbox + ".err")) { $blob += Get-Content ($logInbox + ".err") -Raw -ErrorAction SilentlyContinue }
-  if (Test-Path -LiteralPath ($logMiss + ".err")) { $blob += Get-Content ($logMiss + ".err") -Raw -ErrorAction SilentlyContinue }
-  if (Test-Path -LiteralPath $logInbox) { $blob += Get-Content $logInbox -Raw -ErrorAction SilentlyContinue }
-  if (Test-Path -LiteralPath $logMiss) { $blob += Get-Content $logMiss -Raw -ErrorAction SilentlyContinue }
-  if ($blob -match "another_instance_running|ABORT: da co bot") {
+  foreach ($p in @(($logInbox + ".err"), ($logMiss + ".err"), $logInbox, $logMiss)) {
+    if (Test-Path -LiteralPath $p) {
+      $blob += (Get-Content -LiteralPath $p -Raw -ErrorAction SilentlyContinue)
+    }
+  }
+  if ($blob -match "UnicodeDecodeError|invalid continuation byte") {
+    $abort = "cases_csv_encoding"
+  } elseif ($blob -match "another_instance_running|ABORT: da co bot|LOCK_HELD") {
     $abort = "another_instance"
+  } elseif ($blob -match "ABORT: G:|g_drive_missing|assert_g") {
+    $abort = "g_drive"
+  }
+  if ([int]$code -ne 0) {
+    Write-Host "==== BOT STDERR (tail) ===="
+    foreach ($p in @(($logInbox + ".err"), ($logMiss + ".err"))) {
+      if (Test-Path -LiteralPath $p) {
+        Write-Host ("--- " + $p + " ---")
+        Get-Content -LiteralPath $p -Tail 30 -ErrorAction SilentlyContinue
+      }
+    }
   }
 } catch {}
 
+if ($abort -eq "cases_csv_encoding") {
+  Write-Host "!! cases.csv encoding loi - chay: python .\\pipeline\\repair_cases_encoding.py"
+}
 & python ".\pipeline\print_counts.py" | ForEach-Object { Write-Host $_ }
 & python ".\pipeline\super_data_status.py" --publish | Out-Null
 

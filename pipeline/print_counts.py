@@ -42,7 +42,14 @@ def counts_from_csv(path: Path) -> dict[str, int]:
     }
     if not path.exists():
         return out
-    with path.open(encoding="utf-8", newline="") as f:
+    # cases.csv on may A may be mixed utf-8/cp1258 — never crash hourly heartbeat
+    try:
+        from csv_io import open_csv_read
+
+        fctx = open_csv_read(path, newline="")
+    except Exception:
+        fctx = path.open(encoding="utf-8", errors="replace", newline="")
+    with fctx as f:
         for r in csv.DictReader(f):
             b = _bucket(r.get("source_file") or "")
             out[b] = out.get(b, 0) + 1
