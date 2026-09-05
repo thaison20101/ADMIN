@@ -210,6 +210,8 @@ try {
   }
   if ($blob -match "UnicodeDecodeError|invalid continuation byte") {
     $abort = "cases_csv_encoding"
+  } elseif ($blob -match "CERTIFICATE_VERIFY_FAILED|SSLCertVerificationError|self-signed certificate") {
+    $abort = "ssl_verify"
   } elseif ($blob -match "another_instance_running|ABORT: da co bot|LOCK_HELD") {
     $abort = "another_instance"
   } elseif ($blob -match "ABORT: G:|g_drive_missing|assert_g") {

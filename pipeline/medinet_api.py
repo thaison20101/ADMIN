@@ -10,6 +10,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from medinet_ssl import urlopen as _urlopen
+
 BE = "https://be-qlskcd.medinet.org.vn"
 SITE_ID = "130"
 CLS_FORM_ID = 1000250
@@ -31,7 +33,7 @@ def authenticate(user: str, password: str) -> str:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=60) as r:
+    with _urlopen(req, timeout=60) as r:
         body = json.loads(r.read())
     if not body.get("success"):
         raise RuntimeError(f"Auth failed: {body}")
@@ -56,7 +58,7 @@ def api(token: str, path: str, method: str = "GET", body=None, reauth=None):
         }
         try:
             req = urllib.request.Request(url, data=data, headers=headers, method=method)
-            with urllib.request.urlopen(req, timeout=180) as r:
+            with _urlopen(req, timeout=180) as r:
                 return r.status, json.loads(r.read()), token
         except urllib.error.HTTPError as e:
             raw = e.read().decode("utf-8", errors="replace")

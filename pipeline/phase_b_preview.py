@@ -147,6 +147,8 @@ def list_pdfs(inbox: Path, limit: int | None) -> list[Path]:
 
 def authenticate(user: str, password: str) -> str:
     BE = "https://be-qlskcd.medinet.org.vn"
+    from medinet_ssl import urlopen as _urlopen
+
     req = urllib.request.Request(
         f"{BE}/api/TokenAuth/Authenticate",
         data=json.dumps(
@@ -155,7 +157,7 @@ def authenticate(user: str, password: str) -> str:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=60) as r:
+    with _urlopen(req, timeout=60) as r:
         return json.loads(r.read())["result"]["accessToken"]
 
 
@@ -165,6 +167,8 @@ def to_fparams(obj: dict) -> list:
 
 def api(token: str, path: str, method: str = "GET", body=None):
     BE = "https://be-qlskcd.medinet.org.vn"
+    from medinet_ssl import urlopen as _urlopen
+
     url = f"{BE}{path}" if path.startswith("/") else path
     data = None if body is None else json.dumps(body, ensure_ascii=False).encode()
     headers = {
@@ -176,7 +180,7 @@ def api(token: str, path: str, method: str = "GET", body=None):
     for attempt in range(4):
         try:
             req = urllib.request.Request(url, data=data, headers=headers, method=method)
-            with urllib.request.urlopen(req, timeout=180) as r:
+            with _urlopen(req, timeout=180) as r:
                 return r.status, json.loads(r.read())
         except urllib.error.HTTPError as e:
             raw = e.read().decode("utf-8", errors="replace")

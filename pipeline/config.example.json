@@ -24,7 +24,8 @@
     "date_to": "",
     "username": "",
     "password": "",
-    "note": "date_from fixed 01/07/2026. date_to empty = hôm nay. username/password filled in config.local.json (gitignored) or MEDINET_USER / MEDINET_PASS env."
+    "ssl_verify": false,
+    "note": "ssl_verify false = allow self-signed/MITM proxy on may A. Override MEDINET_SSL_VERIFY=1 for strict. date_from fixed 01/07/2026. date_to empty = hôm nay. username/password in config.local.json or MEDINET_USER/PASS."
   },
   "routing": {
     "m4_birth_year_max": 1967,
