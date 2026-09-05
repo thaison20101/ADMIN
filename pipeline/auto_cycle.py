@@ -433,7 +433,9 @@ def run_auto_cycle(
     if role not in {"all", "inbox", "missing"}:
         role = "all"
     lock_name = "auto_cycle" if role == "all" else f"auto_cycle_{role}"
-    lock = acquire_lock(lock_name)
+    # Hourly task limit ~2h — reclaim sooner than old 12h default so a hung
+    # bot cannot make every later hour "flash then exit" for days.
+    lock = acquire_lock(lock_name, stale_hours=2.5)
     if lock is None:
         safe_print(f"ABORT: da co bot {role} khac dang chay (locks/{lock_name}.lock).")
         if role == "all":

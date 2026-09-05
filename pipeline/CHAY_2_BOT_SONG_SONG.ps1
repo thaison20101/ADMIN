@@ -1,10 +1,16 @@
 # ============================================================
 # 2 BOT SONG SONG: INBOX_CLS + MISSING (web chiu duoc)
-# Khong dung khi hourly dang chay (tat hourly truoc).
+# Tat hourly luc chay; MAC DINH bat lai hourly khi xong
+# (tranh treo nhieu ngay chi nhay Running roi tat).
 #
 #   cd C:\Users\thais\ADMIN
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_2_BOT_SONG_SONG.ps1
+#   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_2_BOT_SONG_SONG.ps1 -KeepHourlyOff
 # ============================================================
+
+param(
+  [switch]$KeepHourlyOff
+)
 
 $ErrorActionPreference = "Continue"
 $Repo = Split-Path -Parent $PSScriptRoot
@@ -29,7 +35,13 @@ if (Test-Path -LiteralPath $LockDir) {
 }
 
 & python ".\pipeline\assert_g_pipeline.py"
-if ($LASTEXITCODE -ne 0) { exit 2 }
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "G: fail - van BAT LAI hourly neu khong -KeepHourlyOff"
+  if (-not $KeepHourlyOff) {
+    & powershell -ExecutionPolicy Bypass -File ".\pipeline\BAT_LAI_HOURLY.ps1"
+  }
+  exit 2
+}
 
 Write-Host "==== START 2 BOT ===="
 $botInbox = Start-Process -FilePath "python" -ArgumentList @(
@@ -45,4 +57,13 @@ Wait-Process -Id $botInbox.Id, $botMissing.Id -ErrorAction SilentlyContinue
 $code = [Math]::Max($botInbox.ExitCode, $botMissing.ExitCode)
 if ($null -eq $code) { $code = 0 }
 & python ".\pipeline\print_counts.py"
+
+Write-Host ""
+if ($KeepHourlyOff) {
+  Write-Host "==== KeepHourlyOff: hourly van TAT - nho chay BAT_LAI_HOURLY.ps1 ===="
+} else {
+  Write-Host "==== BAT LAI hourly (tranh nhieu ngay khong quet) ===="
+  & powershell -ExecutionPolicy Bypass -File ".\pipeline\BAT_LAI_HOURLY.ps1"
+}
+
 exit $code

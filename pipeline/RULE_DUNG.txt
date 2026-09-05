@@ -49,6 +49,12 @@ powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_TONG_HOP_MOI.ps1
 # Chi cai/bat hourly (sau khi da pull):
 powershell -ExecutionPolicy Bypass -File .\pipeline\install_hourly_task.ps1
 
+# Neu hourly "nhay roi tat" nhieu ngay (INBOX/MISSING khong giam):
+powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_KIEM_HOURLY.ps1
+# Doc LAST_HOURLY_OK.txt: duration_s<15 / abort=g_drive|another_instance
+# Khoi phuc: BAT_LAI_HOURLY + install_hourly_task + run_hourly (duration phai hang PHUT)
+# CHAY_2_BOT_SONG_SONG mac dinh BAT LAI hourly khi xong (tru -KeepHourlyOff)
+
 KIEM TRA DUNG RULE SAU KHI CHAY
 -------------------------------
 Log/banner phai co:

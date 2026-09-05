@@ -34,8 +34,13 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
-def acquire_lock(name: str = "auto_cycle", *, stale_hours: float = 12.0) -> Path | None:
-    """Return lock path if acquired; None if another live instance holds it."""
+def acquire_lock(name: str = "auto_cycle", *, stale_hours: float = 2.5) -> Path | None:
+    """Return lock path if acquired; None if another live instance holds it.
+
+    Default stale_hours=2.5 matches hourly ExecutionTimeLimit (~2h): a hung
+    bot must not block every later hourly tick for half a day.
+    Dead PID or age >= stale_hours => reclaim.
+    """
     LOCK_DIR.mkdir(parents=True, exist_ok=True)
     path = LOCK_DIR / f"{name}.lock"
     me = os.getpid()
@@ -47,9 +52,17 @@ def acquire_lock(name: str = "auto_cycle", *, stale_hours: float = 12.0) -> Path
             age_h = (now - path.stat().st_mtime) / 3600.0
             if old_pid == me:
                 return path
-            if _pid_alive(old_pid) and age_h < stale_hours:
+            alive = _pid_alive(old_pid)
+            if alive and age_h < stale_hours:
                 return None
-            # Stale / dead owner — take over
+            # Stale / dead owner — take over (log so hourly "flash" is diagnosable)
+            reason = "dead_pid" if not alive else f"age_h={age_h:.2f}>={stale_hours}"
+            try:
+                sys.stderr.write(
+                    f"LOCK_RECLAIM name={name} old_pid={old_pid} reason={reason}\n"
+                )
+            except Exception:
+                pass
         except Exception:
             pass
     path.write_text(

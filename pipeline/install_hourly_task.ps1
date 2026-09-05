@@ -47,7 +47,7 @@ $settings = New-ScheduledTaskSettingsSet `
   -DontStopIfGoingOnBatteries `
   -StartWhenAvailable `
   -WakeToRun `
-  -MultipleInstances IgnoreNew `
+  -MultipleInstances Queue `
   -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
   -RestartCount 2 `
   -RestartInterval (New-TimeSpan -Minutes 5)
@@ -109,4 +109,6 @@ Write-Host "  Get-ScheduledTaskInfo -TaskName PKDK_Hourly_Sync"
 Write-Host "Kiem tra da chay:"
 Write-Host ("  Get-ChildItem '" + (Join-Path $BuildRoot "logs") + "' | Sort-Object LastWriteTime -Descending | Select-Object -First 8")
 Write-Host ("  Get-Content '" + (Join-Path $BuildRoot "logs\LAST_HOURLY_OK.txt") + "'")
+Write-Host "Chan doan nhanh: powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_KIEM_HOURLY.ps1"
 Write-Host "QUAN TRONG: Settings > System > Power > Sleep = Never (khi cam dien)."
+Write-Host "MultipleInstances=Queue (khong bo tick khi lan truoc con chay)."

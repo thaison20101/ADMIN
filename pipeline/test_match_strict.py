@@ -621,12 +621,62 @@ if __name__ == "__main__":
             "CHAY_PDF_CHECK.ps1",
             "CHAY_FULL_ROI_HOURLY.ps1",
             "CHAY_2_BOT_SONG_SONG.ps1",
+            "CHAY_KIEM_HOURLY.ps1",
             "CAP_NHAT_TIEN_DO_SUPER_DATA.ps1",
             "TAM_NGUNG_HOURLY.ps1",
             "BAT_LAI_HOURLY.ps1",
+            "install_hourly_task.ps1",
             "run_hourly.ps1",
         ):
             (root / name).read_bytes().decode("ascii")
 
     test_runner_ps1_ascii()
+
+    def test_lock_reclaim_dead_and_stale():
+        import os
+        import time
+        import sys as _sys
+
+        _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import single_instance as si
+
+        lock_dir = Path(si.LOCK_DIR)
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        name = "test_reclaim_hourly"
+        path = lock_dir / f"{name}.lock"
+        try:
+            # Dead PID must be reclaimable immediately
+            path.write_text("99999999\nstarted=2099-01-01 00:00:00\n", encoding="utf-8")
+            got = si.acquire_lock(name, stale_hours=2.5)
+            assert got is not None, "dead pid should reclaim"
+            si.release_lock(got)
+
+            # Live self-lock returns same path
+            got2 = si.acquire_lock(name, stale_hours=2.5)
+            assert got2 is not None
+            got3 = si.acquire_lock(name, stale_hours=2.5)
+            assert got3 == got2
+            si.release_lock(got2)
+
+            # Fake "other live pid" within stale window => block
+            path.write_text("1\nstarted=now\n", encoding="utf-8")
+            real_alive = si._pid_alive
+            si._pid_alive = lambda pid: True  # pretend pid 1 is alive
+            try:
+                blocked = si.acquire_lock(name, stale_hours=2.5)
+                assert blocked is None, "live foreign pid within window must block"
+
+                # Same live pid but mtime older than stale_hours => reclaim
+                old = time.time() - (3.0 * 3600)
+                os.utime(path, (old, old))
+                got4 = si.acquire_lock(name, stale_hours=2.5)
+                assert got4 is not None, "aged lock must reclaim even if pid still alive"
+                si.release_lock(got4)
+            finally:
+                si._pid_alive = real_alive
+        finally:
+            if path.exists():
+                path.unlink()
+
+    test_lock_reclaim_dead_and_stale()
     print("OK: all match tests passed")

@@ -49,6 +49,59 @@ function Ensure-Dir([string]$Path) {
   catch { Write-Host "WARN: cannot create $Path"; return $false }
 }
 
+function Write-HourlyHeartbeat {
+  param(
+    [string]$Started,
+    [int]$Code,
+    [string]$Abort = "",
+    [string]$LogMain = "",
+    [string]$LogInbox = "",
+    [string]$LogMiss = "",
+    [bool]$DoFull = $false,
+    [int]$InboxExit = -1,
+    [int]$MissingExit = -1
+  )
+  $ended = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+  $dur = -1
+  try {
+    $t0 = [datetime]::ParseExact($Started, "yyyy-MM-dd HH:mm:ss", $null)
+    $dur = [int]([math]::Round(((Get-Date) - $t0).TotalSeconds))
+  } catch {}
+  $lines = @(
+    "started=$Started"
+    "ended=$ended"
+    "duration_s=$dur"
+    "exit=$Code"
+    "abort=$Abort"
+    "inbox_exit=$InboxExit"
+    "missing_exit=$MissingExit"
+    "log=$LogMain"
+    "log_inbox=$LogInbox"
+    "log_missing=$LogMiss"
+    "full=$DoFull"
+    "accounts=pkdkthuankieu+pkdk_Thuankieu"
+    "missing_budget=$MissingBudget"
+    "pid=$PID"
+  )
+  $hb = ($lines -join "`n") + "`n"
+  foreach ($dir in @((Join-Path $BuildRoot "logs"), $LocalLogDir)) {
+    try {
+      Ensure-Dir $dir | Out-Null
+      Set-Content -LiteralPath (Join-Path $dir "LAST_HOURLY_OK.txt") -Value $hb -Encoding utf8
+    } catch {
+      Write-Host ("WARN heartbeat write failed: " + $dir + " :: " + $_)
+    }
+  }
+  if ($dur -ge 0 -and $dur -lt 15 -and $Abort -eq "") {
+    Write-Host "WARN: hourly duration_s=$dur (<15s) - thuong la abort G:/lock, khong phai quet that."
+  }
+  if ($Abort -ne "") {
+    Write-Host ("HEARTBEAT abort=$Abort duration_s=$dur exit=$Code")
+  } else {
+    Write-Host ("HEARTBEAT exit=$Code duration_s=$dur inbox_exit=$InboxExit missing_exit=$MissingExit")
+  }
+}
+
 $LocalLogDir = Join-Path $Repo "pipeline\work\logs"
 Ensure-Dir $LocalLogDir | Out-Null
 $logDirOk = Ensure-Dir (Join-Path $BuildRoot "logs")
@@ -70,6 +123,9 @@ if ($logDirOk) {
 $FlagFull = Join-Path $BuildRoot "FIRST_FULL_SCAN_DONE.txt"
 $doFull = -not (Test-Path -LiteralPath $FlagFull)
 
+$script:LastInboxExit = -1
+$script:LastMissingExit = -1
+
 function Start-TwoBots {
   param(
     [string[]]$ExtraInbox = @(),
@@ -84,7 +140,6 @@ function Start-TwoBots {
   Write-Host ("Bot INBOX  PID={0} log={1}" -f $b1.Id, $logInbox)
   Write-Host ("Bot MISSING PID={0} log={1}" -f $b2.Id, $logMiss)
   Wait-Process -Id $b1.Id, $b2.Id -ErrorAction SilentlyContinue
-  # Force refresh ExitCode (some PS versions leave null until HasExited checked)
   $null = $b1.HasExited; $null = $b2.HasExited
   $c1 = $b1.ExitCode
   $c2 = $b2.ExitCode
@@ -96,6 +151,8 @@ function Start-TwoBots {
     $err2 = Get-Content ($logMiss + ".err") -Raw -ErrorAction SilentlyContinue
     $c2 = if ($err2 -match "Traceback|Error") { 1 } else { 0 }
   }
+  $script:LastInboxExit = [int]$c1
+  $script:LastMissingExit = [int]$c2
   Write-Host ("Bot exit: inbox={0} missing={1}" -f $c1, $c2)
   return [Math]::Max([int]$c1, [int]$c2)
 }
@@ -114,12 +171,16 @@ $header | ForEach-Object { Write-Host $_ }
 $header | Set-Content -LiteralPath $log -Encoding utf8
 
 $started = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+$code = 0
+$abort = ""
 
 & python ".\pipeline\assert_g_pipeline.py"
 if ($LASTEXITCODE -ne 0) {
   Write-Host "ABORT: G: chua san. Mo Google Drive Desktop."
-  "started=$started`nended=$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`nexit=2`nabort=g_drive`n" |
-    Set-Content -LiteralPath (Join-Path $BuildRoot "logs\LAST_HOURLY_OK.txt") -Encoding utf8 -ErrorAction SilentlyContinue
+  $abort = "g_drive"
+  $code = 2
+  Write-HourlyHeartbeat -Started $started -Code $code -Abort $abort -LogMain $log `
+    -LogInbox $logInbox -LogMiss $logMiss -DoFull $doFull
   exit 2
 }
 
@@ -139,29 +200,24 @@ if ($doFull) {
   $code = Start-TwoBots
 }
 
+# Detect lock-abort from bot logs (flash-then-exit pattern)
+try {
+  $blob = ""
+  if (Test-Path -LiteralPath ($logInbox + ".err")) { $blob += Get-Content ($logInbox + ".err") -Raw -ErrorAction SilentlyContinue }
+  if (Test-Path -LiteralPath ($logMiss + ".err")) { $blob += Get-Content ($logMiss + ".err") -Raw -ErrorAction SilentlyContinue }
+  if (Test-Path -LiteralPath $logInbox) { $blob += Get-Content $logInbox -Raw -ErrorAction SilentlyContinue }
+  if (Test-Path -LiteralPath $logMiss) { $blob += Get-Content $logMiss -Raw -ErrorAction SilentlyContinue }
+  if ($blob -match "another_instance_running|ABORT: da co bot") {
+    $abort = "another_instance"
+  }
+} catch {}
+
 & python ".\pipeline\print_counts.py" | ForEach-Object { Write-Host $_ }
 & python ".\pipeline\super_data_status.py" --publish | Out-Null
 
-$ended = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-$hb = @(
-  "started=$started"
-  "ended=$ended"
-  "exit=$code"
-  "log=$log"
-  "log_inbox=$logInbox"
-  "log_missing=$logMiss"
-  "full=$doFull"
-  "accounts=pkdkthuankieu+pkdk_Thuankieu"
-  "missing_budget=$MissingBudget"
-) -join "`n"
-try {
-  $hbPath = Join-Path $BuildRoot "logs\LAST_HOURLY_OK.txt"
-  Ensure-Dir (Join-Path $BuildRoot "logs") | Out-Null
-  Set-Content -LiteralPath $hbPath -Value $hb -Encoding utf8
-} catch {}
-try {
-  Set-Content -LiteralPath (Join-Path $LocalLogDir "LAST_HOURLY_OK.txt") -Value $hb -Encoding utf8
-} catch {}
+Write-HourlyHeartbeat -Started $started -Code ([int]$code) -Abort $abort -LogMain $log `
+  -LogInbox $logInbox -LogMiss $logMiss -DoFull $doFull `
+  -InboxExit $script:LastInboxExit -MissingExit $script:LastMissingExit
 
 $snapDir = Join-Path $BuildRoot "cases_snapshot"
 if (Ensure-Dir $snapDir) {
