@@ -16,7 +16,11 @@ from pathlib import Path
 
 import pdfplumber
 
-# Order matters: count (#) before percent.
+# Allow glued Name+value (pdfplumber often drops space when bold/underline
+# shifts the result under column Ghi chú): MCV65.4 / MCHC289 / MCH17.2
+_LAB_TAIL = r"(?=\s|\(|\d|$)"
+
+# Order matters: count (#) before percent; MCHC before MCH.
 LAB_LINE_SPECS = [
     ("WBC", r"Leukocytes\s*\(?\s*WBC\s*\)?"),
     ("Neutrophils_count", r"Neutrophils\s*#"),
@@ -32,12 +36,12 @@ LAB_LINE_SPECS = [
     ("RBC", r"Erythrocytes\s*\(?\s*RBC\s*\)?"),
     ("HGB", r"Hemoglobin\s*\(?\s*H(?:GB|b)\s*\)?"),
     ("HCT", r"Hematocrit(?:\s*\(?\s*Hct\s*\)?)?"),
-    ("MCV", r"\bMCV\b"),
-    ("MCHC", r"\bMCHC\b"),
-    ("MCH", r"\bMCH\b"),
-    ("RDW", r"\bRDW\b"),
+    ("MCV", rf"\bMCV{_LAB_TAIL}"),
+    ("MCHC", rf"\bMCHC{_LAB_TAIL}"),
+    ("MCH", rf"\bMCH(?!C){_LAB_TAIL}"),
+    ("RDW", rf"\bRDW{_LAB_TAIL}"),
     ("PLT", r"Platelets\s*\(?\s*PLT\s*\)?"),
-    ("MPV", r"\bMPV\b"),
+    ("MPV", rf"\bMPV{_LAB_TAIL}"),
     ("Glucose", r"\bGlucose\b"),
     ("Urea", r"\bUrea\b"),
     ("Creatinine", r"\bCreatinine\b"),
@@ -53,7 +57,8 @@ URINE_SPECS = [
     ("Protein_NT", r"(?:Đạm|Protein)"),
     ("Nitrite", r"Nitrite"),
     ("pH_NT", r"\bpH\b"),
-    ("Mau_NT", r"(?:Máu|Hồng cầu)"),
+    # Prefer Hồng cầu; bare Máu only as row start (not "Công thức máu")
+    ("Mau_NT", r"(?:Hồng\s*cầu|(?:^|\n)\s*Máu\b)"),
     ("Ti_trong", r"Tỉ\s*trọng"),
     ("Bach_cau_NT", r"Bạch\s*cầu"),
 ]
@@ -70,19 +75,101 @@ VALUE_RE = re.compile(
 )
 _AM_TINH_RE = re.compile(r"âm\s*t[íi]nh|am\s*tinh", re.I)
 # PDF "Khoảng tham chiếu" e.g. ( 80.0 - 99.0 ) / (4.01-11.42)
+# Strip so the TRUE result (in-range OR out-of-range) is never confused with bounds.
+# Khoảng chỉ để bác sĩ xem — KHÔNG dùng để bỏ / skip chỉ số.
 _REF_RANGE_RE = re.compile(
     r"\(\s*[<>]?\d+(?:[.,]\d+)?\s*[-–—]\s*[<>]?\d+(?:[.,]\d+)?\s*\)"
 )
+# One-sided refs: ( < 6.9 ) / ( < 45 ) / ( Âm tính < 5.6 )
+_REF_RANGE_ONE_SIDED_RE = re.compile(
+    r"\(\s*(?:Âm\s*t[íi]nh|Am\s*tinh|Negative)?\s*[<>]=?\s*\d+(?:[.,]\d+)?\s*\)",
+    re.I,
+)
+# Qualitative-only ref: ( Âm tính )
+_REF_QUAL_ONLY_RE = re.compile(
+    r"\(\s*(?:Âm\s*t[íi]nh|Am\s*tinh|Negative)\s*\)",
+    re.I,
+)
+# Bare "low - high" without parens (some pdfplumber extractions)
+_REF_RANGE_BARE_RE = re.compile(
+    r"(?<![.\d])[<>]?\d+(?:[.,]\d+)?\s*[-–—]\s*[<>]?\d+(?:[.,]\d+)?(?![.\d])"
+)
 _NUM_RE = re.compile(r"[<>]?\d+(?:[.,]\d+)?")
+# Unit tokens like 10^9/L / 10^12/L — digits must NOT be picked as lab results
+# (bug: WBC…10^9/L → 9, RBC…10^12/L → 12).
+_SCI_UNIT_RE = re.compile(
+    r"(?i)[×x*]?\s*10\s*\^\s*(?:9|12)\s*(?:/\\?\s*[Ll]|\\[Ll])?"
+)
 
 
 def _norm_num(s: str) -> str:
     return s.replace(",", ".").strip()
 
 
+def _strip_sci_units(s: str) -> str:
+    """Remove 10^9/L / 10^12/L so exponent digits are never chosen as results."""
+    return _SCI_UNIT_RE.sub(" ", s or "")
+
+
 def _strip_ref_ranges(s: str) -> str:
-    """Remove reference intervals so Ghi-chú abnormal values are not mistaken."""
-    return _REF_RANGE_RE.sub(" ", s or "")
+    """Remove reference intervals so the real result number remains.
+
+    Never drop the lab value because it is outside the interval — khoảng tham chiếu
+    is for doctors only. Both in-range and out-of-range results must be kept.
+    """
+    out = _REF_RANGE_RE.sub(" ", s or "")
+    out = _REF_RANGE_ONE_SIDED_RE.sub(" ", out)
+    out = _REF_QUAL_ONLY_RE.sub(" ", out)
+    # Bare "low - high" only when a 3rd number (true result) is also on the line
+    if len(list(_NUM_RE.finditer(out))) >= 3:
+        out = _REF_RANGE_BARE_RE.sub(" ", out)
+    return out
+
+
+def _clean_lab_rest(s: str) -> str:
+    """Strip refs + sci units; collapse whitespace for result picking."""
+    out = _strip_ref_ranges(s)
+    out = _strip_sci_units(out)
+    out = re.sub(r"[()]+", " ", out)
+    return re.sub(r"\s+", " ", out).strip()
+
+
+def _unglue_lab_text(text: str) -> str:
+    """Insert spaces where pdfplumber glued Name+value (bold/underline Ghi chú)."""
+    text = re.sub(
+        r"(Neutrophils|Eosinophils|Monocytes|Basophils|Lymphocytes)(?=\d|#)",
+        r"\1 ",
+        text or "",
+    )
+    text = re.sub(
+        r"\b(MCHC|MCV|MCH|RDW|MPV|WBC|RBC|PLT|HCT|Hb|HGB)(?=\d)",
+        r"\1 ",
+        text,
+        flags=re.I,
+    )
+    text = re.sub(r"(\)\s*)(?=\d)", r"\1 ", text)  # (Hb)102 → (Hb) 102
+    return text
+
+
+def _pick_result_number(cleaned: str) -> re.Match[str] | None:
+    """Choose the true result number from text after ref-range strip.
+
+    - 1 number → that value (in-range or already cleaned)
+    - 3+ numbers → LAST (right-shifted under Ghi chú; leftover bounds first)
+    - 2 numbers with a dash between → range only, no result
+    - 2 numbers without dash → LAST (Ghi chú / remnant bounds + result)
+    """
+    nums = list(_NUM_RE.finditer(cleaned or ""))
+    if not nums:
+        return None
+    if len(nums) == 1:
+        return nums[0]
+    if len(nums) >= 3:
+        return nums[-1]
+    between = cleaned[nums[0].end() : nums[1].start()]
+    if re.search(r"[-–—]", between):
+        return None
+    return nums[-1]
 
 
 def _normalize_val_token(val: str) -> str:
@@ -98,6 +185,11 @@ def _extract_unit(text: str) -> str:
     """Pick a likely unit token from leftover text after the value."""
     if not text:
         return ""
+    # Scientific count units → Medinet SI labels (check before stripping digits)
+    if re.search(r"(?i)10\s*\^\s*12", text):
+        return "T/L"
+    if re.search(r"(?i)10\s*\^\s*9", text):
+        return "G/L"
     # Prefer common lab units
     m = re.search(
         r"(?i)\b(g/L|g/dL|G/L|T/L|fL|pg|mmol/L|mcmol/L|umol/L|µmol/L|%|L/L)\b",
@@ -115,10 +207,9 @@ def read_pdf_text(path: Path) -> str:
         for page in pdf.pages:
             t = page.extract_text() or ""
             parts.append(t)
-    # Fix glued tokens like Neutrophils23.8
-    text = "\n".join(parts)
-    text = re.sub(r"(Neutrophils|Eosinophils|Monocytes|Basophils|Lymphocytes)(?=\d)", r"\1 ", text)
-    return text
+    # Fix glued tokens: Neutrophils23.8 / MCV65.4 / MCHC289 / Hemoglobin (Hb)102
+    # Bold/underline out-of-range values often lose the space after the name.
+    return _unglue_lab_text("\n".join(parts))
 
 
 def parse_header(text: str) -> dict:
@@ -216,13 +307,31 @@ def classify_sample_kind(header: dict, text: str = "") -> str:
 def _split_sections(text: str) -> tuple[str, str, str]:
     """Return (huyet, sinhhoa, urine).
 
-    Avoid false split on header text like 'Loại mẫu: Máu/Nước tiểu'.
+    Avoid false split on header wrap like 'Loại mẫu: Máu/\\nNước tiểu …'.
+    Real urine section must show urine analytes (Urobilinogen / Ketone / …) nearby.
     """
     urine = ""
     body = text
-    m_urine = re.search(r"(?m)^(Nước\s*tiểu)\b", text, re.I)
+    m_urine = None
+    for m in re.finditer(r"(?m)^(Nước\s*tiểu)\b", text, re.I):
+        prefix = text[max(0, m.start() - 12) : m.start()]
+        if re.search(r"Máu\s*/\s*$", prefix, re.I):
+            continue
+        after = text[m.start() : m.start() + 900]
+        if not re.search(
+            r"(?i)Urobilinogen|Ketone|Nitrite|Tỉ\s*trọng|Bạch\s*cầu|"
+            r"Hồng\s*cầu|Bilirubin|Phân\s*tích\s*nước\s*tiểu",
+            after,
+        ):
+            continue
+        m_urine = m
+        break
     if not m_urine:
-        m_urine = re.search(r"\n\s*(Nước\s*tiểu)\b", text, re.I)
+        m_urine = re.search(
+            r"\n\s*(Nước\s*tiểu)\s*\n\s*Phân\s*tích",
+            text,
+            re.I,
+        )
     if m_urine:
         body, urine = text[: m_urine.start()], text[m_urine.start() :]
 
@@ -240,8 +349,9 @@ def _parse_lab_line(line: str, name_pat: str) -> tuple[str, str] | None:
     """Parse `Name <value> [ref] [unit]` OR `Name [ref] [unit] <value>` (Ghi chú).
 
     Thuận Kiều PDFs put OUT-OF-RANGE results in column Ghi chú (often AFTER the
-    reference interval). Old parser grabbed the first number inside (80.0-99.0)
-    or failed → MCV/MCH/MCHC/Hb missing on web.
+    reference interval, or visually shifted right / bold-underlined). Old parser
+    grabbed the first number inside (80.0-99.0) or failed when pdfplumber glued
+    Name+value (MCV65.4) → MCV/MCH/MCHC/Hb missing on web.
     """
     m = re.search(name_pat + r"\s*(.+)$", line, re.I)
     if not m:
@@ -261,18 +371,21 @@ def _parse_lab_line(line: str, name_pat: str) -> tuple[str, str] | None:
     if qm:
         return _normalize_val_token(qm.group("val")), ""
 
-    # Strip reference ranges, then take the first remaining number (= true result).
+    # Strip reference ranges + 10^N units, then take the true result number.
     # Works for both:
     #   MCV 76.7 ( 80.0 - 99.0 ) fL
     #   MCV ( 80.0 - 99.0 ) fL 76.7   ← value in Ghi chú
-    cleaned = _strip_ref_ranges(rest)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    nm = _NUM_RE.search(cleaned)
+    #   MCV65.4 ( 80.0 - 99.0 ) fL    ← glued after unglue / lookahead
+    #   WBC 6.85 ( … ) 10^9/L        ← must NOT pick 9 from exponent
+    # Capture unit from raw rest before sci-strip (10^9 → G/L)
+    unit_hint = _extract_unit(rest)
+    cleaned = _clean_lab_rest(rest)
+    nm = _pick_result_number(cleaned)
     if nm:
         val = _normalize_val_token(nm.group(0))
         after = cleaned[nm.end() :]
         before = cleaned[: nm.start()]
-        unit = _extract_unit(after) or _extract_unit(before)
+        unit = unit_hint or _extract_unit(after) or _extract_unit(before)
         return val, unit
 
     # No number outside refs → maybe only ref on this line (value on next line)
@@ -299,13 +412,12 @@ def _find_lab_in_text(section: str, pat: str) -> tuple[str, str] | None:
                 r"Urobilinogen|Protein|Ketone|Bilirubin|Nitrite|pH|Leukocytes|"
                 r"Erythrocytes|Hemoglobin|Hematocrit|Neutrophils|Lymphocytes|"
                 r"Monocytes|Eosinophils|Basophils|MPV|RDW|MCV|MCHC|MCH|"
-                r"Glucose|Platelets)\b",
+                r"Glucose|Platelets|Tỉ\s*trọng|Bạch\s*cầu|Hồng\s*cầu|Đạm)\b",
                 nxt,
             ):
                 break
             # Skip pure reference-range / unit-only lines
-            nxt_clean = _strip_ref_ranges(nxt)
-            nxt_clean = re.sub(r"\s+", " ", nxt_clean).strip()
+            nxt_clean = _clean_lab_rest(nxt)
             if not nxt_clean or re.fullmatch(
                 r"(?i)(?:g/L|g/dL|G/L|T/L|fL|pg|mmol/L|%|L/L|mcmol/L|umol/L|µmol/L)",
                 nxt_clean,
@@ -320,15 +432,162 @@ def _find_lab_in_text(section: str, pat: str) -> tuple[str, str] | None:
                 val = _normalize_val_token(vm.group("val"))
                 unit = (vm.group("unit") or "").strip()
                 return val, unit
-            nm = _NUM_RE.search(nxt_clean)
+            unit_hint = _extract_unit(nxt)
+            nm = _pick_result_number(nxt_clean)
             if nm:
-                return _normalize_val_token(nm.group(0)), _extract_unit(
+                return _normalize_val_token(nm.group(0)), unit_hint or _extract_unit(
                     nxt_clean[nm.end() :]
                 )
     return None
 
 
+# Name tokens used when recovering a lab from a table row / word line
+_TABLE_NAME_PATS: list[tuple[str, re.Pattern[str]]] = [
+    ("WBC", re.compile(r"Leukocytes|^\s*WBC\b", re.I)),
+    ("Neutrophils_count", re.compile(r"Neutrophils\s*#", re.I)),
+    ("Neutrophils_pct", re.compile(r"Neutrophils(?!\s*#)", re.I)),
+    ("Eosinophils_count", re.compile(r"Eosinophils\s*#", re.I)),
+    ("Eosinophils_pct", re.compile(r"Eosinophils(?!\s*#)", re.I)),
+    ("Monocytes_count", re.compile(r"Monocytes\s*#", re.I)),
+    ("Monocytes_pct", re.compile(r"Monocytes(?!\s*#)", re.I)),
+    ("Basophils_count", re.compile(r"Basophils\s*#", re.I)),
+    ("Basophils_pct", re.compile(r"Basophils(?!\s*#)", re.I)),
+    ("Lymphocytes_count", re.compile(r"Lymphocytes\s*#", re.I)),
+    ("Lymphocytes_pct", re.compile(r"Lymphocytes(?!\s*#)", re.I)),
+    ("RBC", re.compile(r"Erythrocytes|^\s*RBC\b", re.I)),
+    ("HGB", re.compile(r"Hemoglobin|\bHb\b|\bHGB\b", re.I)),
+    ("HCT", re.compile(r"Hematocrit|\bHct\b", re.I)),
+    ("MCV", re.compile(r"\bMCV\b", re.I)),
+    ("MCHC", re.compile(r"\bMCHC\b", re.I)),
+    ("MCH", re.compile(r"\bMCH\b(?!C)", re.I)),
+    ("RDW", re.compile(r"\bRDW\b", re.I)),
+    ("PLT", re.compile(r"Platelets|\bPLT\b", re.I)),
+    ("MPV", re.compile(r"\bMPV\b", re.I)),
+    ("Glucose", re.compile(r"\bGlucose\b|Đường", re.I)),
+    ("Urea", re.compile(r"\bUrea\b|\bBUN\b|Urê|\bUre\b", re.I)),
+    ("Creatinine", re.compile(r"Creatinine|Creatinin", re.I)),
+    ("AST", re.compile(r"\bAST\b|SGOT", re.I)),
+    ("ALT", re.compile(r"\bALT\b|SGPT", re.I)),
+    ("Urobilinogen", re.compile(r"Urobilinogen", re.I)),
+    ("Glucose_NT", re.compile(r"\bGlucose\b", re.I)),
+    ("Ketone", re.compile(r"Ketone", re.I)),
+    ("Bilirubin_NT", re.compile(r"Bilirubin", re.I)),
+    ("Protein_NT", re.compile(r"Đạm|Protein", re.I)),
+    ("Nitrite", re.compile(r"Nitrite", re.I)),
+    ("pH_NT", re.compile(r"\bpH\b", re.I)),
+    ("Mau_NT", re.compile(r"Hồng\s*cầu|(?:^|\n)\s*Máu\b", re.I)),
+    ("Ti_trong", re.compile(r"Tỉ\s*trọng", re.I)),
+    ("Bach_cau_NT", re.compile(r"Bạch\s*cầu", re.I)),
+]
+
+
+def _value_from_row_cells(cells: list[str]) -> tuple[str, str] | None:
+    """Pick result from a table row: result cell OR same-row number if shifted.
+
+    Column layout: Tên | Kết quả | Ghi chú | Khoảng | Đơn vị
+    Out-of-range values often land in Ghi chú (empty Kết quả) — still a RESULT.
+    """
+    cells = [re.sub(r"\s+", " ", (c or "").strip()) for c in cells]
+    non_empty = [c for c in cells if c]
+    if len(non_empty) < 2:
+        return None
+    # Join everything after the name cell and reuse line parser
+    name = non_empty[0]
+    rest_parts = non_empty[1:]
+    # Prefer a qualitative token anywhere in row
+    for part in rest_parts:
+        qm = re.match(
+            r"^(?P<val>\(\s*\+\s*\)|Âm\s*t[íi]nh|Am\s*tinh|Positive|Negative)\b",
+            part,
+            re.I,
+        )
+        if qm:
+            return _normalize_val_token(qm.group("val")), ""
+    blob = " ".join(rest_parts)
+    unit_hint = _extract_unit(blob)
+    cleaned = _clean_lab_rest(blob)
+    nm = _pick_result_number(cleaned)
+    if not nm:
+        return None
+    val = _normalize_val_token(nm.group(0))
+    unit = (
+        unit_hint
+        or _extract_unit(cleaned[nm.end() :])
+        or _extract_unit(cleaned[: nm.start()])
+    )
+    if not val:
+        return None
+    return val, unit
+
+
+def _labs_from_pdf_tables(path: Path) -> dict:
+    """Fallback: extract_tables when text layout drops/shifts result cells."""
+    labs: dict = {}
+    try:
+        with pdfplumber.open(str(path)) as pdf:
+            for page in pdf.pages:
+                tables = []
+                for settings in (
+                    {"vertical_strategy": "text", "horizontal_strategy": "text"},
+                    {"vertical_strategy": "lines", "horizontal_strategy": "text"},
+                ):
+                    try:
+                        tables = page.extract_tables(settings) or []
+                    except Exception:
+                        tables = []
+                    if tables:
+                        break
+                for table in tables:
+                    for row in table or []:
+                        if not row:
+                            continue
+                        cells = [str(c) if c is not None else "" for c in row]
+                        row_text = " ".join(cells)
+                        for key, pat in _TABLE_NAME_PATS:
+                            if key in labs:
+                                continue
+                            if not pat.search(row_text):
+                                continue
+                            # Skip blood Glucose when this looks like urine section row
+                            if key == "Glucose" and re.search(
+                                r"(?i)âm\s*t[íi]nh|am\s*tinh|urobilinogen|nước\s*tiểu",
+                                row_text,
+                            ):
+                                continue
+                            if key == "Glucose_NT" and re.search(
+                                r"(?i)ngẫu\s*nhiên|mmol.*\d+\.\d+|Sinh\s*ho[áa]",
+                                row_text,
+                            ):
+                                # prefer dedicated urine Glucose later; skip chem-ish
+                                if re.search(r"\d+\.\d+", row_text) and not re.search(
+                                    r"(?i)âm\s*t[íi]nh|am\s*tinh", row_text
+                                ):
+                                    continue
+                            got = _value_from_row_cells(cells)
+                            if not got:
+                                # Same-row: parse as a single line
+                                got = _parse_lab_line(row_text, pat.pattern)
+                            if got:
+                                if key == "Glucose" and not re.fullmatch(
+                                    r"[<>]?\d+(?:[.,]\d+)?", str(got[0])
+                                ):
+                                    continue
+                                labs[key] = {"value_raw": got[0], "unit_raw": got[1]}
+    except Exception:
+        return labs
+    return labs
+
+
+def _merge_lab_dicts(primary: dict, fallback: dict) -> dict:
+    out = dict(primary)
+    for k, v in (fallback or {}).items():
+        if k not in out and v and v.get("value_raw") not in (None, ""):
+            out[k] = v
+    return out
+
+
 def parse_labs(text: str) -> dict:
+    text = _unglue_lab_text(text)
     huyet, sinhhoa, urine = _split_sections(text)
     labs: dict = {}
 
@@ -375,6 +634,10 @@ def parse_labs(text: str) -> dict:
     for key, pat in URINE_SPECS:
         got = _find_lab_in_text(urine, pat)
         if got:
+            # Reject calendar years mistaken as Mau_NT (NĂM 2026)
+            if key == "Mau_NT" and re.fullmatch(r"(?:19|20)\d{2}", str(got[0])):
+                got = None
+        if got:
             labs[key] = {"value_raw": got[0], "unit_raw": got[1]}
 
     # Fallbacks when section split misses a line (common for Urobilinogen / Urea)
@@ -389,6 +652,23 @@ def parse_labs(text: str) -> dict:
         got = _find_lab_in_text(text, r"(?:\bUrea\b|\bBUN\b|Urê|Ure(?:a)?\b)")
         if got:
             labs["Urea"] = {"value_raw": got[0], "unit_raw": got[1]}
+
+    # Urine fallbacks from full text when section split missed lines
+    for key, pat in URINE_SPECS:
+        if key in labs:
+            continue
+        got = _find_lab_in_text(full_for_urine, pat) or _find_lab_in_text(text, pat)
+        if got:
+            # Don't steal blood Glucose into Glucose_NT when numeric chem exists
+            if key == "Glucose_NT" and re.fullmatch(
+                r"[<>]?\d+(?:[.,]\d+)?", str(got[0])
+            ):
+                # Prefer qualitative urine; skip bare chem numbers unless in urine block
+                if urine.strip() and not _find_lab_in_text(urine, pat):
+                    continue
+            if key == "Mau_NT" and re.fullmatch(r"(?:19|20)\d{2}", str(got[0])):
+                continue
+            labs[key] = {"value_raw": got[0], "unit_raw": got[1]}
     return labs
 
 
@@ -629,6 +909,11 @@ def extract_pdf(path: Path) -> dict:
     text = read_pdf_text(path)
     header = parse_header(text)
     labs_raw = parse_labs(text)
+    # Table fallback: right-shifted Ghi chú / missed urine cells
+    try:
+        labs_raw = _merge_lab_dicts(labs_raw, _labs_from_pdf_tables(path))
+    except Exception:
+        pass
     labs = normalize_for_web(labs_raw)
     coverage = classify_pdf_coverage(labs)
     sample_kind = classify_sample_kind(header, text)

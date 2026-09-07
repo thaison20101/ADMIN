@@ -474,7 +474,15 @@ def verify_cls_saved(
 
     # Spot-check a value we sent (avoid false IMPORTED on wrong id)
     if payload:
-        for key in ("CongThucMau_SLBC", "XNM_HuyetSacTo", "CongThucMau_SLHC", "SinhHoaMau_DuongMau"):
+        # Spot-check includes MCHC/RDW when present (often missing if parse missed glued Ghi chú)
+        for key in (
+            "CongThucMau_SLBC",
+            "XNM_HuyetSacTo",
+            "CongThucMau_SLHC",
+            "SinhHoaMau_DuongMau",
+            "XNM_MCHC",
+            "XNM_RDW",
+        ):
             if key in payload and payload[key] not in (None, ""):
                 got = (row or {}).get(key)
                 if got in (None, ""):
