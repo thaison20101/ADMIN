@@ -153,7 +153,8 @@ Write-Host ("COUNTS truoc: {0}" -f (Get-Counts).raw)
 # ---- 4 FULL SCAN 2 bot (nhieu vong) ----
 Write-Host ""
 Write-Host "==== 4/8 FULL SCAN + REPAIR TOAN BO (2 bot) ===="
-Write-Host "Rule dien MOI | fillable: INBOX+ERROR+PROCESSED+UNDER18+TK1+TK2"
+Write-Host "BAT BUOC gom: INBOX + ERROR + PROCESSED + UNDER18 + TK1 + TK2"
+Write-Host "Rule dien MOI | MISSING chi rematch (buoc 5), khong bo qua archive"
 Write-Host "Route: 2TK+FULL->PROCESSED/U18 | 1TK+FULL->TK1/TK2 | PARTIAL->ERROR | noTTHC->MISSING"
 $code = 0
 for ($r = 1; $r -le $FullRounds; $r++) {
@@ -190,7 +191,8 @@ for ($r = 1; $r -le $RematchRounds; $r++) {
 
 # ---- 6 KIEM TRA LAI fillable (SkipPull: giu branch vua pull) ----
 Write-Host ""
-Write-Host "==== 6/8 KIEM TRA LAI TOAN BO FILLABLE (rule dien moi) ===="
+Write-Host "==== 6/8 KIEM TRA LAI TOAN BO FILLABLE (PROCESSED+TK1+TK2+...) ===="
+Write-Host "BO_SUNG -SkipPull: van duyet PROCESSED + TK1 + TK2 + UNDER18 + ERROR + INBOX"
 Clear-Locks
 & powershell -ExecutionPolicy Bypass -File ".\pipeline\CHAY_BO_SUNG_THIEU.ps1" -SkipPull
 $bs = $LASTEXITCODE

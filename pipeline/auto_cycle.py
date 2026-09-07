@@ -120,7 +120,8 @@ def _collect_scan_dirs(
     under18 = sync / UNDER18_FOLDER
     tk1 = sync / "TK1"
     tk2 = sync / "TK2"
-    # Fillable (da/co TTHC): re-parse + so web; MISSING chi rematch rieng
+    # Fillable (da/co TTHC): re-parse + so web; MISSING chi rematch rieng.
+    # Quet toan bo BAT BUOC gom PROCESSED + TK1 + TK2 (+ ERROR + UNDER 18).
     fillable_extra = [error_dir, processed, under18, tk1, tk2]
 
     if role == "inbox":
@@ -562,6 +563,19 @@ def _run_auto_cycle_inner(
         bot_role=role,
     )
     safe_print(f"Mode: {mode} | bot={role} | scan dirs ({len(scan_dirs)}): {[d.name for d in scan_dirs]}")
+    if full_scan or repair:
+        names_u = {d.name.upper() for d in scan_dirs}
+        safe_print(
+            "FILLABLE_SCOPE: INBOX+ERROR+PROCESSED+UNDER18+TK1+TK2 "
+            "(MISSING = rematch only, not CLS fill)"
+        )
+        for must in ("PROCESSED", "TK1", "TK2"):
+            if role == "inbox":
+                break
+            if must not in names_u and role in {"all", "missing"}:
+                safe_print(f"WARN: scan dirs thieu {must} — quet toan bo khong du")
+        if role == "inbox" and (full_scan or repair):
+            safe_print("Bot INBOX: INBOX+ERROR | Bot AUDIT/missing: PROCESSED+TK1+TK2+UNDER18")
     safe_print(f"MISSING rematch budget this run: {missing_budget} | TK1/TK2 CSV: {rematch_tk_budget}")
     safe_print(
         "Match TTHC: ho+ten DAY DU + nam/ngay sinh/SDT/CCCD "
@@ -680,7 +694,7 @@ def _run_auto_cycle_inner(
                 else:
                     r["status"] = "WAITING_ADMIN"
             elif repair and old in {"IMPORTED", "SKIP_ALREADY_CLS"}:
-                # Kiem tra lai toan bo: re-parse + so web (MCHC/RDW glued, …)
+                # Kiem tra lai toan bo: re-parse + so web (MCHC/RDW glued, ...)
                 r["status"] = "READY_IMPORT"
                 r["import_attempts"] = "0"
                 r["notes"] = f"disk_{tag}_repair_recheck:{old}"[:200]
@@ -829,7 +843,8 @@ def _run_auto_cycle_inner(
 
     max_per_run = int(cfg.get("import_rules", {}).get("max_imports_per_run", 80))
     if full_scan or repair:
-        max_per_run = max(max_per_run, 5000)  # bat so BN cu — khong gioi han thap
+        # Toan bo PROCESSED+TK1+TK2 co the >5k — 1 vong phai an duoc
+        max_per_run = max(max_per_run, 20000)
     else:
         # Hourly/GAP: drain INBOX + rematched MISSING
         max_per_run = max(max_per_run, 2000)
@@ -838,7 +853,7 @@ def _run_auto_cycle_inner(
     # Reserve most slots for new/empty imports; only a few incomplete overwrites
     max_incomplete = int(cfg.get("import_rules", {}).get("max_incomplete_per_run", 200 if repair else 40))
     if full_scan or repair:
-        max_incomplete = max(max_incomplete, 2000)
+        max_incomplete = max(max_incomplete, 20000)
 
     from medinet_creds import get_medinet_accounts
 
@@ -1065,9 +1080,12 @@ def _run_auto_cycle_inner(
                 )
         stuck_in_work = (
             full_scan
+            or repair
             or ("/INBOX" in src_u)
             or ("/MISSING" in src_u)
             or ("/ERROR" in src_u)
+            or ("/PROCESSED" in src_u)
+            or in_under18
             or ("/TK1" in src_u)
             or ("/TK2" in src_u)
         )
