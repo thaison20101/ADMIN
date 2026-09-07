@@ -28,7 +28,7 @@ Write-Host ""
 
 if (-not (Test-Path ".\pipeline\drive_paths.py")) {
   Write-Host "ERROR: chua co pipeline\drive_paths.py"
-  Write-Host "Can code moi (git pull / giai ZIP branch cursor/drive-hourly-pipeline-df0f)"
+  Write-Host "Can code moi (git pull / giai ZIP branch cursor/hourly-flash-fix-df0f)"
   exit 1
 }
 

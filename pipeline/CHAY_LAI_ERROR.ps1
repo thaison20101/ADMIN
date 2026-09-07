@@ -21,7 +21,7 @@ Write-Host "############################################################"
 Write-Host ""
 
 Write-Host "==== 1/3 git pull ===="
-git pull origin cursor/drive-hourly-pipeline-df0f
+git pull origin cursor/hourly-flash-fix-df0f
 
 Write-Host "==== 2/3 reset hang doi INBOX+ERROR ===="
 & python ".\pipeline\ensure_config.py"

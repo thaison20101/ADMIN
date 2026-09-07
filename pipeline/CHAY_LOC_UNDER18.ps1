@@ -27,7 +27,7 @@ Write-Host "############################################################"
 Write-Host "CHI 1 cua so. Rule: nam_sinh >= (nam_nay-17) hoac mau M1/M2/M12."
 
 if (Test-Path -LiteralPath (Join-Path $Repo ".git")) {
-  git pull origin cursor/drive-hourly-pipeline-df0f
+  git pull origin cursor/hourly-flash-fix-df0f
 }
 & python ".\pipeline\ensure_config.py"
 & python ".\pipeline\assert_g_pipeline.py"

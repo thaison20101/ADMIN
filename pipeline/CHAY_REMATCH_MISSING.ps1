@@ -62,7 +62,7 @@ if (Test-Path -LiteralPath $lockFile) {
 }
 
 if (Test-Path -LiteralPath (Join-Path $Repo ".git")) {
-  git pull origin cursor/drive-hourly-pipeline-df0f
+  git pull origin cursor/hourly-flash-fix-df0f
 }
 & python ".\pipeline\ensure_config.py"
 & python -m pip install -q -r ".\pipeline\requirements.txt"

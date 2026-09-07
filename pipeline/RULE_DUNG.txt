@@ -1,4 +1,4 @@
-RULE DUNG (branch cursor/drive-hourly-pipeline-df0f) — CHI 1 RULE
+RULE DUNG (branch cursor/hourly-flash-fix-df0f) — CHI 1 RULE
 ================================================================
 Code path duy nhat: pipeline/tthc_match.py -> resolve_tthc_matches
 Hourly runner:      pipeline/run_hourly.ps1  (Task Scheduler)
@@ -41,7 +41,7 @@ powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_PDF_CHECK.ps1
 LENH AN TOAN MAY A
 ------------------
 cd C:\Users\thais\ADMIN
-git pull origin cursor/drive-hourly-pipeline-df0f
+git pull origin cursor/hourly-flash-fix-df0f
 
 # Full 1 lan + bat hourly:
 powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_TONG_HOP_MOI.ps1

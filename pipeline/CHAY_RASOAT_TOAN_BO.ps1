@@ -24,7 +24,7 @@ Write-Host "############################################################"
 Write-Host ""
 
 Write-Host "==== 1/5 git pull ===="
-git pull origin cursor/drive-hourly-pipeline-df0f
+git pull origin cursor/hourly-flash-fix-df0f
 
 Write-Host "==== 2/5 config ===="
 & python ".\pipeline\ensure_config.py"

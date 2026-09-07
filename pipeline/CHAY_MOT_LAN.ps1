@@ -19,7 +19,7 @@ try {
 } catch {}
 
 Write-Host "==== 1/5 git pull ===="
-git pull origin cursor/drive-hourly-pipeline-df0f
+git pull origin cursor/hourly-flash-fix-df0f
 if ($LASTEXITCODE -ne 0) {
   Write-Host "WARN: git pull failed - tiep tuc neu code da co san"
 }

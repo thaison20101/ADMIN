@@ -3,7 +3,7 @@
 #
 # Usage:
 #   cd C:\Users\thais\ADMIN
-#   git pull origin cursor/drive-hourly-pipeline-df0f
+#   git pull origin cursor/hourly-flash-fix-df0f
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\run_phase_b_import.ps1 -Limit 5
 
 param(

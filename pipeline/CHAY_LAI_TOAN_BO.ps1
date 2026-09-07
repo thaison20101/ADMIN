@@ -2,7 +2,7 @@
 # QUET LAI TOAN BO (nhieu vong cho het hang doi)
 #
 #   cd C:\Users\thais\ADMIN
-#   git pull origin cursor/drive-hourly-pipeline-df0f
+#   git pull origin cursor/hourly-flash-fix-df0f
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_LAI_TOAN_BO.ps1
 # ============================================================
 
@@ -20,14 +20,14 @@ try {
 } catch {}
 
 Write-Host "==== 1/4 git pull ===="
-git pull origin cursor/drive-hourly-pipeline-df0f
+git pull origin cursor/hourly-flash-fix-df0f
 if ($LASTEXITCODE -ne 0) { Write-Host "WARN: git pull failed - tiep tuc" }
 
 if (-not (Test-Path ".\pipeline\CHAY_LAI_TOAN_BO.ps1")) {
   Write-Host "ERROR: van chua co file script. Kiem tra nhanh:"
   Write-Host "  git branch --show-current"
-  Write-Host "  git checkout cursor/drive-hourly-pipeline-df0f"
-  Write-Host "  git pull origin cursor/drive-hourly-pipeline-df0f"
+  Write-Host "  git checkout cursor/hourly-flash-fix-df0f"
+  Write-Host "  git pull origin cursor/hourly-flash-fix-df0f"
   exit 1
 }
 

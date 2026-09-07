@@ -3,8 +3,8 @@
 #
 # MAY A (C:\Users\thais\ADMIN co .git): KHONG CHAY SCRIPT NAY.
 #   cd C:\Users\thais\ADMIN
-#   git pull origin cursor/drive-hourly-pipeline-df0f
-#   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_TONG_HOP_VA_BAT_HOURLY.ps1
+#   git pull origin cursor/hourly-flash-fix-df0f
+#   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_TONG_HOP_MOI.ps1
 #
 # Script nay chi cho may khac khong co git (ZIP giai nen).
 # GIU nguyen pipeline\config.local.json
@@ -17,8 +17,8 @@ if (-not (Test-Path -LiteralPath (Join-Path $Repo ".git"))) {
 } else {
   Write-Host "PHAT HIEN .git - day la may A. KHONG dung CAP_NHAT_TU_GITHUB.ps1."
   Write-Host "Chay thay:"
-  Write-Host "  git pull origin cursor/drive-hourly-pipeline-df0f"
-  Write-Host "  powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_TONG_HOP_VA_BAT_HOURLY.ps1"
+  Write-Host "  git pull origin cursor/hourly-flash-fix-df0f"
+  Write-Host "  powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_TONG_HOP_MOI.ps1"
   exit 0
 }
 
@@ -27,7 +27,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $Repo "pipeline"))) {
 }
 Set-Location $Repo
 
-$Branch = "cursor/drive-hourly-pipeline-df0f"
+$Branch = "cursor/hourly-flash-fix-df0f"
 $ZipUrl = "https://github.com/thaison20101/ADMIN/archive/refs/heads/$Branch.zip"
 $Tmp = Join-Path $env:TEMP "ADMIN_pipeline_update"
 $Zip = Join-Path $env:TEMP "ADMIN_$Branch.zip"

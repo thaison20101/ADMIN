@@ -35,7 +35,7 @@ Write-Host "############################################################"
 Write-Host ""
 
 Write-Host "==== 1/6 git pull ===="
-git pull origin cursor/drive-hourly-pipeline-df0f
+git pull origin cursor/hourly-flash-fix-df0f
 if ($LASTEXITCODE -ne 0) { Write-Host "WARN: git pull failed - tiep tuc neu code da co" }
 
 Write-Host "==== 2/6 config + pip ===="

@@ -3,7 +3,7 @@
 # Doi 0.2 mg/dL -> ~3.39 umol/L, ghi lai cac ca PROCESSED thieu/sai.
 #
 #   cd C:\Users\thais\ADMIN
-#   git pull origin cursor/drive-hourly-pipeline-df0f
+#   git pull origin cursor/hourly-flash-fix-df0f
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_REPAIR_URO.ps1
 # ============================================================
 
@@ -23,7 +23,7 @@ Write-Host "############################################################"
 Write-Host ""
 
 Write-Host "==== 1/3 git pull ===="
-git pull origin cursor/drive-hourly-pipeline-df0f
+git pull origin cursor/hourly-flash-fix-df0f
 
 Write-Host "==== 2/3 repair_urobilinogen.py --all ===="
 & python ".\pipeline\ensure_config.py"

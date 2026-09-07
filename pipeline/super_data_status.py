@@ -16,7 +16,7 @@ G_SUPER_DATA_VARIANTS = (
 )
 
 FEATURES_DONE = """
-TINH NANG DA TRIEN KHAI (branch cursor/drive-hourly-pipeline-df0f)
+TINH NANG DA TRIEN KHAI (branch cursor/hourly-flash-fix-df0f)
 ================================================================
 1. Match TTHC: ho+ten DAY DU + nam/SDT/CCCD (thieu 1 param van OK)
 2. Unique name khong param -> dien; trung ten >=2 -> UNDER 18
@@ -40,7 +40,7 @@ Excel: pipeline\\work\\build\\excel_preview\\PDF_CHECK_*.xlsx
 LENH CHAY MAY A (CHI 2 LENH AN TOAN)
 ------------------------------------
 cd C:\\Users\\thais\\ADMIN
-git pull origin cursor/drive-hourly-pipeline-df0f
+git pull origin cursor/hourly-flash-fix-df0f
 
 # Full 1 lan + bat hourly (dung):
 powershell -ExecutionPolicy Bypass -File .\\pipeline\\CHAY_TONG_HOP_MOI.ps1

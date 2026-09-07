@@ -45,8 +45,8 @@ Write-Host ""
 Write-Host "==== 1/3 cap nhat code (git neu co; khong thi bo qua) ===="
 if (Test-Path -LiteralPath (Join-Path $Repo ".git")) {
   git fetch origin
-  git checkout cursor/drive-hourly-pipeline-df0f
-  git pull origin cursor/drive-hourly-pipeline-df0f
+  git checkout cursor/hourly-flash-fix-df0f
+  git pull origin cursor/hourly-flash-fix-df0f
 } else {
   Write-Host "Khong co .git (thuong do giai ZIP) - bo qua git pull."
 }
