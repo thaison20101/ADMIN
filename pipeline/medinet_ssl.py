@@ -1,25 +1,27 @@
 #!/usr/bin/env python3
-"""SSL context for Medinet HTTPS (clinic PCs often have SSL-inspect / self-signed MITM)."""
+"""SSL context for Medinet HTTPS (clinic PCs often have SSL-inspect / self-signed MITM).
+
+Default: VERIFY OFF. May A always needs this. Strict only if MEDINET_SSL_VERIFY=1.
+"""
 
 from __future__ import annotations
 
 import os
 import ssl
-from functools import lru_cache
+import sys
 
 
 def _want_verify() -> bool:
-    """Default OFF: corporate/self-signed chain breaks urllib on may A.
+    """Default OFF. Only strict when MEDINET_SSL_VERIFY=1/true.
 
-    Enable strict verify with:
-      set MEDINET_SSL_VERIFY=1
-    or config.local.json medinet.ssl_verify = true
+    config.local.json ssl_verify is forced false by ensure_config; env wins.
     """
     env = (os.environ.get("MEDINET_SSL_VERIFY") or "").strip().lower()
     if env in {"1", "true", "yes", "on"}:
         return True
     if env in {"0", "false", "no", "off"}:
         return False
+    # Prefer config only when env unset; treat missing/false as OFF
     try:
         from pathlib import Path
         import json
@@ -38,16 +40,75 @@ def _want_verify() -> bool:
     return False
 
 
-@lru_cache(maxsize=1)
+_ctx: ssl.SSLContext | None = None
+_logged = False
+_opener_installed = False
+
+
 def medinet_ssl_context() -> ssl.SSLContext:
-    if _want_verify():
-        return ssl.create_default_context()
-    ctx = ssl._create_unverified_context()  # noqa: S323 - intentional for MITM proxy
-    return ctx
+    global _ctx, _logged
+    verify = _want_verify()
+    if _ctx is None:
+        if verify:
+            _ctx = ssl.create_default_context()
+        else:
+            _ctx = ssl._create_unverified_context()  # noqa: S323 - MITM proxy on may A
+    if not _logged:
+        _logged = True
+        mode = "ON (strict)" if verify else "OFF (self-signed OK)"
+        print(f"medinet_ssl: verify={mode}", file=sys.stderr, flush=True)
+    return _ctx
+
+
+def reset_ssl_cache() -> None:
+    """Call after ensure_config rewrites ssl_verify."""
+    global _ctx, _logged, _opener_installed
+    _ctx = None
+    _logged = False
+    _opener_installed = False
+
+
+def install_medinet_https_opener() -> None:
+    """Belt-and-suspenders: default HTTPS handler uses Medinet SSL policy."""
+    global _opener_installed
+    if _opener_installed:
+        return
+    import urllib.request
+
+    ctx = medinet_ssl_context()
+    https = urllib.request.HTTPSHandler(context=ctx)
+    opener = urllib.request.build_opener(https)
+    urllib.request.install_opener(opener)
+    _opener_installed = True
 
 
 def urlopen(req, timeout: float = 60):
     """urllib.request.urlopen with Medinet SSL policy."""
     import urllib.request
 
+    install_medinet_https_opener()
     return urllib.request.urlopen(req, timeout=timeout, context=medinet_ssl_context())
+
+
+def probe_auth() -> int:
+    """Exit 0 if Medinet auth works with current SSL policy; else 2."""
+    reset_ssl_cache()
+    install_medinet_https_opener()
+    print(f"probe: MEDINET_SSL_VERIFY={os.environ.get('MEDINET_SSL_VERIFY')!r} want_verify={_want_verify()}")
+    try:
+        from medinet_api import authenticate
+        from medinet_creds import get_medinet_accounts
+
+        accts = get_medinet_accounts({})
+        tok = authenticate(accts[0]["user"], accts[0]["password"])
+        print(f"probe: auth OK account={accts[0]['id']} token_len={len(tok or '')}")
+        return 0
+    except Exception as e:
+        print(f"probe: AUTH FAIL: {e}")
+        if "CERTIFICATE" in str(e).upper() or "SSL" in str(e).upper():
+            print("probe: SSL still failing - ensure MEDINET_SSL_VERIFY=0 and pull latest medinet_ssl.py")
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(probe_auth())

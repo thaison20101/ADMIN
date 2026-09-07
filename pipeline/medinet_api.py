@@ -10,7 +10,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from medinet_ssl import urlopen as _urlopen
+from medinet_ssl import install_medinet_https_opener, urlopen as _urlopen
+
+# May A: install unverified HTTPS opener before any Medinet call
+install_medinet_https_opener()
 
 BE = "https://be-qlskcd.medinet.org.vn"
 SITE_ID = "130"

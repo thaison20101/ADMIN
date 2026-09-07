@@ -828,6 +828,20 @@ def _run_auto_cycle_inner(
     safe_print(f"Missing csv: {missing_pdf_n} (khong list 10k G:; so nay giam khi rematch xong)")
     safe_print(f"Error disk: {error_dir} (pdfs={error_pdf_n}) csv={counts0.get('error', 0)}")
     safe_print(f"Processed csv: {processed_pdf_n}")
+    safe_print(
+        f"Archive csv: tk1={counts0.get('tk1', 0)} tk2={counts0.get('tk2', 0)} "
+        f"under18={counts0.get('under18', 0)} processed={processed_pdf_n}"
+    )
+    archive_n = (
+        int(processed_pdf_n)
+        + int(counts0.get("tk1", 0))
+        + int(counts0.get("tk2", 0))
+        + int(counts0.get("under18", 0))
+    )
+    if (full_scan or repair) and archive_n >= 500:
+        safe_print(
+            f"NOTE: quet toan bo ~{archive_n} PDF archive — chay LAU (khong xong trong vai phut)."
+        )
     if inbox_pdf_n + error_pdf_n == 0 and missing_pdf_n == 0:
         safe_print("WARN: 0 PDF inbox/error and 0 MISSING in tracking.")
 

@@ -21,6 +21,8 @@ $env:PKDK_PYTHON = $Python
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUTF8 = "1"
 $env:PYTHONUNBUFFERED = "1"
+# May A self-signed: force OFF (override only with MEDINET_SSL_VERIFY=1 manually)
+if (-not $env:MEDINET_SSL_VERIFY) { $env:MEDINET_SSL_VERIFY = "0" }
 try {
   [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
   $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -37,6 +39,7 @@ if (-not (Test-Path ".\pipeline\config.local.json")) {
 }
 
 & $Python ".\pipeline\ensure_config.py" | Out-Null
+Write-Host ("MEDINET_SSL_VERIFY=" + $env:MEDINET_SSL_VERIFY)
 
 $MissingBudget = 2500
 

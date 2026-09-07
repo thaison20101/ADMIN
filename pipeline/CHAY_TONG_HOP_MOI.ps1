@@ -4,16 +4,10 @@
 # Chay 1 lan: FULL 2 bot -> rematch MISSING -> kiem tra lai TOAN BO fillable
 #   -> BAT hourly (nguyen tac QUET FILE cu)
 # Rule DIEN: moi (hang ngang ten XN; dam/gach van dien; khong lay khoang tham chieu).
-#
-# 2 TK Medinet (hardcode trong medinet_creds.py + env duoi day):
-#   pkdkthuankieu / P@ssw0rd
-#   pkdk_Thuankieu / pkdk_Thuankieu#2026
+# Quet TOAN BO PDF: INBOX+ERROR+PROCESSED+UNDER18+TK1+TK2 (chay LAU).
 #
 #   cd C:\Users\thais\ADMIN
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_TONG_HOP_MOI.ps1
-#
-# Chi cap nhat theo doi (khong chay bot):
-#   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_TONG_HOP_MOI.ps1 -ChiCapNhatTienDo
 # ============================================================
 
 param(
@@ -21,7 +15,8 @@ param(
   [switch]$ChiCapNhatTienDo,
   [int]$FullRounds = 3,
   [int]$RematchRounds = 4,
-  [int]$MissingBudget = 2500
+  [int]$MissingBudget = 2500,
+  [int]$MinRoundSeconds = 180
 )
 
 $ErrorActionPreference = "Continue"
@@ -32,11 +27,12 @@ Set-Location $Repo
 . (Join-Path $PSScriptRoot "Resolve-PkdkPython.ps1")
 $Python = Resolve-PkdkPython
 $env:PKDK_PYTHON = $Python
+# May A: self-signed MITM - NEVER verify unless operator overrides
+$env:MEDINET_SSL_VERIFY = "0"
 
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUTF8 = "1"
 $env:PYTHONUNBUFFERED = "1"
-# 2 TK Medinet (cung hardcode trong pipeline/medinet_creds.py)
 if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdkthuankieu" }
 if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "P@ssw0rd" }
 if (-not $env:MEDINET_USER_2) { $env:MEDINET_USER_2 = "pkdk_Thuankieu" }
@@ -48,18 +44,30 @@ $FlagFull = Join-Path $Repo "pipeline\work\build\FIRST_FULL_SCAN_DONE.txt"
 $LockDir = Join-Path $Repo "pipeline\work\locks"
 $IdxCache = Join-Path $Repo "pipeline\work\index_cache"
 $LocalHb = Join-Path $Repo "pipeline\work\logs\LAST_HOURLY_OK.txt"
+$LogDir = Join-Path $Repo "pipeline\work\logs"
+$script:FatalAbort = ""
+$script:HadSsl = $false
+$script:HadEarlyExit = $false
+
+function Ensure-LogDir {
+  if (-not (Test-Path -LiteralPath $LogDir)) {
+    New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+  }
+}
 
 function Get-Counts {
   $lines = @(& $Python ".\pipeline\print_counts.py" 2>$null)
   $counts = ($lines | Select-Object -Last 1)
   $parts = @($counts -split "\t")
-  $o = @{ inbox = 0; missing = 0; error = 0; processed = 0; under18 = 0; raw = $counts }
+  $o = @{ inbox = 0; missing = 0; error = 0; processed = 0; under18 = 0; tk1 = 0; tk2 = 0; raw = $counts }
   foreach ($p in $parts) {
     if ($p -match "^inbox=(\d+)$") { $o.inbox = [int]$Matches[1] }
     if ($p -match "^missing=(\d+)$") { $o.missing = [int]$Matches[1] }
     if ($p -match "^error=(\d+)$") { $o.error = [int]$Matches[1] }
     if ($p -match "^processed=(\d+)$") { $o.processed = [int]$Matches[1] }
     if ($p -match "^under18=(\d+)$") { $o.under18 = [int]$Matches[1] }
+    if ($p -match "^tk1=(\d+)$") { $o.tk1 = [int]$Matches[1] }
+    if ($p -match "^tk2=(\d+)$") { $o.tk2 = [int]$Matches[1] }
   }
   return $o
 }
@@ -83,30 +91,102 @@ function Assert-G {
   }
 }
 
+function Assert-Ssl {
+  Write-Host "==== SSL probe (phai OK truoc khi quet toan bo PDF) ===="
+  & $Python ".\pipeline\medinet_ssl.py"
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "DUNG: Medinet SSL/auth FAIL. KHONG danh FULL_DONE. KHONG bat hourly."
+    Write-Host "  Fix: MEDINET_SSL_VERIFY=0 + git pull cursor/hourly-flash-fix-df0f"
+    $script:FatalAbort = "ssl_verify"
+    $script:HadSsl = $true
+    exit 2
+  }
+  Write-Host "OK: SSL verify OFF + auth Medinet"
+}
+
+function Test-LogBlobSsl([string]$Blob) {
+  if ($Blob -match "CERTIFICATE_VERIFY_FAILED|SSLCertVerificationError|self-signed certificate") {
+    return $true
+  }
+  return $false
+}
+
 function Start-TwoBots {
   param(
+    [string]$Tag = "bots",
     [string[]]$ExtraInbox = @(),
-    [string[]]$ExtraMissing = @("--missing-budget", "$MissingBudget")
+    [string[]]$ExtraMissing = @("--missing-budget", "$MissingBudget"),
+    [int]$ExpectArchive = 0
   )
+  Ensure-LogDir
+  $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+  $logInbox = Join-Path $LogDir ("tonghop-{0}-inbox-{1}.log" -f $Tag, $stamp)
+  $logMiss = Join-Path $LogDir ("tonghop-{0}-miss-{1}.log" -f $Tag, $stamp)
   $argsInbox = @("-u", ".\pipeline\hourly_sync.py", "--bot", "inbox", "--missing-budget", "0") + $ExtraInbox
   $argsMiss = @("-u", ".\pipeline\hourly_sync.py", "--bot", "missing") + $ExtraMissing
-  $b1 = Start-Process -FilePath $Python -ArgumentList $argsInbox -WorkingDirectory $Repo -PassThru -NoNewWindow
-  $b2 = Start-Process -FilePath $Python -ArgumentList $argsMiss -WorkingDirectory $Repo -PassThru -NoNewWindow
-  Write-Host ("  Bot INBOX PID={0} | Bot MISSING PID={1} | python={2}" -f $b1.Id, $b2.Id, $Python)
+  $t0 = Get-Date
+  $b1 = Start-Process -FilePath $Python -ArgumentList $argsInbox -WorkingDirectory $Repo `
+    -PassThru -NoNewWindow -RedirectStandardOutput $logInbox -RedirectStandardError ($logInbox + ".err")
+  $b2 = Start-Process -FilePath $Python -ArgumentList $argsMiss -WorkingDirectory $Repo `
+    -PassThru -NoNewWindow -RedirectStandardOutput $logMiss -RedirectStandardError ($logMiss + ".err")
+  Write-Host ("  Bot INBOX PID={0} | AUDIT/MISSING PID={1}" -f $b1.Id, $b2.Id)
+  Write-Host ("  log_inbox={0}" -f $logInbox)
+  Write-Host ("  log_audit={0}" -f $logMiss)
   Wait-Process -Id $b1.Id, $b2.Id -ErrorAction SilentlyContinue
+  $sec = [int]((Get-Date) - $t0).TotalSeconds
   $c1 = $b1.ExitCode; if ($null -eq $c1) { $c1 = 0 }
   $c2 = $b2.ExitCode; if ($null -eq $c2) { $c2 = 0 }
-  return [Math]::Max($c1, $c2)
+  $code = [Math]::Max([int]$c1, [int]$c2)
+  Write-Host ("  duration_s={0} exit inbox={1} audit={2}" -f $sec, $c1, $c2)
+
+  $blob = ""
+  foreach ($p in @($logInbox, ($logInbox + ".err"), $logMiss, ($logMiss + ".err"))) {
+    if (Test-Path -LiteralPath $p) {
+      $blob += (Get-Content -LiteralPath $p -Raw -ErrorAction SilentlyContinue)
+    }
+  }
+  if (Test-LogBlobSsl $blob) {
+    Write-Host "!! SSL trong log bot - DUNG. Khong coi la quet xong."
+    $script:HadSsl = $true
+    $script:FatalAbort = "ssl_verify"
+    $code = 2
+  }
+  if ($ExpectArchive -ge 500 -and $sec -lt $MinRoundSeconds -and $code -eq 0) {
+    Write-Host ("!! Vong qua NHANH duration_s={0} < {1}s trong khi archive~{2} PDF." -f $sec, $MinRoundSeconds, $ExpectArchive)
+    Write-Host "   Day la dau hieu abort/skip - KHONG phai quet toan bo that."
+    $script:HadEarlyExit = $true
+    $script:FatalAbort = "too_fast"
+    $code = 2
+  }
+  if ($blob -match "Re-queued from disk scan dirs: (\d+)") {
+    Write-Host ("  requeued_disk={0}" -f $Matches[1])
+  }
+  if ($blob -match "FILLABLE_SCOPE") {
+    Write-Host "  OK: FILLABLE_SCOPE co trong log"
+  }
+  $dien = ([regex]::Matches($blob, "DIEN OK")).Count
+  $partial = ([regex]::Matches($blob, "DIEN PARTIAL")).Count
+  Write-Host ("  DIEN OK lines~{0} PARTIAL~{1}" -f $dien, $partial)
+  # Tail stderr if failed
+  if ($code -ne 0) {
+    foreach ($p in @(($logInbox + ".err"), ($logMiss + ".err"))) {
+      if (Test-Path -LiteralPath $p) {
+        Write-Host ("--- tail {0} ---" -f $p)
+        Get-Content -LiteralPath $p -Tail 20 -ErrorAction SilentlyContinue
+      }
+    }
+  }
+  return $code
 }
 
 Write-Host ""
 Write-Host "############################################################"
-Write-Host "#  TONG HOP MAY A: FULL RECHECK + HOURLY + SUPER DATA      #"
+Write-Host "#  TONG HOP MAY A: QUET TOAN BO PDF + HOURLY               #"
 Write-Host "############################################################"
 Write-Host ("Python: " + $Python)
 Write-Host ("Branch: " + $Branch)
-Write-Host "PDF : G:\Drive cua toi\PKDK_Thuankieu_Pipeline\INBOX_CLS ..."
-Write-Host "Theo doi: G:\Drive cua toi\build for Supper Data\TIEN_DO_THEO_DOI.txt"
+Write-Host "MEDINET_SSL_VERIFY=0 (ep OFF)"
+Write-Host "Quet TOAN BO: INBOX+ERROR+PROCESSED+UNDER18+TK1+TK2 - chay LAU"
 Write-Host "KHONG click vao cua so PowerShell (Select-pause lam dung)."
 
 if ($ChiCapNhatTienDo) {
@@ -136,10 +216,11 @@ if (-not $SkipPull) {
 & $Python ".\pipeline\ensure_config.py"
 & $Python -m pip install -q -r ".\pipeline\requirements.txt"
 
-# ---- 3 assert G + dong bo folder ----
+# ---- 3 assert G + SSL ----
 Write-Host ""
-Write-Host "==== 3/8 assert G: + dong bo folder ===="
+Write-Host "==== 3/8 assert G: + SSL + dong bo folder ===="
 Assert-G
+Assert-Ssl
 & $Python ".\pipeline\drive_paths.py"
 if (Test-Path -LiteralPath $IdxCache) {
   Get-ChildItem -LiteralPath $IdxCache -Filter "*.pkl" -ErrorAction SilentlyContinue |
@@ -147,40 +228,62 @@ if (Test-Path -LiteralPath $IdxCache) {
 }
 if (Test-Path -LiteralPath $FlagFull) {
   Remove-Item -LiteralPath $FlagFull -Force -ErrorAction SilentlyContinue
+  Write-Host "Da xoa FIRST_FULL_SCAN_DONE (se chi ghi lai khi quet that OK)"
 }
-Write-Host ("COUNTS truoc: {0}" -f (Get-Counts).raw)
+$beforeAll = Get-Counts
+Write-Host ("COUNTS truoc: {0}" -f $beforeAll.raw)
+$archiveEst = [int]$beforeAll.processed + [int]$beforeAll.tk1 + [int]$beforeAll.tk2 + [int]$beforeAll.under18
+Write-Host ("Archive uoc tinh (processed+tk1+tk2+u18)={0} - vong full phai LAU" -f $archiveEst)
 
-# ---- 4 FULL SCAN 2 bot (nhieu vong) ----
+# ---- 4 FULL SCAN 2 bot ----
 Write-Host ""
-Write-Host "==== 4/8 FULL SCAN + REPAIR TOAN BO (2 bot) ===="
-Write-Host "BAT BUOC gom: INBOX + ERROR + PROCESSED + UNDER18 + TK1 + TK2"
-Write-Host "Rule dien MOI | MISSING chi rematch (buoc 5), khong bo qua archive"
-Write-Host "Route: 2TK+FULL->PROCESSED/U18 | 1TK+FULL->TK1/TK2 | PARTIAL->ERROR | noTTHC->MISSING"
+Write-Host "==== 4/8 FULL SCAN + REPAIR TOAN BO PDF (2 bot) ===="
+Write-Host "BAT BUOC: INBOX + ERROR + PROCESSED + UNDER18 + TK1 + TK2"
 $code = 0
 for ($r = 1; $r -le $FullRounds; $r++) {
   Write-Host ("----- FULL vong {0}/{1} -----" -f $r, $FullRounds)
   Assert-G
+  Assert-Ssl
   $before = Get-Counts
   Write-Host ("COUNTS before: {0}" -f $before.raw)
-  $code = Start-TwoBots -ExtraInbox @("--full-scan", "--repair") -ExtraMissing @(
+  $arch = [int]$before.processed + [int]$before.tk1 + [int]$before.tk2 + [int]$before.under18
+  $code = Start-TwoBots -Tag ("full{0}" -f $r) -ExtraInbox @("--full-scan", "--repair") -ExtraMissing @(
     "--full-scan", "--repair", "--missing-budget", "$MissingBudget"
-  )
+  ) -ExpectArchive $arch
+  if ($code -ne 0) {
+    Write-Host "DUNG buoc 4: bot fail/SSL/too_fast. KHONG danh FULL_DONE."
+    break
+  }
   $after = Get-Counts
   Write-Host ("COUNTS after : {0}" -f $after.raw)
-  if ($r -ge 2 -and ($after.inbox -eq $before.inbox) -and ($after.processed -eq $before.processed) -and ($after.error -eq $before.error)) {
-    Write-Host "FULL het tien do."
+  if ($r -ge 2 -and (-not $script:HadSsl) -and ($after.inbox -eq $before.inbox) -and ($after.processed -eq $before.processed) -and ($after.error -eq $before.error)) {
+    Write-Host "FULL het tien do (DELTA=0, khong SSL)."
     break
   }
 }
 
-# ---- 5 REMATCH MISSING 2 bot ----
+if ($script:HadSsl -or $code -ne 0) {
+  Write-Host ""
+  Write-Host "========== DUNG TONG HOP (chua xong that) =========="
+  Write-Host ("abort={0} code={1}" -f $script:FatalAbort, $code)
+  Write-Host "KHONG ghi FIRST_FULL_SCAN_DONE. KHONG bat hourly."
+  Write-Host "Sua SSL/pull code roi chay lai CHAY_TONG_HOP_MOI.ps1"
+  exit 2
+}
+
+# ---- 5 REMATCH MISSING ----
 Write-Host ""
-Write-Host "==== 5/8 REMATCH MISSING (2 bot, CSV khong list 10k G:) ===="
+Write-Host "==== 5/8 REMATCH MISSING (2 bot, CSV) ===="
 for ($r = 1; $r -le $RematchRounds; $r++) {
   Write-Host ("----- REMATCH vong {0}/{1} -----" -f $r, $RematchRounds)
   Assert-G
+  Assert-Ssl
   $before = Get-Counts
-  $code = Start-TwoBots -ExtraMissing @("--missing-budget", "$MissingBudget")
+  $code = Start-TwoBots -Tag ("rematch{0}" -f $r) -ExtraMissing @("--missing-budget", "$MissingBudget") -ExpectArchive 0
+  if ($script:HadSsl -or (($code -eq 2) -and ($script:FatalAbort -eq "ssl_verify"))) {
+    Write-Host "DUNG rematch do SSL."
+    exit 2
+  }
   $after = Get-Counts
   $dP = $after.processed - $before.processed
   $dE = $after.error - $before.error
@@ -189,20 +292,24 @@ for ($r = 1; $r -le $RematchRounds; $r++) {
   if ($r -ge 2 -and ($dP -eq 0) -and ($dE -eq 0) -and ($dM -eq 0)) { break }
 }
 
-# ---- 6 KIEM TRA LAI fillable (SkipPull: giu branch vua pull) ----
+# ---- 6 KIEM TRA LAI fillable ----
 Write-Host ""
-Write-Host "==== 6/8 KIEM TRA LAI TOAN BO FILLABLE (PROCESSED+TK1+TK2+...) ===="
-Write-Host "BO_SUNG -SkipPull: van duyet PROCESSED + TK1 + TK2 + UNDER18 + ERROR + INBOX"
+Write-Host "==== 6/8 KIEM TRA LAI TOAN BO FILLABLE (PROCESSED+TK1+TK2) ===="
 Clear-Locks
 & powershell -ExecutionPolicy Bypass -File ".\pipeline\CHAY_BO_SUNG_THIEU.ps1" -SkipPull
 $bs = $LASTEXITCODE
 if ($bs -ne 0) {
-  Write-Host "WARN: kiem tra lai exit=$bs (van tiep tuc bat hourly)"
+  Write-Host "DUNG: BO_SUNG exit=$bs - KHONG danh FULL_DONE / KHONG bat hourly."
+  exit 2
 }
 
-# ---- 7 danh dau full xong ----
+# ---- 7 danh dau full xong (chi khi that su OK) ----
 Write-Host ""
 Write-Host "==== 7/8 Danh dau FIRST_FULL_SCAN_DONE ===="
+if ($script:HadSsl -or $script:HadEarlyExit) {
+  Write-Host "BO QUA: van con abort=$($script:FatalAbort) - khong ghi flag."
+  exit 2
+}
 try {
   $fd = Split-Path -Parent $FlagFull
   if (-not (Test-Path -LiteralPath $fd)) {
@@ -214,18 +321,16 @@ try {
   Write-Host ("WARN flag: " + $_)
 }
 
-# ---- 8 BAT hourly + cap nhat G ----
+# ---- 8 BAT hourly ----
 Write-Host ""
 Write-Host "==== 8/8 BAT hourly + cap nhat Super Data ===="
-Write-Host "Clear python/lock truoc khi Start task (tranh abort=another_instance)."
 Stop-Process -Name python -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 Clear-Locks
 
 & powershell -ExecutionPolicy Bypass -File ".\pipeline\install_hourly_task.ps1"
-# install_hourly_task da Start 1 lan - KHONG Start trung
 
-Write-Host "Doi heartbeat ~25s (phat hien nhay tat som)..."
+Write-Host "Doi heartbeat ~25s..."
 Start-Sleep -Seconds 25
 $hbPaths = @($LocalHb)
 try {
@@ -235,50 +340,18 @@ try {
     $hbPaths += (Join-Path $build "logs\LAST_HOURLY_OK.txt")
   }
 } catch {}
-$sawHb = $false
 foreach ($hp in $hbPaths) {
   if (Test-Path -LiteralPath $hp) {
-    $sawHb = $true
     Write-Host ("--- HEARTBEAT " + $hp + " ---")
     Get-Content -LiteralPath $hp -Encoding UTF8
-    $txt = Get-Content -LiteralPath $hp -Raw -Encoding UTF8
-    if ($txt -match "duration_s=(\d+)") {
-      $dur = [int]$Matches[1]
-      if ($dur -ge 0 -and $dur -lt 15) {
-        Write-Host "!! Hourly van NHAY (duration_s<$dur). Chay: .\pipeline\CHAY_KIEM_HOURLY.ps1"
-      }
-    }
-    if ($txt -match "abort=([^\r\n]+)" -and $Matches[1].Trim() -ne "") {
-      Write-Host ("!! abort=" + $Matches[1].Trim() + " - xem CHAY_KIEM_HOURLY.ps1")
-    }
   }
-}
-if (-not $sawHb) {
-  Write-Host "WARN: chua co LAST_HOURLY_OK - task co the van dang chay (OK neu State=Running)."
-  try {
-    $st = (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue).State
-    Write-Host ("Task State: " + $st)
-  } catch {}
 }
 
 & $Python ".\pipeline\super_data_status.py" --publish
 
 $final = Get-Counts
 Write-Host ""
-Write-Host "========== XONG TONG HOP =========="
+Write-Host "========== XONG TONG HOP (quet that OK) =========="
 Write-Host ("COUNTS: {0}" -f $final.raw)
-Write-Host ""
-Write-Host "Theo doi tren G:"
-Write-Host "  G:\Drive cua toi\build for Supper Data\TIEN_DO_THEO_DOI.txt"
-Write-Host "  G:\Drive cua toi\build for Supper Data\last_counts.txt"
-Write-Host "  G:\Drive cua toi\build for Supper Data\logs\LAST_HOURLY_OK.txt"
-Write-Host ""
-Write-Host "Folder PDF:"
-Write-Host "  INBOX_CLS = moi | MISSING = chua TTHC | ERROR = PARTIAL/mau khac"
-Write-Host "  PROCESSED = FULL ca 2 TK | TK1/TK2 = FULL chi 1 TK"
-Write-Host "  UNDER 18 = tre FULL / trung ten / loi PDF"
-Write-Host ""
 Write-Host "Nghiem thu: form VONG QUOC CHU phai co MCHC/RDW neu PDF co."
-Write-Host "2 bot rieng (khong full): .\pipeline\CHAY_2_BOT_SONG_SONG.ps1"
-if ($code -ne 0) { exit $code }
 exit 0
