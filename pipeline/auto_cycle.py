@@ -110,14 +110,18 @@ def _collect_scan_dirs(
     """Folders whose PDFs are registered + re-queued this run.
 
     bot_role inbox  → chi INBOX_CLS (+ ERROR khi full/repair)
-    bot_role missing → chi MISSING (+ PROCESSED khi full audit)
-    bot_role all   → mac dinh cu
+    bot_role missing → chi MISSING (+ PROCESSED/UNDER18/TK1/TK2 khi full/repair)
+    bot_role all   → mac dinh cu; repair = moi folder fillable (khong chi PROCESSED)
     """
     from drive_paths import UNDER18_FOLDER, discover_inbox_dirs
 
     role = (bot_role or "all").lower()
     inbox_dirs = discover_inbox_dirs(sync, inbox)
     under18 = sync / UNDER18_FOLDER
+    tk1 = sync / "TK1"
+    tk2 = sync / "TK2"
+    # Fillable (da/co TTHC): re-parse + so web; MISSING chi rematch rieng
+    fillable_extra = [error_dir, processed, under18, tk1, tk2]
 
     if role == "inbox":
         dirs = list(inbox_dirs)
@@ -126,14 +130,19 @@ def _collect_scan_dirs(
         return _uniq_dirs(dirs)
 
     if role == "missing":
+        # MISSING: hourly/full walks folder; repair = chi audit fillable (TK1/TK2/…)
+        # Rematch MISSING dung CSV + missing_budget (khong rglob 10k tren G:).
+        fillable = [processed, under18, tk1, tk2]
+        if repair and not full_scan:
+            return _uniq_dirs(fillable)
         dirs = [missing]
         if full_scan:
-            dirs.extend([processed, under18])
+            dirs.extend(fillable)
         return _uniq_dirs([d for d in dirs if d])
 
     if not full_scan:
         if repair:
-            return _uniq_dirs(list(inbox_dirs) + [error_dir, processed, under18])
+            return _uniq_dirs(list(inbox_dirs) + fillable_extra)
         return _uniq_dirs(list(inbox_dirs))
     roots: list[Path] = []
     skip = {".git"}
@@ -141,7 +150,7 @@ def _collect_scan_dirs(
         for child in sorted(sync.iterdir()):
             if child.is_dir() and child.name.lower() not in skip:
                 roots.append(child)
-    for must in (*inbox_dirs, missing, error_dir, processed, under18):
+    for must in (*inbox_dirs, missing, *fillable_extra):
         if must.exists() and must not in roots:
             roots.append(must)
     return roots
@@ -670,6 +679,12 @@ def _run_auto_cycle_inner(
                     rematch_missing_left -= 1
                 else:
                     r["status"] = "WAITING_ADMIN"
+            elif repair and old in {"IMPORTED", "SKIP_ALREADY_CLS"}:
+                # Kiem tra lai toan bo: re-parse + so web (MCHC/RDW glued, …)
+                r["status"] = "READY_IMPORT"
+                r["import_attempts"] = "0"
+                r["notes"] = f"disk_{tag}_repair_recheck:{old}"[:200]
+                requeued_disk += 1
             elif old in {"IMPORTED", "SKIP_ALREADY_CLS"}:
                 if (r.get("notes") or "") != f"disk_{tag}_done:{old}":
                     r["status"] = old
@@ -1016,7 +1031,7 @@ def _run_auto_cycle_inner(
             in_missing
             or in_tk1
             or in_tk2
-            or (full_scan and (in_processed or in_under18))
+            or ((full_scan or repair) and (in_processed or in_under18))
         ):
             stats["skipped_bot_role"] += 1
             continue
@@ -1034,6 +1049,8 @@ def _run_auto_cycle_inner(
             or ("/ERROR" in src_u)
             or ("/PROCESSED" in src_u)
             or in_under18
+            or in_tk1
+            or in_tk2
         ):
             continue
         if (not full_scan) and ("/MISSING" in src_u):
