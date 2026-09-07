@@ -2,7 +2,8 @@
 # 1 LENH DUY NHAT MAY A - PKDK THUAN KIEU (ASCII-only)
 #
 # Chay 1 lan: FULL 2 bot -> rematch MISSING -> Urea -> BAT hourly
-# Sau do hourly tu quet INBOX_CLS + MISSING nhu cu.
+# Sau do hourly tu quet INBOX_CLS + MISSING theo NGUYEN TAC QUET FILE CU.
+# Rule DIEN: moi (hang ngang ten XN; dam/gach van dien; khong lay khoang tham chieu).
 #
 # 2 TK Medinet (hardcode trong medinet_creds.py + env duoi day):
 #   pkdkthuankieu / P@ssw0rd
@@ -55,7 +56,7 @@ if (-not $env:MEDINET_USER_2) { $env:MEDINET_USER_2 = "pkdk_Thuankieu" }
 if (-not $env:MEDINET_PASS_2) { $env:MEDINET_PASS_2 = "pkdk_Thuankieu#2026" }
 
 $TaskName = "PKDK_Hourly_Sync"
-$Branch = "cursor/drive-hourly-pipeline-df0f"
+$Branch = "cursor/hourly-flash-fix-df0f"
 $FlagFull = Join-Path $Repo "pipeline\work\build\FIRST_FULL_SCAN_DONE.txt"
 $LockDir = Join-Path $Repo "pipeline\work\locks"
 $IdxCache = Join-Path $Repo "pipeline\work\index_cache"

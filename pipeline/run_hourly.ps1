@@ -231,6 +231,9 @@ try {
 if ($abort -eq "cases_csv_encoding") {
   Write-Host "!! cases.csv encoding loi - chay: python .\\pipeline\\repair_cases_encoding.py"
 }
+if ($abort -eq "ssl_verify") {
+  Write-Host "!! SSL self-signed - pull code moi (medinet_ssl verify OFF). Roi chay lai run_hourly."
+}
 & python ".\pipeline\print_counts.py" | ForEach-Object { Write-Host $_ }
 & python ".\pipeline\super_data_status.py" --publish | Out-Null
 
