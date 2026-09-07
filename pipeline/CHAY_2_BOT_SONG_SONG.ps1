@@ -26,15 +26,19 @@ if (-not $env:MEDINET_USER_2) { $env:MEDINET_USER_2 = "pkdk_Thuankieu" }
 if (-not $env:MEDINET_PASS_2) { $env:MEDINET_PASS_2 = "pkdk_Thuankieu#2026" }
 
 $LockDir = Join-Path $Repo "pipeline\work\locks"
+. (Join-Path $PSScriptRoot "Resolve-PkdkPython.ps1")
+$Python = Resolve-PkdkPython
+$env:PKDK_PYTHON = $Python
 
 Write-Host "==== TAT hourly + xoa lock cu ===="
+Write-Host ("Python: " + $Python)
 & powershell -ExecutionPolicy Bypass -File ".\pipeline\TAM_NGUNG_HOURLY.ps1"
 if (Test-Path -LiteralPath $LockDir) {
   Get-ChildItem -LiteralPath $LockDir -Filter "*.lock" -ErrorAction SilentlyContinue |
     Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
-& python ".\pipeline\assert_g_pipeline.py"
+& $Python ".\pipeline\assert_g_pipeline.py"
 if ($LASTEXITCODE -ne 0) {
   Write-Host "G: fail - van BAT LAI hourly neu khong -KeepHourlyOff"
   if (-not $KeepHourlyOff) {
@@ -44,10 +48,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "==== START 2 BOT ===="
-$botInbox = Start-Process -FilePath "python" -ArgumentList @(
+$botInbox = Start-Process -FilePath $Python -ArgumentList @(
   "-u", ".\pipeline\hourly_sync.py", "--bot", "inbox", "--missing-budget", "0"
 ) -WorkingDirectory $Repo -PassThru -NoNewWindow
-$botMissing = Start-Process -FilePath "python" -ArgumentList @(
+$botMissing = Start-Process -FilePath $Python -ArgumentList @(
   "-u", ".\pipeline\hourly_sync.py", "--bot", "missing", "--missing-budget", "2500"
 ) -WorkingDirectory $Repo -PassThru -NoNewWindow
 
@@ -56,7 +60,7 @@ Write-Host "MISSING PID=$($botMissing.Id)"
 Wait-Process -Id $botInbox.Id, $botMissing.Id -ErrorAction SilentlyContinue
 $code = [Math]::Max($botInbox.ExitCode, $botMissing.ExitCode)
 if ($null -eq $code) { $code = 0 }
-& python ".\pipeline\print_counts.py"
+& $Python ".\pipeline\print_counts.py"
 
 Write-Host ""
 if ($KeepHourlyOff) {

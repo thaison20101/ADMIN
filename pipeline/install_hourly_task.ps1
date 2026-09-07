@@ -11,12 +11,16 @@ Set-Location $Repo
 $Runner = Join-Path $PSScriptRoot "run_hourly.ps1"
 $TaskName = "PKDK_Hourly_Sync"
 
+. (Join-Path $PSScriptRoot "Resolve-PkdkPython.ps1")
+$Python = Resolve-PkdkPython
+$env:PKDK_PYTHON = $Python
+
 if (-not (Test-Path $Runner)) {
   throw "Missing runner: $Runner"
 }
 
 $buildRootFile = Join-Path $env:TEMP "pkdk_build_root.txt"
-& python ".\pipeline\resolve_build_root.py" --out "$buildRootFile" | Out-Null
+& $Python ".\pipeline\resolve_build_root.py" --out "$buildRootFile" | Out-Null
 if (Test-Path -LiteralPath $buildRootFile) {
   $BuildRoot = (Get-Content -LiteralPath $buildRootFile -Encoding UTF8 -Raw).Trim()
 } else {
@@ -26,6 +30,14 @@ if (Test-Path -LiteralPath $buildRootFile) {
 foreach ($sub in @("logs", "excel_preview", "missing_or_updated", "cases_snapshot")) {
   try { New-Item -ItemType Directory -Force -Path (Join-Path $BuildRoot $sub) | Out-Null } catch {}
 }
+
+# Persist python path for Task Scheduler (minimal PATH)
+$envFile = Join-Path $Repo "pipeline\work\pkdk_python.txt"
+try {
+  $wd = Split-Path -Parent $envFile
+  if (-not (Test-Path -LiteralPath $wd)) { New-Item -ItemType Directory -Force -Path $wd | Out-Null }
+  Set-Content -LiteralPath $envFile -Value $Python -Encoding utf8
+} catch {}
 
 $psArgs = '-NoProfile -ExecutionPolicy Bypass -File "' + $Runner + '"'
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $psArgs -WorkingDirectory $Repo
@@ -102,6 +114,8 @@ try {
 Write-Host ("OK: Task moi 1 gio: " + $TaskName)
 Write-Host ("Repo: " + $Repo)
 Write-Host ("Runner: " + $Runner)
+Write-Host ("WorkingDirectory: " + $Repo)
+Write-Host ("Python: " + $Python)
 Write-Host ("Build: " + $BuildRoot)
 Write-Host "Kiem tra task:"
 Write-Host "  Get-ScheduledTask -TaskName PKDK_Hourly_Sync | Format-List *"

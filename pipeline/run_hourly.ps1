@@ -6,13 +6,17 @@
 #   PARTIAL/mau khac -> ERROR | no TTHC -> MISSING
 #
 # Lan dau (chua FIRST_FULL_SCAN_DONE): full-scan 2 bot
-# Sau do: hourly nhe
+# Sau do: hourly nhe (NGUYEN TAC QUET FILE CU)
 #
 # Installed by: .\pipeline\install_hourly_task.ps1
 
 $ErrorActionPreference = "Continue"
 $Repo = Split-Path -Parent $PSScriptRoot
 Set-Location $Repo
+
+. (Join-Path $PSScriptRoot "Resolve-PkdkPython.ps1")
+$Python = Resolve-PkdkPython
+$env:PKDK_PYTHON = $Python
 
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUTF8 = "1"
@@ -32,12 +36,12 @@ if (-not (Test-Path ".\pipeline\config.local.json")) {
   Copy-Item ".\pipeline\config.example.json" ".\pipeline\config.local.json" -Force
 }
 
-& python ".\pipeline\ensure_config.py" | Out-Null
+& $Python ".\pipeline\ensure_config.py" | Out-Null
 
 $MissingBudget = 2500
 
 $buildRootFile = Join-Path $env:TEMP "pkdk_build_root.txt"
-& python ".\pipeline\resolve_build_root.py" --out "$buildRootFile" | Out-Null
+& $Python ".\pipeline\resolve_build_root.py" --out "$buildRootFile" | Out-Null
 if (Test-Path -LiteralPath $buildRootFile) {
   $BuildRoot = (Get-Content -LiteralPath $buildRootFile -Encoding UTF8 -Raw).Trim()
 } else {
@@ -81,6 +85,7 @@ function Write-HourlyHeartbeat {
     "full=$DoFull"
     "accounts=pkdkthuankieu+pkdk_Thuankieu"
     "missing_budget=$MissingBudget"
+    "python=$Python"
     "pid=$PID"
   )
   $hb = ($lines -join "`n") + "`n"
@@ -93,10 +98,10 @@ function Write-HourlyHeartbeat {
     }
   }
   if ($dur -ge 0 -and $dur -lt 15 -and $Abort -eq "") {
-    Write-Host "WARN: hourly duration_s=$dur (<15s) - thuong la abort G:/lock, khong phai quet that."
+    Write-Host "WARN: hourly duration_s=$dur (<15s) - thuong la abort G:/lock/python, khong phai quet that."
   }
   if ($Abort -ne "") {
-    Write-Host ("HEARTBEAT abort=$Abort duration_s=$dur exit=$Code")
+    Write-Host ("HEARTBEAT abort=$Abort duration_s=$dur exit=$Code python=$Python")
   } else {
     Write-Host ("HEARTBEAT exit=$Code duration_s=$dur inbox_exit=$InboxExit missing_exit=$MissingExit")
   }
@@ -133,9 +138,9 @@ function Start-TwoBots {
   )
   $argsInbox = @("-u", ".\pipeline\hourly_sync.py", "--bot", "inbox", "--missing-budget", "0") + $ExtraInbox
   $argsMiss = @("-u", ".\pipeline\hourly_sync.py", "--bot", "missing") + $ExtraMissing
-  $b1 = Start-Process -FilePath "python" -ArgumentList $argsInbox -WorkingDirectory $Repo `
+  $b1 = Start-Process -FilePath $Python -ArgumentList $argsInbox -WorkingDirectory $Repo `
     -PassThru -NoNewWindow -RedirectStandardOutput $logInbox -RedirectStandardError ($logInbox + ".err")
-  $b2 = Start-Process -FilePath "python" -ArgumentList $argsMiss -WorkingDirectory $Repo `
+  $b2 = Start-Process -FilePath $Python -ArgumentList $argsMiss -WorkingDirectory $Repo `
     -PassThru -NoNewWindow -RedirectStandardOutput $logMiss -RedirectStandardError ($logMiss + ".err")
   Write-Host ("Bot INBOX  PID={0} log={1}" -f $b1.Id, $logInbox)
   Write-Host ("Bot MISSING PID={0} log={1}" -f $b2.Id, $logMiss)
@@ -145,11 +150,11 @@ function Start-TwoBots {
   $c2 = $b2.ExitCode
   if ($null -eq $c1) {
     $err1 = Get-Content ($logInbox + ".err") -Raw -ErrorAction SilentlyContinue
-    $c1 = if ($err1 -match "Traceback|Error") { 1 } else { 0 }
+    $c1 = if ($err1 -match "Traceback|Error|cannot find|not recognized") { 1 } else { 0 }
   }
   if ($null -eq $c2) {
     $err2 = Get-Content ($logMiss + ".err") -Raw -ErrorAction SilentlyContinue
-    $c2 = if ($err2 -match "Traceback|Error") { 1 } else { 0 }
+    $c2 = if ($err2 -match "Traceback|Error|cannot find|not recognized") { 1 } else { 0 }
   }
   $script:LastInboxExit = [int]$c1
   $script:LastMissingExit = [int]$c2
@@ -159,6 +164,7 @@ function Start-TwoBots {
 
 $header = @(
   "BuildRoot: $BuildRoot"
+  "Python: $Python"
   "Accounts: pkdkthuankieu + pkdk_Thuankieu (merged TTHC index)"
   "INBOX: G:\Drive cua toi\PKDK_Thuankieu_Pipeline\INBOX_CLS"
   "Rule: ho+ten DAY DU (exact) + nam/ngay sinh/SDT/CCCD (thieu OK neu khong conflict)"
@@ -174,7 +180,16 @@ $started = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 $code = 0
 $abort = ""
 
-& python ".\pipeline\assert_g_pipeline.py"
+if (-not (Test-Path -LiteralPath $Python) -and $Python -ne "python") {
+  Write-Host ("ABORT: python khong tim thay: " + $Python)
+  $abort = "python_missing"
+  $code = 2
+  Write-HourlyHeartbeat -Started $started -Code $code -Abort $abort -LogMain $log `
+    -LogInbox $logInbox -LogMiss $logMiss -DoFull $doFull
+  exit 2
+}
+
+& $Python ".\pipeline\assert_g_pipeline.py"
 if ($LASTEXITCODE -ne 0) {
   Write-Host "ABORT: G: chua san. Mo Google Drive Desktop."
   $abort = "g_drive"
@@ -185,7 +200,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if ($doFull) {
-  Write-Host "MODE: FIRST FULL SCAN 2 BOT (INBOX + MISSING)"
+  Write-Host "MODE: FIRST FULL SCAN 2 BOT (INBOX + MISSING + fillable audit)"
   $code = Start-TwoBots -ExtraInbox @("--full-scan", "--repair") -ExtraMissing @(
     "--full-scan", "--repair", "--missing-budget", "$MissingBudget"
   )
@@ -216,6 +231,8 @@ try {
     $abort = "another_instance"
   } elseif ($blob -match "ABORT: G:|g_drive_missing|assert_g") {
     $abort = "g_drive"
+  } elseif ($blob -match "cannot find the file|not recognized as an internal|No such file") {
+    $abort = "python_missing"
   }
   if ([int]$code -ne 0) {
     Write-Host "==== BOT STDERR (tail) ===="
@@ -234,8 +251,11 @@ if ($abort -eq "cases_csv_encoding") {
 if ($abort -eq "ssl_verify") {
   Write-Host "!! SSL self-signed - pull code moi (medinet_ssl verify OFF). Roi chay lai run_hourly."
 }
-& python ".\pipeline\print_counts.py" | ForEach-Object { Write-Host $_ }
-& python ".\pipeline\super_data_status.py" --publish | Out-Null
+if ($abort -eq "python_missing") {
+  Write-Host "!! python khong chay duoc trong Task - set env PKDK_PYTHON=C:\\Path\\to\\python.exe roi install_hourly_task lai."
+}
+& $Python ".\pipeline\print_counts.py" | ForEach-Object { Write-Host $_ }
+& $Python ".\pipeline\super_data_status.py" --publish | Out-Null
 
 Write-HourlyHeartbeat -Started $started -Code ([int]$code) -Abort $abort -LogMain $log `
   -LogInbox $logInbox -LogMiss $logMiss -DoFull $doFull `
