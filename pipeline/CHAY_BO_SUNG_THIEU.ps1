@@ -79,13 +79,22 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $countsLine = (& $Python ".\pipeline\print_counts.py" 2>$null | Select-Object -Last 1)
-Write-Host ("COUNTS: {0}" -f $countsLine)
+Write-Host ("COUNTS CSV: {0}" -f $countsLine)
+$diskLines = @(& $Python ".\pipeline\print_disk_counts.py" 2>$null)
+$diskLines | ForEach-Object { Write-Host $_ }
 $arch = 0
 if ($countsLine -match "processed=(\d+)") { $arch += [int]$Matches[1] }
 if ($countsLine -match "tk1=(\d+)") { $arch += [int]$Matches[1] }
 if ($countsLine -match "tk2=(\d+)") { $arch += [int]$Matches[1] }
 if ($countsLine -match "under18=(\d+)") { $arch += [int]$Matches[1] }
-Write-Host ("Archive uoc tinh={0}" -f $arch)
+$diskArch = 0
+$diskWork = 0
+foreach ($line in $diskLines) {
+  if ($line -match "^ARCHIVE_DISK\t(\d+)$") { $diskArch = [int]$Matches[1] }
+  if ($line -match "^FILLABLE_DISK\t(\d+)$") { $diskWork = [int]$Matches[1] }
+}
+$arch = [Math]::Max($arch, [Math]::Max($diskArch, $diskWork))
+Write-Host ("Archive/work uoc tinh (max csv|disk)={0}" -f $arch)
 
 Write-Host "==== 3/3 REPAIR TOAN FOLDER FILLABLE (2 bot) ===="
 Write-Host "INBOX+ERROR | PROCESSED+UNDER18+TK1+TK2 - KHONG walk MISSING."
@@ -124,8 +133,8 @@ for ($round = 1; $round -le $Rounds; $round++) {
     Get-Content -LiteralPath ($logMiss + ".err") -Tail 15 -ErrorAction SilentlyContinue
     exit 2
   }
-  if ($arch -ge 500 -and $sec -lt $MinRoundSeconds -and $code -eq 0) {
-    Write-Host ("DUNG: vong qua NHANH ({0}s) voi archive~{1} - khong phai quet that." -f $sec, $arch)
+  if ($arch -ge 100 -and $sec -lt $MinRoundSeconds -and $code -eq 0) {
+    Write-Host ("DUNG: vong qua NHANH ({0}s) voi archive/work~{1} - khong phai quet that." -f $sec, $arch)
     exit 2
   }
   $dien = ([regex]::Matches($blob, "DIEN OK")).Count

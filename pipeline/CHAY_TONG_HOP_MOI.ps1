@@ -48,6 +48,7 @@ $LogDir = Join-Path $Repo "pipeline\work\logs"
 $script:FatalAbort = ""
 $script:HadSsl = $false
 $script:HadEarlyExit = $false
+$script:TkEmpty = $false
 
 function Ensure-LogDir {
   if (-not (Test-Path -LiteralPath $LogDir)) {
@@ -68,6 +69,32 @@ function Get-Counts {
     if ($p -match "^under18=(\d+)$") { $o.under18 = [int]$Matches[1] }
     if ($p -match "^tk1=(\d+)$") { $o.tk1 = [int]$Matches[1] }
     if ($p -match "^tk2=(\d+)$") { $o.tk2 = [int]$Matches[1] }
+  }
+  return $o
+}
+
+function Get-DiskInventory {
+  $lines = @(& $Python ".\pipeline\print_disk_counts.py" 2>$null)
+  $o = @{
+    inbox = 0; missing = 0; error = 0; processed = 0; under18 = 0; tk1 = 0; tk2 = 0
+    fillable = 0; archive = 0; work = 0; tk_empty = 0; raw = ($lines -join " | ")
+  }
+  foreach ($line in $lines) {
+    if ($line -match "^DISK\t") {
+      foreach ($p in ($line -split "\t")) {
+        if ($p -match "^inbox=(\d+)$") { $o.inbox = [int]$Matches[1] }
+        if ($p -match "^missing=(\d+)$") { $o.missing = [int]$Matches[1] }
+        if ($p -match "^error=(\d+)$") { $o.error = [int]$Matches[1] }
+        if ($p -match "^processed=(\d+)$") { $o.processed = [int]$Matches[1] }
+        if ($p -match "^under18=(\d+)$") { $o.under18 = [int]$Matches[1] }
+        if ($p -match "^tk1=(\d+)$") { $o.tk1 = [int]$Matches[1] }
+        if ($p -match "^tk2=(\d+)$") { $o.tk2 = [int]$Matches[1] }
+      }
+    }
+    if ($line -match "^FILLABLE_DISK\t(\d+)$") { $o.fillable = [int]$Matches[1] }
+    if ($line -match "^ARCHIVE_DISK\t(\d+)$") { $o.archive = [int]$Matches[1] }
+    if ($line -match "^WORK_DISK\t(\d+)$") { $o.work = [int]$Matches[1] }
+    if ($line -match "^WARN_TK_EMPTY\t(\d+)$") { $o.tk_empty = [int]$Matches[1] }
   }
   return $o
 }
@@ -151,8 +178,8 @@ function Start-TwoBots {
     $script:FatalAbort = "ssl_verify"
     $code = 2
   }
-  if ($ExpectArchive -ge 500 -and $sec -lt $MinRoundSeconds -and $code -eq 0) {
-    Write-Host ("!! Vong qua NHANH duration_s={0} < {1}s trong khi archive~{2} PDF." -f $sec, $MinRoundSeconds, $ExpectArchive)
+  if ($ExpectArchive -ge 100 -and $sec -lt $MinRoundSeconds -and $code -eq 0) {
+    Write-Host ("!! Vong qua NHANH duration_s={0} < {1}s trong khi work/archive~{2} PDF." -f $sec, $MinRoundSeconds, $ExpectArchive)
     Write-Host "   Day la dau hieu abort/skip - KHONG phai quet toan bo that."
     $script:HadEarlyExit = $true
     $script:FatalAbort = "too_fast"
@@ -240,10 +267,26 @@ if (Test-Path -LiteralPath $FlagFull) {
   Remove-Item -LiteralPath $FlagFull -Force -ErrorAction SilentlyContinue
   Write-Host "Da xoa FIRST_FULL_SCAN_DONE (se chi ghi lai khi quet that OK)"
 }
+
+Write-Host "==== Ledger: restore cases.csv neu trong ===="
+& $Python ".\pipeline\restore_cases_snapshot.py"
+
 $beforeAll = Get-Counts
-Write-Host ("COUNTS truoc: {0}" -f $beforeAll.raw)
-$archiveEst = [int]$beforeAll.processed + [int]$beforeAll.tk1 + [int]$beforeAll.tk2 + [int]$beforeAll.under18
-Write-Host ("Archive uoc tinh (processed+tk1+tk2+u18)={0} - vong full phai LAU" -f $archiveEst)
+$diskAll = Get-DiskInventory
+Write-Host ("COUNTS CSV truoc: {0}" -f $beforeAll.raw)
+Write-Host ("COUNTS DISK: {0}" -f $diskAll.raw)
+$archiveCsv = [int]$beforeAll.processed + [int]$beforeAll.tk1 + [int]$beforeAll.tk2 + [int]$beforeAll.under18
+$archiveEst = [Math]::Max($archiveCsv, [int]$diskAll.archive)
+$workEst = [Math]::Max($archiveEst, [int]$diskAll.work)
+if ([int]$diskAll.tk_empty -eq 1) {
+  $script:TkEmpty = $true
+  Write-Host "!! TK1+TK2 disk=0 — bat Available offline tren folder TK1/TK2 (Google Drive)."
+  Write-Host "   Se KHONG ghi FIRST_FULL_SCAN_DONE neu TK van trong sau quet."
+}
+if ($archiveCsv -eq 0 -and $workEst -gt 0) {
+  Write-Host "!! cases.csv = 0 nhung G: van co PDF — bot se dang ky lai tu disk (LAU)."
+}
+Write-Host ("Archive/work uoc tinh DISK={0} (csv_archive={1}) - vong full phai LAU" -f $workEst, $archiveCsv)
 
 # ---- 4 FULL SCAN 2 bot ----
 Write-Host ""
@@ -255,8 +298,12 @@ for ($r = 1; $r -le $FullRounds; $r++) {
   Assert-G
   Assert-Ssl
   $before = Get-Counts
-  Write-Host ("COUNTS before: {0}" -f $before.raw)
-  $arch = [int]$before.processed + [int]$before.tk1 + [int]$before.tk2 + [int]$before.under18
+  $disk = Get-DiskInventory
+  Write-Host ("COUNTS CSV before: {0}" -f $before.raw)
+  Write-Host ("DISK before: archive={0} work={1} tk1={2} tk2={3}" -f $disk.archive, $disk.work, $disk.tk1, $disk.tk2)
+  if ([int]$disk.tk_empty -eq 1) { $script:TkEmpty = $true }
+  $archCsv = [int]$before.processed + [int]$before.tk1 + [int]$before.tk2 + [int]$before.under18
+  $arch = [Math]::Max($archCsv, [Math]::Max([int]$disk.work, [int]$disk.archive))
   $code = Start-TwoBots -Tag ("full{0}" -f $r) -ExtraInbox @("--full-scan", "--repair") -ExtraMissing @(
     "--full-scan", "--repair", "--missing-budget", "$MissingBudget"
   ) -ExpectArchive $arch
@@ -318,6 +365,17 @@ Write-Host ""
 Write-Host "==== 7/8 Danh dau FIRST_FULL_SCAN_DONE ===="
 if ($script:HadSsl -or $script:HadEarlyExit) {
   Write-Host "BO QUA: van con abort=$($script:FatalAbort) - khong ghi flag."
+  exit 2
+}
+$diskFinal = Get-DiskInventory
+if ([int]$diskFinal.tk_empty -eq 1 -or $script:TkEmpty) {
+  Write-Host "BO QUA FULL_DONE: TK1+TK2 disk van =0 (archive chua Available offline)."
+  Write-Host ("DISK final: {0}" -f $diskFinal.raw)
+  Write-Host "Pin TK1/TK2 offline roi chay lai CHAY_TONG_HOP_MOI.ps1 -SkipPull"
+  exit 2
+}
+if ([int]$diskFinal.archive -lt 1 -and [int]$diskFinal.fillable -lt 1) {
+  Write-Host "BO QUA FULL_DONE: khong thay PDF fillable tren G:."
   exit 2
 }
 try {

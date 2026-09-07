@@ -299,30 +299,39 @@ def sync_drive_layout(cfg: dict | None = None) -> dict:
     folders = ensure_standard_folders(pipeline, build)
     cfg_path = write_resolved_into_config(pipeline, build)
     counts = {}
-    for name in STD_FOLDERS:
+    for name in tuple(STD_FOLDERS) + tuple(EXTRA_FOLDERS):
         p = folders[name]
         counts[name] = count_pdfs_fast(p) if p.exists() else 0
     on_g = str(pipeline).replace("/", "\\").upper().startswith("G:")
+    archive_disk = (
+        int(counts.get("PROCESSED", 0))
+        + int(counts.get(UNDER18_FOLDER, 0))
+        + int(counts.get("TK1", 0))
+        + int(counts.get("TK2", 0))
+    )
+    fillable_disk = archive_disk + int(counts.get("ERROR", 0))
+    hint = ""
+    if sys.platform.startswith("win") and (not on_g or _pdf_count(pipeline) == 0):
+        hint = "MO GOOGLE DRIVE DESKTOP tren may A, doi G:\\Drive cua toi sync xong roi chay lai."
+    elif int(counts.get("TK1", 0)) == 0 and int(counts.get("TK2", 0)) == 0:
+        hint = (
+            "TK1+TK2 disk=0 — trong Drive Desktop: chuot phai TK1/TK2 -> Available offline. "
+            "Khong danh FULL_DONE khi archive TK trong."
+        )
     return {
         "pipeline_root": str(pipeline),
         "build_root": str(build),
         "config": str(cfg_path),
         "pdf_counts": counts,
+        "archive_disk": archive_disk,
+        "fillable_disk": fillable_disk,
         # Dev/CI only — never a Windows prod fallback to ADMIN
         "using_local_fallback": (
             (not sys.platform.startswith("win"))
             and (not on_g)
             and (PIPELINE_NAME in str(pipeline))
         ),
-        "hint": (
-            ""
-            if on_g and _pdf_count(pipeline) > 0
-            else (
-                "MO GOOGLE DRIVE DESKTOP tren may A, doi G:\\Drive cua toi sync xong roi chay lai."
-                if sys.platform.startswith("win")
-                else ""
-            )
-        ),
+        "hint": hint,
     }
 
 
@@ -362,10 +371,14 @@ def main() -> int:
         print(f"CONFIG  : {summary['config']}")
         for k, n in (summary.get("pdf_counts") or {}).items():
             print(f"  {k}: {n} pdf")
+        print(
+            f"ARCHIVE_DISK (processed+u18+tk1+tk2)={summary.get('archive_disk', 0)} "
+            f"FILLABLE_DISK(+error)={summary.get('fillable_disk', 0)}"
+        )
         if summary.get("hint"):
             print(f"WARN: {summary['hint']}")
         else:
-            print("OK: may A G: only — INBOX_CLS / MISSING / ERROR / PROCESSED")
+            print("OK: may A G: only — INBOX/MISSING/ERROR/PROCESSED/UNDER18/TK1/TK2")
     return 0
 
 

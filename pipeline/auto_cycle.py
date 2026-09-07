@@ -817,33 +817,64 @@ def _run_auto_cycle_inner(
     if requeued_err:
         safe_print(f"Re-queued from ERROR / failed status: {requeued_err}")
 
-    from drive_paths import count_pdfs_fast
+    from drive_paths import UNDER18_FOLDER, count_pdfs_fast
 
     inbox_pdf_n = count_pdfs_fast(inbox) if inbox.exists() else 0
     error_pdf_n = count_pdfs_fast(error_dir) if error_dir.exists() else 0
+    missing_disk_n = count_pdfs_fast(missing) if missing.exists() else 0
+    processed_disk_n = count_pdfs_fast(processed) if processed.exists() else 0
+    under18_disk_n = count_pdfs_fast(under18_dir) if under18_dir.exists() else 0
+    tk1_disk_n = count_pdfs_fast(tk1_dir) if tk1_dir.exists() else 0
+    tk2_disk_n = count_pdfs_fast(tk2_dir) if tk2_dir.exists() else 0
     missing_pdf_n = counts0.get("missing", csv_missing_total)
     processed_pdf_n = counts0.get("processed", 0)
     safe_print(f"SYNC ROOT: {sync}")
     safe_print(f"Inbox disk: {inbox} (pdfs={inbox_pdf_n}) csv={counts0.get('inbox', 0)}")
-    safe_print(f"Missing csv: {missing_pdf_n} (khong list 10k G:; so nay giam khi rematch xong)")
+    safe_print(
+        f"Missing disk={missing_disk_n} csv={missing_pdf_n} "
+        f"(hourly khong list 10k G:; full/repair moi walk)"
+    )
     safe_print(f"Error disk: {error_dir} (pdfs={error_pdf_n}) csv={counts0.get('error', 0)}")
-    safe_print(f"Processed csv: {processed_pdf_n}")
+    safe_print(
+        f"Processed disk={processed_disk_n} csv={processed_pdf_n} | "
+        f"UNDER18 disk={under18_disk_n} | TK1 disk={tk1_disk_n} | TK2 disk={tk2_disk_n}"
+    )
     safe_print(
         f"Archive csv: tk1={counts0.get('tk1', 0)} tk2={counts0.get('tk2', 0)} "
         f"under18={counts0.get('under18', 0)} processed={processed_pdf_n}"
     )
-    archive_n = (
+    archive_csv_n = (
         int(processed_pdf_n)
         + int(counts0.get("tk1", 0))
         + int(counts0.get("tk2", 0))
         + int(counts0.get("under18", 0))
     )
+    archive_disk_n = (
+        int(processed_disk_n) + int(under18_disk_n) + int(tk1_disk_n) + int(tk2_disk_n)
+    )
+    # Gate on DISK (CSV co the =0 sau wipe) — day la so that bot se walk
+    archive_n = max(archive_csv_n, archive_disk_n)
+    work_disk_n = (
+        int(inbox_pdf_n)
+        + int(error_pdf_n)
+        + int(missing_disk_n if full_scan else 0)
+        + int(archive_disk_n)
+    )
+    safe_print(
+        f"DISK_INVENTORY archive={archive_disk_n} work~{work_disk_n} "
+        f"(csv_archive={archive_csv_n})"
+    )
     if (full_scan or repair) and archive_n >= 500:
         safe_print(
             f"NOTE: quet toan bo ~{archive_n} PDF archive — chay LAU (khong xong trong vai phut)."
         )
-    if inbox_pdf_n + error_pdf_n == 0 and missing_pdf_n == 0:
-        safe_print("WARN: 0 PDF inbox/error and 0 MISSING in tracking.")
+    if (full_scan or repair) and tk1_disk_n == 0 and tk2_disk_n == 0:
+        safe_print(
+            "WARN: TK1+TK2 disk=0 — Available offline tren G: TK1/TK2; "
+            "FULL_DONE se bi tu choi neu archive TK trong."
+        )
+    if inbox_pdf_n + error_pdf_n == 0 and missing_pdf_n == 0 and archive_disk_n == 0:
+        safe_print("WARN: 0 PDF inbox/error/archive on disk and 0 MISSING in tracking.")
 
     safe_print(f"Logs (local, not G:): {build}")
     safe_print(
