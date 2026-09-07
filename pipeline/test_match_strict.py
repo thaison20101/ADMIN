@@ -618,6 +618,7 @@ if __name__ == "__main__":
             "CHAY_LOC_UNDER18.ps1",
             "CHAY_TONG_HOP_VA_BAT_HOURLY.ps1",
             "CHAY_TONG_HOP_MOI.ps1",
+            "CHAY_KEO_CODE_VA_TONG_HOP.ps1",
             "CHAY_PDF_CHECK.ps1",
             "CHAY_FULL_ROI_HOURLY.ps1",
             "CHAY_2_BOT_SONG_SONG.ps1",

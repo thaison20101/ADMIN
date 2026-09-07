@@ -186,6 +186,16 @@ Write-Host "############################################################"
 Write-Host ("Python: " + $Python)
 Write-Host ("Branch: " + $Branch)
 Write-Host "MEDINET_SSL_VERIFY=0 (ep OFF)"
+try {
+  $sha = (git rev-parse --short HEAD 2>$null)
+  Write-Host ("Git HEAD: " + $sha)
+} catch {}
+$sslCheck = Get-Content -LiteralPath (Join-Path $PSScriptRoot "medinet_ssl.py") -Raw -ErrorAction SilentlyContinue
+if (-not ($sslCheck -match "apply_ssl_monkeypatch")) {
+  Write-Host "DUNG: code cu (thieu SSL monkeypatch). Chay:"
+  Write-Host "  powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_KEO_CODE_VA_TONG_HOP.ps1"
+  exit 2
+}
 Write-Host "Quet TOAN BO: INBOX+ERROR+PROCESSED+UNDER18+TK1+TK2 - chay LAU"
 Write-Host "KHONG click vao cua so PowerShell (Select-pause lam dung)."
 

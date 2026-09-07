@@ -28,6 +28,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+# May A: disable SSL verify BEFORE any Medinet import
+os.environ.setdefault("MEDINET_SSL_VERIFY", "0")
+try:
+    import medinet_ssl  # noqa: F401,E402
+
+    medinet_ssl.apply_ssl_monkeypatch()
+    medinet_ssl.install_medinet_https_opener()
+except Exception as _ssl_e:
+    print(f"WARN medinet_ssl bootstrap: {_ssl_e}", file=sys.stderr)
+
 from win_console import safe_print, setup_utf8_stdio  # noqa: E402
 
 setup_utf8_stdio()
