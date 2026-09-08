@@ -110,8 +110,11 @@ def _collect_scan_dirs(
     """Folders whose PDFs are registered + re-queued this run.
 
     bot_role inbox  → chi INBOX_CLS (+ ERROR khi full/repair)
-    bot_role missing → chi MISSING (+ PROCESSED/UNDER18/TK1/TK2 khi full/repair)
-    bot_role all   → mac dinh cu; repair = moi folder fillable (khong chi PROCESSED)
+    bot_role missing → PROCESSED/UNDER18/TK1/TK2 khi full/repair (KHONG walk MISSING)
+    bot_role all   → fillable folders; KHONG rglob MISSING tren G:
+
+    MISSING: chi rematch qua cases.csv + missing_budget.
+    Walk/hash 2k+ PDF tren Google Drive File Stream = treo ca dem.
     """
     from drive_paths import UNDER18_FOLDER, discover_inbox_dirs
 
@@ -131,27 +134,32 @@ def _collect_scan_dirs(
         return _uniq_dirs(dirs)
 
     if role == "missing":
-        # MISSING: hourly/full walks folder; repair = chi audit fillable (TK1/TK2/…)
-        # Rematch MISSING dung CSV + missing_budget (khong rglob 10k tren G:).
+        # KHONG them MISSING vao scan_dirs — rematch CSV only (tranh treo G:).
         fillable = [processed, under18, tk1, tk2]
-        if repair and not full_scan:
+        if full_scan or repair:
             return _uniq_dirs(fillable)
-        dirs = [missing]
-        if full_scan:
-            dirs.extend(fillable)
-        return _uniq_dirs([d for d in dirs if d])
+        # Hourly missing-bot: khong walk disk archive; CSV rematch trong auto_cycle
+        return []
 
     if not full_scan:
         if repair:
             return _uniq_dirs(list(inbox_dirs) + fillable_extra)
         return _uniq_dirs(list(inbox_dirs))
+
+    # full-scan all: moi folder fillable — LOAI MISSING / MISSING_* (Drive hang)
     roots: list[Path] = []
-    skip = {".git"}
+    skip = {".git", "missing"}
     if sync.exists():
         for child in sorted(sync.iterdir()):
-            if child.is_dir() and child.name.lower() not in skip:
-                roots.append(child)
-    for must in (*inbox_dirs, missing, *fillable_extra):
+            if not child.is_dir():
+                continue
+            name_u = child.name.upper()
+            if child.name.lower() in skip:
+                continue
+            if name_u == "MISSING" or name_u.startswith("MISSING"):
+                continue
+            roots.append(child)
+    for must in (*inbox_dirs, *fillable_extra):
         if must.exists() and must not in roots:
             roots.append(must)
     return roots
@@ -596,13 +604,26 @@ def _run_auto_cycle_inner(
     added_err = 0
     added_missing = 0
     for d in scan_dirs:
-        n = register_new_files(d, rows)
-        added += n
         tag = d.name.upper()
+        # Chi INBOX moi mo file hash — ERROR/PROCESSED/TK tren G: dung ten file
+        hash_content = tag == "INBOX_CLS" or tag.startswith("INBOX")
+        n = register_new_files(d, rows, hash_content=hash_content)
+        added += n
         if tag == "ERROR":
             added_err += n
-        elif tag == "MISSING":
+        elif tag == "MISSING" or tag.startswith("MISSING"):
             added_missing += n
+
+    # Seed MISSING names into empty/thin ledger (scandir only — never sha256/rglob)
+    if role in {"all", "missing"} and (full_scan or (not repair and missing_budget > 0)):
+        try:
+            from hourly_sync import seed_missing_names_fast
+
+            seed_n = seed_missing_names_fast(missing, rows, budget=max(int(missing_budget), 500))
+            added_missing += seed_n
+            added += seed_n
+        except Exception as e:
+            safe_print(f"WARN seed_missing: {e}")
 
     # CRITICAL: every PDF physically in scan dirs must be re-queued each run.
     # Tracking often says WAITING_ADMIN / SKIP / IMPORTED while file still sits
@@ -629,15 +650,28 @@ def _run_auto_cycle_inner(
         if not base.exists():
             continue
         tag = base.name.lower()
-        for pdf in base.rglob("*.pdf"):
+        tag_u = base.name.upper()
+        # Never walk MISSING* here (Drive hang) — should already be excluded
+        if tag_u == "MISSING" or tag_u.startswith("MISSING"):
+            safe_print(f"SKIP disk walk {base.name} (CSV rematch only)")
+            continue
+        try:
+            pdf_iter = list(base.rglob("*.pdf"))
+        except Exception as e:
+            safe_print(f"WARN rglob {base}: {e}")
+            continue
+        safe_print(f"Disk walk {base.name}: {len(pdf_iter)} pdf (name-id only, no content-hash)")
+        for i, pdf in enumerate(pdf_iter, 1):
+            if i == 1 or i % 100 == 0:
+                safe_print(f"  … {base.name} {i}/{len(pdf_iter)}")
             key = pdf.name.lower()
             r = by_name.get(key) or by_name.get(_base_name(pdf.name))
             if r is None:
-                # Hash may already exist under another path — retarget that row
+                # Name-only digest — NEVER sha256_file on G: archive (treo ca dem)
                 try:
-                    from hourly_sync import sha256_file
+                    from hourly_sync import name_digest
 
-                    digest = sha256_file(pdf)
+                    digest = name_digest(pdf)
                 except Exception:
                     digest = ""
                 r = by_hash.get(digest) if digest else None
@@ -650,7 +684,7 @@ def _run_auto_cycle_inner(
                     except Exception:
                         pass
                     r = {
-                        "case_key": hints.get("ma_phieu") or (digest[:16] if digest else pdf.stem[:16]),
+                        "case_key": hints.get("ma_phieu") or (digest[-16:] if digest else pdf.stem[:16]),
                         "source_file": str(pdf),
                         "file_hash": digest,
                         "ho_ten": hints.get("ho_ten", ""),
@@ -717,9 +751,10 @@ def _run_auto_cycle_inner(
 
     # Rematch MISSING from tracking CSV — do NOT list 10k files on G:.
     # Oldest last_checked first so 8 rounds of 2500 rotate through the backlog.
+    # Also on full-scan when budget>0 (after seed_missing_names_fast).
     csv_missing_queued = 0
     csv_missing_total = 0
-    if role in {"all", "missing"} and (not full_scan) and (not repair) and missing_budget > 0:
+    if role in {"all", "missing"} and missing_budget > 0:
         miss_rows = []
         for r in rows:
             src_u = (r.get("source_file") or "").replace("\\", "/").upper()
@@ -832,7 +867,7 @@ def _run_auto_cycle_inner(
     safe_print(f"Inbox disk: {inbox} (pdfs={inbox_pdf_n}) csv={counts0.get('inbox', 0)}")
     safe_print(
         f"Missing disk={missing_disk_n} csv={missing_pdf_n} "
-        f"(hourly khong list 10k G:; full/repair moi walk)"
+        f"(KHONG rglob/hash MISSING tren G: — CSV rematch + scandir seed)"
     )
     safe_print(f"Error disk: {error_dir} (pdfs={error_pdf_n}) csv={counts0.get('error', 0)}")
     safe_print(

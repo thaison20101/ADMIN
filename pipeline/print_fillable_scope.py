@@ -67,10 +67,10 @@ def main() -> int:
                 if must not in names:
                     print(f"FAIL {label} missing {must}")
                     return 1
-            if label != "full_missing" and "MISSING" in names:
-                print(f"FAIL {label} should not walk MISSING on repair-only")
+            if "MISSING" in names:
+                print(f"FAIL {label} must NOT walk MISSING on G: (Drive hang)")
                 return 1
-        print("OK: PROCESSED+TK1+TK2 in every fillable repair/full audit path")
+        print("OK: PROCESSED+TK1+TK2 in fillable paths; MISSING excluded (CSV rematch)")
         return 0
 
 

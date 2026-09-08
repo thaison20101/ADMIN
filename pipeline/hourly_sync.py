@@ -137,6 +137,12 @@ def sha256_file(path: Path, limit_mb: int = 64) -> str:
     return h.hexdigest()
 
 
+def name_digest(path: Path | str) -> str:
+    """Stable id from filename only — never opens the file (safe on G: Drive)."""
+    name = Path(path).name.lower()
+    return "name:" + hashlib.sha256(name.encode("utf-8", errors="replace")).hexdigest()
+
+
 def parse_filename_hints(name: str) -> dict:
     stem = Path(name).stem
     out = {"ho_ten": "", "cccd": "", "ngay_kham": "", "mau_kham": "", "ma_phieu": ""}
@@ -156,22 +162,60 @@ def parse_filename_hints(name: str) -> dict:
     return out
 
 
-def register_new_files(inbox: Path, rows: list[dict]) -> int:
+def register_new_files(
+    inbox: Path, rows: list[dict], *, hash_content: bool = True, budget: int = 0
+) -> int:
+    """Register PDFs under inbox. hash_content=False = name-only (G: Drive safe).
+
+    budget: if >0, stop after that many new rows (avoid overnight Drive hydrate).
+    """
     by_hash = {r.get("file_hash"): r for r in rows if r.get("file_hash")}
     by_key = {r.get("case_key"): r for r in rows if r.get("case_key")}
+    by_name = {
+        Path(r.get("source_file") or "").name.lower(): r
+        for r in rows
+        if (r.get("source_file") or r.get("file_name"))
+    }
+    for r in rows:
+        fn = (r.get("file_name") or "").lower()
+        if fn:
+            by_name.setdefault(fn, r)
     added = 0
-    for path in sorted(inbox.rglob("*")):
+    try:
+        paths = sorted(inbox.rglob("*"))
+    except Exception as e:
+        safe_print(f"WARN register_new_files list {inbox}: {e}")
+        return 0
+    for path in paths:
+        if budget > 0 and added >= budget:
+            safe_print(f"register_new_files budget={budget} stop at {inbox.name}")
+            break
         if not path.is_file() or path.name.startswith("."):
             continue
         if path.suffix.lower() not in {".pdf", ".jpg", ".jpeg", ".png"}:
             continue
-        digest = sha256_file(path)
+        key = path.name.lower()
+        if key in by_name:
+            continue
+        if hash_content:
+            try:
+                digest = sha256_file(path)
+            except Exception as e:
+                safe_print(f"WARN sha256 skip {path.name}: {e}")
+                digest = name_digest(path)
+        else:
+            digest = name_digest(path)
         if digest in by_hash:
+            # Retarget existing hash row to this path
+            old = by_hash[digest]
+            old["source_file"] = str(path)
+            old["file_name"] = path.name
+            by_name[key] = old
             continue
         hints = parse_filename_hints(path.name)
         case_key = hints.get("ma_phieu") or digest[:16]
         if case_key in by_key:
-            case_key = f"{case_key}_{digest[:8]}"
+            case_key = f"{case_key}_{digest[-8:]}"
         row = {
             "case_key": case_key,
             "source_file": str(path),
@@ -192,8 +236,89 @@ def register_new_files(inbox: Path, rows: list[dict]) -> int:
         rows.append(row)
         by_hash[digest] = row
         by_key[case_key] = row
+        by_name[key] = row
         added += 1
         safe_print(f"+ NEW_LAB {case_key} <- {path.name}")
+    return added
+
+
+def seed_missing_names_fast(missing: Path, rows: list[dict], budget: int = 2500) -> int:
+    """Scandir MISSING top-level names only — no open/hash/rglob (Drive-safe).
+
+    Seeds empty cases.csv so rematch rounds can drain MISSING without hanging.
+    """
+    from drive_paths import count_pdfs_fast
+
+    if not missing.exists() or budget <= 0:
+        return 0
+    by_name = {
+        Path(r.get("source_file") or "").name.lower(): r
+        for r in rows
+        if r.get("source_file") or r.get("file_name")
+    }
+    for r in rows:
+        fn = (r.get("file_name") or "").lower()
+        if fn:
+            by_name.setdefault(fn, r)
+    added = 0
+    try:
+        import os
+
+        entries: list[Path] = []
+        with os.scandir(missing) as it:
+            for ent in it:
+                if ent.name.startswith("."):
+                    continue
+                if ent.name.lower().endswith(".pdf"):
+                    entries.append(Path(ent.path))
+                elif ent.is_dir(follow_symlinks=False):
+                    # one nested level only (same as count_pdfs_fast)
+                    try:
+                        with os.scandir(ent.path) as sub:
+                            for s in sub:
+                                if s.name.lower().endswith(".pdf"):
+                                    entries.append(Path(s.path))
+                    except Exception:
+                        continue
+        entries.sort(key=lambda p: p.name.lower())
+    except Exception as e:
+        safe_print(f"WARN seed_missing scandir: {e}")
+        return 0
+    for path in entries:
+        if added >= budget:
+            break
+        key = path.name.lower()
+        if key in by_name:
+            continue
+        hints = parse_filename_hints(path.name)
+        digest = name_digest(path)
+        case_key = hints.get("ma_phieu") or digest[-16:]
+        row = {
+            "case_key": case_key,
+            "source_file": str(path),
+            "file_hash": digest,
+            "file_name": path.name,
+            "ho_ten": hints.get("ho_ten", ""),
+            "cccd": "",
+            "ngay_kham": hints.get("ngay_kham", ""),
+            "mau_kham": hints.get("mau_kham", ""),
+            "ma_phieu": hints.get("ma_phieu", ""),
+            "has_lab_file": "YES",
+            "has_admin_info": "",
+            "status": "WAITING_ADMIN",
+            "import_attempts": "0",
+            "last_checked_at": now_iso(),
+            "imported_at": "",
+            "notes": "seed_missing_scandir_nohash",
+        }
+        rows.append(row)
+        by_name[key] = row
+        added += 1
+    if added:
+        safe_print(
+            f"MISSING seed scandir (no hash): +{added} "
+            f"(disk~{count_pdfs_fast(missing)}, budget={budget})"
+        )
     return added
 
 

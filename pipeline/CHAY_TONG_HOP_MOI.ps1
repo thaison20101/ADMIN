@@ -159,6 +159,33 @@ function Start-TwoBots {
   Write-Host ("  Bot INBOX PID={0} | AUDIT/MISSING PID={1}" -f $b1.Id, $b2.Id)
   Write-Host ("  log_inbox={0}" -f $logInbox)
   Write-Host ("  log_audit={0}" -f $logMiss)
+  Write-Host "  Dang cho bot (heartbeat moi 60s). Neu im >2h: chay CHAY_DUNG_BOT_KET.ps1"
+  # Heartbeat wait — never silent all night
+  while ($true) {
+    $alive1 = -not $b1.HasExited
+    $alive2 = -not $b2.HasExited
+    if (-not $alive1 -and -not $alive2) { break }
+    Start-Sleep -Seconds 60
+    try { $b1.Refresh() } catch {}
+    try { $b2.Refresh() } catch {}
+    $sec = [int]((Get-Date) - $t0).TotalSeconds
+    $tail = ""
+    foreach ($lp in @($logInbox, $logMiss)) {
+      if (Test-Path -LiteralPath $lp) {
+        $last = Get-Content -LiteralPath $lp -Tail 1 -ErrorAction SilentlyContinue
+        if ($last) { $tail = $last }
+      }
+    }
+    Write-Host ("  heartbeat {0}s inbox_alive={1} audit_alive={2} | {3}" -f $sec, $alive1, $alive2, $tail)
+    if ($sec -ge 14400) {
+      Write-Host "!! Bot chay >4h — co the treo Drive. Dung PID, pull code moi (khong walk MISSING)."
+      try { if (-not $b1.HasExited) { Stop-Process -Id $b1.Id -Force -ErrorAction SilentlyContinue } } catch {}
+      try { if (-not $b2.HasExited) { Stop-Process -Id $b2.Id -Force -ErrorAction SilentlyContinue } } catch {}
+      $script:FatalAbort = "bot_timeout_4h"
+      $script:HadEarlyExit = $true
+      return 2
+    }
+  }
   Wait-Process -Id $b1.Id, $b2.Id -ErrorAction SilentlyContinue
   $sec = [int]((Get-Date) - $t0).TotalSeconds
   $c1 = $b1.ExitCode; if ($null -eq $c1) { $c1 = 0 }
