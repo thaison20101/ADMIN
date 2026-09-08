@@ -575,7 +575,7 @@ def _run_auto_cycle_inner(
         names_u = {d.name.upper() for d in scan_dirs}
         safe_print(
             "FILLABLE_SCOPE: INBOX+ERROR+PROCESSED+UNDER18+TK1+TK2 "
-            "(MISSING = rematch only, not CLS fill)"
+            "(MISSING = CSV rematch/seed only — KHONG rglob/hash tren G:)"
         )
         for must in ("PROCESSED", "TK1", "TK2"):
             if role == "inbox":
