@@ -160,7 +160,7 @@ function Start-TwoBots {
   Write-Host ("  log_inbox={0}" -f $logInbox)
   Write-Host ("  log_audit={0}" -f $logMiss)
   Write-Host "  Dang cho bot (heartbeat moi 60s). Neu im >2h: chay CHAY_DUNG_BOT_KET.ps1"
-  # Heartbeat wait — never silent all night
+  # Heartbeat wait  -  never silent all night
   while ($true) {
     $alive1 = -not $b1.HasExited
     $alive2 = -not $b2.HasExited
@@ -178,7 +178,7 @@ function Start-TwoBots {
     }
     Write-Host ("  heartbeat {0}s inbox_alive={1} audit_alive={2} | {3}" -f $sec, $alive1, $alive2, $tail)
     if ($sec -ge 14400) {
-      Write-Host "!! Bot chay >4h — co the treo Drive. Dung PID, pull code moi (khong walk MISSING)."
+      Write-Host "!! Bot chay hon 4h  -  co the treo Drive. Dung PID, pull code moi (khong walk MISSING)."
       try { if (-not $b1.HasExited) { Stop-Process -Id $b1.Id -Force -ErrorAction SilentlyContinue } } catch {}
       try { if (-not $b2.HasExited) { Stop-Process -Id $b2.Id -Force -ErrorAction SilentlyContinue } } catch {}
       $script:FatalAbort = "bot_timeout_4h"
@@ -206,7 +206,7 @@ function Start-TwoBots {
     $code = 2
   }
   if ($ExpectArchive -ge 100 -and $sec -lt $MinRoundSeconds -and $code -eq 0) {
-    Write-Host ("!! Vong qua NHANH duration_s={0} < {1}s trong khi work/archive~{2} PDF." -f $sec, $MinRoundSeconds, $ExpectArchive)
+    Write-Host ("!! Vong qua NHANH duration_s={0} lt {1}s trong khi work/archive~{2} PDF." -f $sec, $MinRoundSeconds, $ExpectArchive)
     Write-Host "   Day la dau hieu abort/skip - KHONG phai quet toan bo that."
     $script:HadEarlyExit = $true
     $script:FatalAbort = "too_fast"
@@ -307,11 +307,11 @@ $archiveEst = [Math]::Max($archiveCsv, [int]$diskAll.archive)
 $workEst = [Math]::Max($archiveEst, [int]$diskAll.work)
 if ([int]$diskAll.tk_empty -eq 1) {
   $script:TkEmpty = $true
-  Write-Host "!! TK1+TK2 disk=0 — bat Available offline tren folder TK1/TK2 (Google Drive)."
+  Write-Host "!! TK1+TK2 disk=0  -  bat Available offline tren folder TK1/TK2 (Google Drive)."
   Write-Host "   Se KHONG ghi FIRST_FULL_SCAN_DONE neu TK van trong sau quet."
 }
 if ($archiveCsv -eq 0 -and $workEst -gt 0) {
-  Write-Host "!! cases.csv = 0 nhung G: van co PDF — bot se dang ky lai tu disk (LAU)."
+  Write-Host "!! cases.csv = 0 nhung G: van co PDF  -  bot se dang ky lai tu disk (LAU)."
 }
 Write-Host ("Archive/work uoc tinh DISK={0} (csv_archive={1}) - vong full phai LAU" -f $workEst, $archiveCsv)
 

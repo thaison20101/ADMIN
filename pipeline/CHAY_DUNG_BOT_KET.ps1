@@ -12,7 +12,7 @@ if (-not $Repo) { $Repo = "C:\Users\thais\ADMIN" }
 Set-Location $Repo
 
 Write-Host "############################################################"
-Write-Host "#  DUNG BOT TREO — roi keo code moi (khong walk MISSING)    #"
+Write-Host "#  DUNG BOT TREO  -  roi keo code moi (khong walk MISSING)    #"
 Write-Host "############################################################"
 
 Write-Host "==== 1) Tat hourly ===="
