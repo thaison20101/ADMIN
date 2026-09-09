@@ -102,6 +102,8 @@ LAB_TO_FORM = {
     "Basophils_count": "SLBC_AiKiem",
     "PLT": "CongThucMau_SLTC",
     "Glucose": "SinhHoaMau_DuongMau",
+    # Fasting glucose (ô Đường máu lúc đói) — Medinet form field
+    "Glucose_fasting": "SinhHoaMau_DuongMauLucDoi",
     "Urea": "SinhHoaMau_Ure",
     "Creatinine": "SinhHoaMau_Creatinin",
     "AST": "SinhHoaMau_ASAT_GOT",
@@ -134,6 +136,7 @@ NUMBER_FIELDS = {
     "SLBC_AiKiem",
     "CongThucMau_SLTC",
     "SinhHoaMau_DuongMau",
+    "SinhHoaMau_DuongMauLucDoi",
     "SinhHoaMau_Ure",
     "SinhHoaMau_Creatinin",
     "SinhHoaMau_ASAT_GOT",
@@ -327,11 +330,12 @@ def cls_missing_lab_fields(existing: dict | None, payload: dict) -> list[str]:
     """Lab fields in PDF payload that are empty OR wrong on the web form.
 
     Rule: dien theo PDF (binh thuong lan bat thuong), KE CA Urea khi PDF co.
+    Also tracks LoaiKham (must be Khám định kỳ = 5152).
     """
     tracked = [
         k
         for k in payload
-        if k in NUMBER_FIELDS or k in URINE_TEXT_FIELDS or k == "NuocTieu_NiTrit"
+        if k in NUMBER_FIELDS or k in URINE_TEXT_FIELDS or k == "NuocTieu_NiTrit" or k == "LoaiKham"
     ]
     if not existing:
         return list(tracked)
@@ -339,6 +343,13 @@ def cls_missing_lab_fields(existing: dict | None, payload: dict) -> list[str]:
     for k in tracked:
         sent = payload.get(k)
         got = existing.get(k)
+        if k == "LoaiKham":
+            try:
+                if int(str(got).strip()) != int(LOAI_KHAM_DINH_KY):
+                    missing.append(k)
+            except Exception:
+                missing.append(k)
+            continue
         if got in (None, ""):
             missing.append(k)
             continue
@@ -475,30 +486,19 @@ def verify_cls_saved(
     else:
         return False, last_detail, token
 
-    # Spot-check a value we sent (avoid false IMPORTED on wrong id)
+    # Spot-check: EVERY lab key we sent must appear on Get+FormViewer
     if payload:
-        # Spot-check includes MCHC/RDW when present (often missing if parse missed glued Ghi chú)
-        for key in (
-            "CongThucMau_SLBC",
-            "XNM_HuyetSacTo",
-            "CongThucMau_SLHC",
-            "SinhHoaMau_DuongMau",
-            "XNM_MCHC",
-            "XNM_RDW",
-        ):
-            if key in payload and payload[key] not in (None, ""):
-                got = (row or {}).get(key)
-                if got in (None, ""):
-                    # Some fields lag on Get; FormViewer merge may still have others.
-                    # Do not hard-fail the whole save on one lagging key if many labs present.
-                    continue
-                try:
-                    if abs(float(str(got).replace(",", ".")) - float(str(payload[key]).replace(",", "."))) > 0.05:
-                        return False, f"mismatch {key}: sent={payload[key]} got={got}", token
-                except Exception:
-                    if str(got).strip() != str(payload[key]).strip():
-                        return False, f"mismatch {key}: sent={payload[key]} got={got}", token
-                break
+        miss = cls_missing_lab_fields(row, payload)
+        # Urea optional only when not in payload
+        miss = [k for k in miss if k != "SinhHoaMau_Ure" or "SinhHoaMau_Ure" in payload]
+        if miss:
+            # One more short wait then re-check
+            time.sleep(delay_s)
+            row2, token = load_cls_view(token, phieukham_id, reauth=reauth)
+            miss2 = cls_missing_lab_fields(row2 or row, payload)
+            miss2 = [k for k in miss2 if k != "SinhHoaMau_Ure" or "SinhHoaMau_Ure" in payload]
+            if miss2:
+                return False, f"VERIFY_FAIL missing={','.join(miss2[:12])}", token
 
     return True, "verified Get+FormViewer", token
 
@@ -579,6 +579,7 @@ def insert_cls(token: str, payload: dict, reauth=None) -> tuple[bool, str, dict,
 
     # Ensure urine text is only number or exact "Negative" before first Set
     clean = dict(payload)
+    clean["LoaiKham"] = int(LOAI_KHAM_DINH_KY)
     wanted_uro = None
     for k in list(clean.keys()):
         if k in URINE_TEXT_FIELDS:

@@ -134,32 +134,28 @@ def _collect_scan_dirs(
         return _uniq_dirs(dirs)
 
     if role == "missing":
-        # KHONG them MISSING vao scan_dirs — rematch CSV only (tranh treo G:).
-        fillable = [processed, under18, tk1, tk2]
+        # G offline: full/repair walks fillable + MISSING; hourly = fillable CSV only
+        fillable = [processed, under18, tk1, tk2, sync / "CCCD"]
         if full_scan or repair:
-            return _uniq_dirs(fillable)
-        # Hourly missing-bot: khong walk disk archive; CSV rematch trong auto_cycle
+            return _uniq_dirs([missing, *fillable])
         return []
 
     if not full_scan:
         if repair:
-            return _uniq_dirs(list(inbox_dirs) + fillable_extra)
+            return _uniq_dirs(list(inbox_dirs) + fillable_extra + [sync / "CCCD"])
         return _uniq_dirs(list(inbox_dirs))
 
-    # full-scan all: moi folder fillable — LOAI MISSING / MISSING_* (Drive hang)
+    # full-scan all: moi folder tren G (G da offline — quet that ky)
     roots: list[Path] = []
-    skip = {".git", "missing"}
+    skip = {".git"}
     if sync.exists():
         for child in sorted(sync.iterdir()):
             if not child.is_dir():
                 continue
-            name_u = child.name.upper()
             if child.name.lower() in skip:
                 continue
-            if name_u == "MISSING" or name_u.startswith("MISSING"):
-                continue
             roots.append(child)
-    for must in (*inbox_dirs, *fillable_extra):
+    for must in (*inbox_dirs, missing, *fillable_extra, sync / "CCCD"):
         if must.exists() and must not in roots:
             roots.append(must)
     return roots
@@ -343,15 +339,24 @@ def _route_after_import(
     nam_sinh: str = "",
     tk1_dir: Path | None = None,
     tk2_dir: Path | None = None,
+    cccd_dir: Path | None = None,
     n_accounts: int = 1,
     primary_account: str = "",
     sample_kind: str = "BLOOD_URINE",
     force_error: bool = False,
+    name_mismatch: bool = False,
 ) -> None:
-    """FULL+2TK → PROCESSED/U18; FULL+1TK → TK1/TK2; PARTIAL/OTHER → ERROR."""
+    """FULL+2TK → PROCESSED/U18; FULL+1TK → TK1/TK2; CCCD mismatch → CCCD; PARTIAL → ERROR."""
     is_kid = _patient_under18(nam_sinh or row.get("nam_sinh") or "", pdf.name)
     other_sample = sample_kind == "OTHER" or force_error
-    if other_sample or coverage not in {"FULL"}:
+    if name_mismatch and cccd_dir is not None and coverage == "FULL" and not other_sample:
+        dest = cccd_dir
+        row["status"] = "IMPORTED"
+        row["notes"] = f"imported_cccd_name_mismatch:{note}"[:200]
+        stats["imported"] += 1
+        stats["routed_cccd"] += 1
+        tag = "CCCD"
+    elif other_sample or coverage not in {"FULL"}:
         dest = error_dir
         row["status"] = "ERROR_IMPORT"
         row["notes"] = f"imported_{coverage.lower()}_to_error:{note}"[:200]
@@ -398,7 +403,7 @@ def _route_after_import(
         moves.append(f"{tag}_MOVE_FAIL\t{row.get('ho_ten')}\t{pdf.name}\t->\t{dest.name}")
     safe_print(
         f"  {tag} coverage={coverage} accounts={n_accounts} kid={is_kid} "
-        f"{row.get('ho_ten')} pid={pid}"
+        f"name_mismatch={name_mismatch} {row.get('ho_ten')} pid={pid}"
     )
 
 
@@ -516,7 +521,8 @@ def _run_auto_cycle_inner(
     under18_dir = sync / UNDER18_FOLDER
     tk1_dir = sync / "TK1"
     tk2_dir = sync / "TK2"
-    for p in (inbox, processed, error_dir, missing, under18_dir, tk1_dir, tk2_dir):
+    cccd_dir = sync / "CCCD"
+    for p in (inbox, processed, error_dir, missing, under18_dir, tk1_dir, tk2_dir, cccd_dir):
         try:
             p.mkdir(parents=True, exist_ok=True)
         except Exception as e:
@@ -651,9 +657,9 @@ def _run_auto_cycle_inner(
             continue
         tag = base.name.lower()
         tag_u = base.name.upper()
-        # Never walk MISSING* here (Drive hang) — should already be excluded
-        if tag_u == "MISSING" or tag_u.startswith("MISSING"):
-            safe_print(f"SKIP disk walk {base.name} (CSV rematch only)")
+        # Never skip CCCD folder; MISSING walk OK when G offline (full/repair)
+        if tag_u.startswith("MISSING") and not (full_scan or repair):
+            safe_print(f"SKIP disk walk {base.name} (hourly: CSV rematch only)")
             continue
         try:
             pdf_iter = list(base.rglob("*.pdf"))
@@ -1240,6 +1246,10 @@ def _run_auto_cycle_inner(
             continue
 
         row["ho_ten"] = data.get("ho_ten") or row.get("ho_ten") or ""
+        if data.get("cccd"):
+            row["cccd"] = data.get("cccd")
+        if data.get("cccd") and not row.get("cccd"):
+            row["cccd"] = data["cccd"]
         row["mau_kham"] = data.get("mau_kham") or row.get("mau_kham") or ""
         data["file_name"] = pdf.name
         data["source_file"] = str(pdf)
@@ -1412,8 +1422,14 @@ def _run_auto_cycle_inner(
             fields_sent = len([k for k in payload if k in LAB_TO_FORM.values()])
             has_cls = cls_has_lab_values(existing)
             missing_on_web = cls_missing_lab_fields(existing, payload) if has_cls else []
-            missing_wo_urea = [k for k in missing_on_web if k != "SinhHoaMau_Ure"]
-            needs_fill = (not has_cls) or bool(missing_wo_urea) or force or repair
+            # Urea optional only when PDF did not send it
+            missing_wo_urea = [
+                k
+                for k in missing_on_web
+                if k != "SinhHoaMau_Ure" or "SinhHoaMau_Ure" in payload
+            ]
+            # Gap-only: repair opens folder scope but does NOT force re-DIEN when web already complete
+            needs_fill = (not has_cls) or bool(missing_wo_urea) or force
 
             if not needs_fill and fields_sent > 0:
                 filled_ok += 1
@@ -1433,35 +1449,60 @@ def _run_auto_cycle_inner(
             verified, vdetail, tokens[aid] = verify_cls_saved(
                 tokens[aid], pid, payload=payload, reauth=make_reauth(mrec)
             )
-            last_msg = f"{msg};{vdetail}"
             existing2, tokens[aid] = load_cls_view(
                 tokens[aid], pid, reauth=make_reauth(mrec)
             )
             still = cls_missing_lab_fields(existing2, payload)
-            still_wo = [k for k in still if k != "SinhHoaMau_Ure"]
-            if ok and verified and fields_sent > 0 and not still_wo:
+            still_wo = [
+                k for k in still if k != "SinhHoaMau_Ure" or "SinhHoaMau_Ure" in payload
+            ]
+            if still_wo and ok:
+                # One gap re-Set with full payload
+                ok2, msg2, _raw2, tokens[aid] = insert_cls(
+                    tokens[aid], payload, reauth=make_reauth(mrec)
+                )
+                time.sleep(0.08)
+                verified, vdetail, tokens[aid] = verify_cls_saved(
+                    tokens[aid], pid, payload=payload, reauth=make_reauth(mrec)
+                )
+                existing2, tokens[aid] = load_cls_view(
+                    tokens[aid], pid, reauth=make_reauth(mrec)
+                )
+                still = cls_missing_lab_fields(existing2, payload)
+                still_wo = [
+                    k
+                    for k in still
+                    if k != "SinhHoaMau_Ure" or "SinhHoaMau_Ure" in payload
+                ]
+                msg = f"{msg};retry:{msg2}"
+                ok = ok2 and ok
+
+            if ok and verified and not still_wo:
                 filled_ok += 1
                 safe_print(
                     f"  DIEN OK [{aid}] {data.get('ho_ten')} pid={pid} "
-                    f"fields={fields_sent} coverage={coverage}"
+                    f"fields={fields_sent} loai=dinh_ky"
                 )
-            elif ok and fields_sent > 0:
-                filled_ok += 1
+            elif ok:
                 any_incomplete = True
+                last_msg = f"{msg};{vdetail}"
                 safe_print(
                     f"  DIEN PARTIAL [{aid}] {data.get('ho_ten')} pid={pid} "
-                    f"missing={still_wo[:6]}"
+                    f"missing={still_wo[:8]} verify={vdetail}"
                 )
             else:
+                any_incomplete = True
+                last_msg = f"{msg};{vdetail}"
                 stats["error_import"] += 1
                 safe_print(f"  ERROR [{aid}] {data.get('ho_ten')} pid={pid} msg={last_msg}")
 
         attempts = int(row.get("import_attempts") or 0) + 1
         row["import_attempts"] = str(attempts)
         row["imported_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        nm_flag = bool(getattr(tthc, "name_mismatch", False))
         row["notes"] = (
             f"tthc_accounts={label};cls_filled={filled_ok}/{n_accts};"
-            f"mode={tthc.mode};{last_msg}"
+            f"mode={tthc.mode};name_mismatch={nm_flag};{last_msg}"
         )[:200]
 
         route_coverage = coverage
@@ -1486,10 +1527,13 @@ def _run_auto_cycle_inner(
                 nam_sinh=str(data.get("nam_sinh") or row.get("nam_sinh") or ""),
                 tk1_dir=tk1_dir,
                 tk2_dir=tk2_dir,
+                cccd_dir=cccd_dir,
                 n_accounts=n_accts,
                 primary_account=primary_aid,
                 sample_kind=sample_kind,
-                force_error=force_error or route_coverage in {"PARTIAL", "URINE_ONLY", "EMPTY", "OTHER"},
+                force_error=force_error
+                or route_coverage in {"PARTIAL", "URINE_ONLY", "EMPTY", "OTHER"},
+                name_mismatch=nm_flag,
             )
             results.append(
                 {

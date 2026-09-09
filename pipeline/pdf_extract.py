@@ -353,12 +353,12 @@ def _parse_lab_line(line: str, name_pat: str) -> tuple[str, str] | None:
     grabbed the first number inside (80.0-99.0) or failed when pdfplumber glued
     Name+value (MCV65.4) → MCV/MCH/MCHC/Hb missing on web.
     """
-    m = re.search(name_pat + r"\s*(.+)$", line, re.I)
+    m = re.search(rf"(?:{name_pat})\s*(.+)$", line, re.I)
     if not m:
-        if re.search(name_pat + r"\s*$", line, re.I):
+        if re.search(rf"(?:{name_pat})\s*$", line, re.I):
             return None
         return None
-    rest = m.group(1).strip()
+    rest = (m.group(m.lastindex) if m.lastindex else m.group(1) or "").strip()
     if not rest:
         return None
 
@@ -457,13 +457,21 @@ _TABLE_NAME_PATS: list[tuple[str, re.Pattern[str]]] = [
     ("RBC", re.compile(r"Erythrocytes|^\s*RBC\b", re.I)),
     ("HGB", re.compile(r"Hemoglobin|\bHb\b|\bHGB\b", re.I)),
     ("HCT", re.compile(r"Hematocrit|\bHct\b", re.I)),
-    ("MCV", re.compile(r"\bMCV\b", re.I)),
-    ("MCHC", re.compile(r"\bMCHC\b", re.I)),
-    ("MCH", re.compile(r"\bMCH\b(?!C)", re.I)),
-    ("RDW", re.compile(r"\bRDW\b", re.I)),
+    ("MCV", re.compile(rf"\bMCV{_LAB_TAIL}", re.I)),
+    ("MCHC", re.compile(rf"\bMCHC{_LAB_TAIL}", re.I)),
+    ("MCH", re.compile(rf"\bMCH(?!C){_LAB_TAIL}", re.I)),
+    ("RDW", re.compile(rf"\bRDW{_LAB_TAIL}", re.I)),
     ("PLT", re.compile(r"Platelets|\bPLT\b", re.I)),
-    ("MPV", re.compile(r"\bMPV\b", re.I)),
-    ("Glucose", re.compile(r"\bGlucose\b|Đường", re.I)),
+    ("MPV", re.compile(rf"\bMPV{_LAB_TAIL}", re.I)),
+    (
+        "Glucose_fasting",
+        re.compile(
+            r"(?:Glucose|Đường\s*(?:huyết|máu)|Duong\s*(?:huyet|mau)).{0,20}(?:lúc\s*đói|luc\s*doi|fasting|đói|doi)\b|"
+            r"(?:lúc\s*đói|luc\s*doi|fasting).{0,20}(?:Glucose|Đường|Duong)",
+            re.I,
+        ),
+    ),
+    ("Glucose", re.compile(r"\bGlucose\b|Đường\s*(?:huyết|máu|bất\s*kỳ)?|Duong", re.I)),
     ("Urea", re.compile(r"\bUrea\b|\bBUN\b|Urê|\bUre\b", re.I)),
     ("Creatinine", re.compile(r"Creatinine|Creatinin", re.I)),
     ("AST", re.compile(r"\bAST\b|SGOT", re.I)),
@@ -602,8 +610,18 @@ def parse_labs(text: str) -> dict:
     # Chemistry — prefer sinhhoa; fall back to full body (minus urine) if missing
     chem_body = sinhhoa if sinhhoa.strip() else huyet
     chem_fallback = huyet + "\n" + sinhhoa
+    # Fasting glucose first (more specific), then random/any-time Glucose
     for key, pat in [
-        ("Glucose", r"(?:\bGlucose\b|Đường\s*(?:huyết|máu)|Duong\s*(?:huyet|mau)|Blood\s*sugar)"),
+        (
+            "Glucose_fasting",
+            r"(?:(?:\bGlucose\b|Đường\s*(?:huyết|máu)|Duong\s*(?:huyet|mau)).{0,24}(?:lúc\s*đói|luc\s*doi|fasting|\bđói\b|\bdoi\b))"
+            r"|(?:(?:lúc\s*đói|luc\s*doi|fasting)\s*[:\-]?\s*(?:\bGlucose\b|Đường\s*(?:huyết|máu)?|Duong))",
+        ),
+        (
+            "Glucose",
+            r"(?:\bGlucose\b|Đường\s*(?:huyết|máu)(?:\s*bất\s*kỳ)?|Duong\s*(?:huyet|mau)|Blood\s*sugar)"
+            r"(?!.{0,12}(?:lúc\s*đói|luc\s*doi|fasting))",
+        ),
         ("Urea", r"(?:\bUrea\b|\bBUN\b|Urê|Ure(?:a)?\b)"),
         ("Creatinine", r"(?:\bCreatinine\b|Creatinin)"),
         ("AST", r"AST\s*\(?\s*SGOT\s*\)?"),
@@ -611,14 +629,15 @@ def parse_labs(text: str) -> dict:
     ]:
         got = _find_lab_in_text(chem_body, pat) or _find_lab_in_text(chem_fallback, pat)
         if got:
-            # Blood Glucose must be numeric — ignore urine "Âm tính" if chem split failed
-            if key == "Glucose" and not re.fullmatch(r"[<>]?\d+(?:[.,]\d+)?", str(got[0])):
+            if key in ("Glucose", "Glucose_fasting") and not re.fullmatch(
+                r"[<>]?\d+(?:[.,]\d+)?", str(got[0])
+            ):
                 got = None
         if got:
             labs[key] = {"value_raw": got[0], "unit_raw": got[1]}
 
     # Explicit blood-Glucose rescue from whole PDF text (before urine Âm tính line)
-    if "Glucose" not in labs:
+    if "Glucose" not in labs and "Glucose_fasting" not in labs:
         pre_urine = text
         m_u = re.search(r"(?is)\n\s*(?:Nước\s*tiểu|Phân\s*tích\s*nước\s*tiểu)\b", text)
         if m_u:
@@ -626,6 +645,19 @@ def parse_labs(text: str) -> dict:
         got = _find_lab_in_text(
             pre_urine,
             r"(?:\bGlucose\b|Đường\s*(?:huyết|máu)|Duong\s*(?:huyet|mau))",
+        )
+        if got and re.fullmatch(r"[<>]?\d+(?:[.,]\d+)?", str(got[0])):
+            labs["Glucose"] = {"value_raw": got[0], "unit_raw": got[1]}
+    elif "Glucose" not in labs:
+        # Already have fasting only — also try a non-fasting line
+        pre_urine = text
+        m_u = re.search(r"(?is)\n\s*(?:Nước\s*tiểu|Phân\s*tích\s*nước\s*tiểu)\b", text)
+        if m_u:
+            pre_urine = text[: m_u.start()]
+        got = _find_lab_in_text(
+            pre_urine,
+            r"(?:\bGlucose\b|Đường\s*(?:huyết|máu)(?:\s*bất\s*kỳ)?|Duong\s*(?:huyet|mau))"
+            r"(?!.{0,12}(?:lúc\s*đói|luc\s*doi|fasting))",
         )
         if got and re.fullmatch(r"[<>]?\d+(?:[.,]\d+)?", str(got[0])):
             labs["Glucose"] = {"value_raw": got[0], "unit_raw": got[1]}

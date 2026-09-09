@@ -28,6 +28,7 @@ class TTHCMatchResult:
     status: str  # READY_IMPORT | WAITING_ADMIN | AMBIGUOUS_NAME
     matches: list[dict] = field(default_factory=list)
     mode: str = ""
+    name_mismatch: bool = False
 
 
 def normalize_phone_digits(raw: str) -> str:
@@ -104,6 +105,49 @@ def collect_exact_name_candidates(index: dict, fold_name: str) -> list[dict]:
     return out
 
 
+def collect_cccd_candidates(index: dict, cccd: str) -> list[dict]:
+    """Lookup by CCCD only (PDF name may differ from web HoTen)."""
+    cc = re.sub(r"\D", "", str(cccd or ""))
+    if len(cc) < 9:
+        return []
+    seen: set[Any] = set()
+    out: list[dict] = []
+    for rec in _index_recs(index.get("by_cccd") or {}, cc):
+        if not isinstance(rec, dict):
+            continue
+        pid = rec.get("phieukhamId") or rec.get("Id")
+        if pid in seen:
+            continue
+        seen.add(pid)
+        out.append(rec)
+    return out
+
+
+def _finalize_matches(
+    pool: list[dict],
+    work: dict,
+    accounts: list[dict] | None,
+    mode: str,
+    *,
+    name_mismatch: bool = False,
+) -> TTHCMatchResult:
+    allowed = {a["id"] for a in accounts} if accounts else None
+    by_acct: dict[str, tuple[int, dict]] = {}
+    for rec in pool:
+        aid = str(rec.get("_medinet_account") or "")
+        if allowed is not None and aid and aid not in allowed:
+            continue
+        sc = score_tthc_candidate(rec, work)
+        if aid not in by_acct or sc > by_acct[aid][0]:
+            by_acct[aid] = (sc, rec)
+    matches = [rec for _, rec in by_acct.values()]
+    if not matches:
+        return TTHCMatchResult("WAITING_ADMIN", [], "no_account_match")
+    return TTHCMatchResult(
+        "READY_IMPORT", matches, mode, name_mismatch=name_mismatch
+    )
+
+
 def score_tthc_candidate(rec: dict, row: dict) -> int:
     score = 0
     pdf_year = str(row.get("nam_sinh") or "").strip()
@@ -159,18 +203,54 @@ def resolve_tthc_matches(
     index: dict,
     accounts: list[dict] | None = None,
 ) -> TTHCMatchResult:
-    """Exact folded full name; disambiguate with year / phone / CCCD / DOB."""
+    """Exact folded full name; CCCD unique wins even when PDF name differs."""
     name, year = resolve_name_year(row)
     fold = _fold_name(name)
-    if not fold:
-        return TTHCMatchResult("WAITING_ADMIN", [], "no_name")
-
     work = dict(row)
     if year:
         work["nam_sinh"] = year
+    cc = pdf_cccd_digits(work)
+
+    def _try_cccd(fallback_mode: str) -> TTHCMatchResult | None:
+        if not cc:
+            return None
+        hits = collect_cccd_candidates(index, cc)
+        if not hits:
+            return None
+        by_a: dict[str, list] = {}
+        for r in hits:
+            aid = str(r.get("_medinet_account") or "")
+            by_a.setdefault(aid, []).append(r)
+        if any(len(v) > 1 for v in by_a.values()):
+            return None
+        pool = [v[0] for v in by_a.values()]
+        mismatch = False
+        if fold:
+            for r in pool:
+                rn = _fold_name(str(r.get("HoTen") or ""))
+                if rn and rn != fold:
+                    mismatch = True
+                    break
+        else:
+            mismatch = True
+        mode = "cccd_name_mismatch" if mismatch else (fallback_mode or "cccd_unique")
+        if mismatch:
+            mode = "cccd_name_mismatch"
+        return _finalize_matches(
+            pool, work, accounts, mode, name_mismatch=mismatch
+        )
+
+    if not fold:
+        got = _try_cccd("cccd_only")
+        if got:
+            return got
+        return TTHCMatchResult("WAITING_ADMIN", [], "no_name")
 
     candidates = collect_exact_name_candidates(index, fold)
     if not candidates:
+        got = _try_cccd("cccd_no_name_in_index")
+        if got:
+            return got
         return TTHCMatchResult("WAITING_ADMIN", [], "no_name_in_index")
 
     has_refs = pdf_has_reference_params(work)
@@ -181,10 +261,16 @@ def resolve_tthc_matches(
             pool = candidates
             mode = "unique_name_no_params"
         else:
+            got = _try_cccd("cccd_dup_name")
+            if got:
+                return got
             return TTHCMatchResult("AMBIGUOUS_NAME", [], f"dup_name_{len(candidates)}")
     else:
         pool = [c for c in candidates if _params_compatible(c, work)]
         if not pool:
+            got = _try_cccd("cccd_params_conflict")
+            if got:
+                return got
             return TTHCMatchResult("WAITING_ADMIN", [], "params_conflict")
         if len(pool) == 1:
             mode = "params_unique"
@@ -210,16 +296,17 @@ def resolve_tthc_matches(
                     pool = strong
                     mode = "params_strong_id"
                 else:
-                    # Same name+score on 2 accounts → keep both for dual-write.
-                    # Ambiguous only if one account has 2+ people tied (no phone/CCCD).
-                    by_a: dict[str, list] = {}
+                    by_a2: dict[str, list] = {}
                     for r in tied:
                         aid = str(r.get("_medinet_account") or "")
-                        by_a.setdefault(aid, []).append(r)
-                    if any(len(v) > 1 for v in by_a.values()) and not (
+                        by_a2.setdefault(aid, []).append(r)
+                    if any(len(v) > 1 for v in by_a2.values()) and not (
                         pdf_cccd_digits(work)
                         or normalize_phone_digits(str(work.get("sdt") or ""))
                     ):
+                        got = _try_cccd("cccd_tied")
+                        if got:
+                            return got
                         return TTHCMatchResult(
                             "AMBIGUOUS_NAME", [], f"tied_{len(tied)}"
                         )
@@ -229,21 +316,7 @@ def resolve_tthc_matches(
                 pool = [scored[0]]
                 mode = "params_top_score"
 
-    allowed = {a["id"] for a in accounts} if accounts else None
-    by_acct: dict[str, tuple[int, dict]] = {}
-    for rec in pool:
-        aid = str(rec.get("_medinet_account") or "")
-        if allowed is not None and aid and aid not in allowed:
-            continue
-        sc = score_tthc_candidate(rec, work)
-        if aid not in by_acct or sc > by_acct[aid][0]:
-            by_acct[aid] = (sc, rec)
-
-    matches = [rec for _, rec in by_acct.values()]
-    if not matches:
-        return TTHCMatchResult("WAITING_ADMIN", [], "no_account_match")
-
-    return TTHCMatchResult("READY_IMPORT", matches, mode)
+    return _finalize_matches(pool, work, accounts, mode, name_mismatch=False)
 
 
 def account_folder_name(account_id: str) -> str:

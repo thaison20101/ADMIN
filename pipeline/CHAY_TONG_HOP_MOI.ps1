@@ -177,11 +177,11 @@ function Start-TwoBots {
       }
     }
     Write-Host ("  heartbeat {0}s inbox_alive={1} audit_alive={2} | {3}" -f $sec, $alive1, $alive2, $tail)
-    if ($sec -ge 14400) {
-      Write-Host "!! Bot chay hon 4h  -  co the treo Drive. Dung PID, pull code moi (khong walk MISSING)."
+    if ($sec -ge 43200) {
+      Write-Host "!! Bot chay hon 12h - dung PID. Chay lai CHAY_MOT_LAN_CHUAN.ps1 de tiep."
       try { if (-not $b1.HasExited) { Stop-Process -Id $b1.Id -Force -ErrorAction SilentlyContinue } } catch {}
       try { if (-not $b2.HasExited) { Stop-Process -Id $b2.Id -Force -ErrorAction SilentlyContinue } } catch {}
-      $script:FatalAbort = "bot_timeout_4h"
+      $script:FatalAbort = "bot_timeout_12h"
       $script:HadEarlyExit = $true
       return 2
     }
