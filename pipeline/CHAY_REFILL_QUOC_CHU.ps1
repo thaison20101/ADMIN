@@ -23,20 +23,24 @@ Write-Host "=== REFILL QUOC CHU ==="
 Write-Host "NOTE: If Drive popup says sync paused, click Continue sync."
 
 $PdfArg = @()
-# Try ASCII + Unicode path variants (Drive folder name differs by locale)
+# ASCII path variants + live root from drive_paths.py (prints PIPELINE: ...)
 $pipeRoots = @(
   "G:\Drive cua toi\PKDK_Thuankieu_Pipeline",
   "G:\My Drive\PKDK_Thuankieu_Pipeline",
   "G:\PKDK_Thuankieu_Pipeline"
 )
-# Also resolve live root from Python (handles "Drive cua toi" unicode)
 try {
-  $pyRoot = & $Python -c "from drive_paths import discover_pipeline_root; print(discover_pipeline_root())"
-  if ($pyRoot -and (Test-Path -LiteralPath $pyRoot)) {
-    $pipeRoots = @($pyRoot) + $pipeRoots
+  $dpOut = & $Python ".\pipeline\drive_paths.py" 2>$null
+  foreach ($line in $dpOut) {
+    if ($line -match '^PIPELINE:\s*(.+)$') {
+      $live = $Matches[1].Trim()
+      if ($live -and (Test-Path -LiteralPath $live)) {
+        $pipeRoots = @($live) + $pipeRoots
+      }
+    }
   }
 } catch {
-  Write-Host "WARN: could not resolve pipeline root via Python"
+  Write-Host "WARN: drive_paths.py failed; using default G: roots"
 }
 
 $subFolders = @("TK2", "TK1", "ERROR", "CCCD", "PROCESSED", "MISSING", "INBOX_CLS")
