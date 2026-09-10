@@ -1248,8 +1248,6 @@ def _run_auto_cycle_inner(
         row["ho_ten"] = data.get("ho_ten") or row.get("ho_ten") or ""
         if data.get("cccd"):
             row["cccd"] = data.get("cccd")
-        if data.get("cccd") and not row.get("cccd"):
-            row["cccd"] = data["cccd"]
         row["mau_kham"] = data.get("mau_kham") or row.get("mau_kham") or ""
         data["file_name"] = pdf.name
         data["source_file"] = str(pdf)

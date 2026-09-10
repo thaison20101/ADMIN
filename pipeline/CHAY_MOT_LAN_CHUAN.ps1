@@ -72,6 +72,13 @@ if ($LASTEXITCODE -ne 0) {
 & $Python ".\pipeline\drive_paths.py"
 & $Python ".\pipeline\restore_cases_snapshot.py"
 & $Python ".\pipeline\print_disk_counts.py" | ForEach-Object { Log $_ }
+if ($LASTEXITCODE -ne 0) {
+  Log ("WARN print_disk_counts exit=" + $LASTEXITCODE + " (tiep tuc)")
+}
+
+Log "==== 3b/6 Force refill Quoc Chu (MCHC/RDW) ===="
+& $Python ".\pipeline\refill_one_patient.py" | ForEach-Object { Log $_ }
+Log ("refill_one_patient exit=" + $LASTEXITCODE)
 
 Log "==== 4/6 FULL SCAN gap-only (toan G, 2 bot, heartbeat) ===="
 # SkipPull: da reset hard o tren. MinRoundSeconds thap hon vi gap-only.
@@ -86,6 +93,9 @@ Log ("BO_SUNG exit=" + $LASTEXITCODE)
 Log "==== 6/6 Tong ket ===="
 & $Python ".\pipeline\print_counts.py" | ForEach-Object { Log $_ }
 & $Python ".\pipeline\print_disk_counts.py" | ForEach-Object { Log $_ }
+if ($LASTEXITCODE -ne 0) {
+  Log ("WARN print_disk_counts exit=" + $LASTEXITCODE)
+}
 Log "XONG. Co the tat may / di lam viec khac."
 Log "Kiem tra: form Quoc Chu (MCHC/RDW/duong dung o/kham dinh ky) + folder CCCD tren G:."
 Log ("Chi tiet: " + $MasterLog)
