@@ -471,7 +471,10 @@ _TABLE_NAME_PATS: list[tuple[str, re.Pattern[str]]] = [
             re.I,
         ),
     ),
-    ("Glucose", re.compile(r"\bGlucose\b|Đường\s*(?:huyết|máu|bất\s*kỳ)?|Duong", re.I)),
+    ("Glucose", re.compile(
+        r"\bGlucose\b|Đường\s*(?:huyết|máu)(?:\s*bất\s*kỳ)?|Duong\s*(?:huyet|mau)?(?:\s*bat\s*ky)?",
+        re.I,
+    )),
     ("Urea", re.compile(r"\bUrea\b|\bBUN\b|Urê|\bUre\b", re.I)),
     ("Creatinine", re.compile(r"Creatinine|Creatinin", re.I)),
     ("AST", re.compile(r"\bAST\b|SGOT", re.I)),
@@ -619,7 +622,9 @@ def parse_labs(text: str) -> dict:
         ),
         (
             "Glucose",
-            r"(?:\bGlucose\b|Đường\s*(?:huyết|máu)(?:\s*bất\s*kỳ)?|Duong\s*(?:huyet|mau)|Blood\s*sugar)"
+            # bat ky / bất kỳ = random blood sugar (SinhHoaMau_DuongMau), never luc doi
+            r"(?:\bGlucose\b|Đường\s*(?:huyết|máu)(?:\s*bất\s*kỳ)?|"
+            r"Duong\s*(?:huyet|mau)(?:\s*bat\s*ky)?|Blood\s*sugar)"
             r"(?!.{0,12}(?:lúc\s*đói|luc\s*doi|fasting))",
         ),
         ("Urea", r"(?:\bUrea\b|\bBUN\b|Urê|Ure(?:a)?\b)"),
@@ -656,7 +661,8 @@ def parse_labs(text: str) -> dict:
             pre_urine = text[: m_u.start()]
         got = _find_lab_in_text(
             pre_urine,
-            r"(?:\bGlucose\b|Đường\s*(?:huyết|máu)(?:\s*bất\s*kỳ)?|Duong\s*(?:huyet|mau))"
+            r"(?:\bGlucose\b|Đường\s*(?:huyết|máu)(?:\s*bất\s*kỳ)?|"
+            r"Duong\s*(?:huyet|mau)(?:\s*bat\s*ky)?)"
             r"(?!.{0,12}(?:lúc\s*đói|luc\s*doi|fasting))",
         )
         if got and re.fullmatch(r"[<>]?\d+(?:[.,]\d+)?", str(got[0])):

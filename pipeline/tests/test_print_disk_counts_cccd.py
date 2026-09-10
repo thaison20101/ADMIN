@@ -28,7 +28,7 @@ def test_disk_counts_handles_cccd(tmp_path):
     for name in list(STD_FOLDERS) + list(EXTRA_FOLDERS):
         (sync / name).mkdir(parents=True, exist_ok=True)
     build = tmp_path / "build"
-    build.mkdir()
+    build.mkdir(exist_ok=True)
 
     def fake_folders(pipeline, build_root):
         return {n: pipeline / n for n in list(STD_FOLDERS) + list(EXTRA_FOLDERS)}
@@ -49,7 +49,10 @@ def test_disk_counts_handles_cccd(tmp_path):
 
 
 if __name__ == "__main__":
+    import tempfile
+
     test_extra_folders_includes_cccd()
     test_key_for_all_std_and_extra()
-    test_disk_counts_handles_cccd(Path("/tmp/pdc_test"))
+    with tempfile.TemporaryDirectory() as td:
+        test_disk_counts_handles_cccd(Path(td))
     print("OK")

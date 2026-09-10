@@ -1,14 +1,21 @@
 # Windows hourly runner for Drive pipeline (MAY A ONLY)
-# 2 TK Medinet + 2 bot: INBOX_CLS + MISSING CSV + TK1/TK2 CSV rematch
-# Rule: ho+ten DAY DU + nam/ngay sinh/SDT/CCCD (thieu OK neu khong conflict)
-#   unique ten -> dien | trung ten >=2 -> UNDER 18 | dual-write CLS ca 2 TK
-#   2TK+FULL -> PROCESSED/U18 | 1TK+FULL -> TK1/TK2
-#   PARTIAL/mau khac -> ERROR | no TTHC -> MISSING
+# ASCII-only comments for Windows PowerShell 5.1
 #
+# CUNG rule dien moi voi CHAY_MOT_LAN_CHUAN / auto_cycle:
+#   - Parse MCHC/RDW (Ghi chu / token dinh)
+#   - Gap-only: PDF co ma web thieu/sai -> dien; du khop -> giu
+#   - Duong mau bat ky -> SinhHoaMau_DuongMau; luc doi -> LucDoi (khong copy cheo)
+#   - LoaiKham dinh ky 5152; verify cung sau Set
+#   - Match: ho+ten DAY DU + nam/SDT/CCCD; CCCD+ten lech -> folder CCCD
+#   - Route: 2TK+FULL->PROCESSED/U18 | 1TK+FULL->TK1/TK2
+#            PARTIAL/OTHER->ERROR | noTTHC->MISSING | trung ten->UNDER18
+#
+# 2 bot: INBOX_CLS disk + MISSING/TK1/TK2 CSV rematch
 # Lan dau (chua FIRST_FULL_SCAN_DONE): full-scan 2 bot
-# Sau do: hourly nhe (NGUYEN TAC QUET FILE CU)
+# Sau do: hourly nhe (KHONG full rglob G moi gio)
 #
 # Installed by: .\pipeline\install_hourly_task.ps1
+# Quet lai toan G + bat hourly: .\pipeline\CHAY_MOT_LAN_CHUAN.ps1
 
 $ErrorActionPreference = "Continue"
 $Repo = Split-Path -Parent $PSScriptRoot

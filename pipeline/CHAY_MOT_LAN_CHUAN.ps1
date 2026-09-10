@@ -1,7 +1,12 @@
 # ============================================================
-# 1 LENH DUY NHAT MAY A - chay xong roi di lam viec khac
-# Quet toan bo G (da offline) + dien thieu + rematch MISSING
-# + CCCD dung / ten sai -> folder CCCD + kham dinh ky
+# 1 LENH MAY A: quet lai toan G theo rule dien moi + BAT hourly
+# ASCII-only (Windows PowerShell 5.x)
+#
+# Rule dien moi (auto_cycle):
+#   - Parse MCHC/RDW Ghi chu / token dinh
+#   - Gap-only: PDF co ma web thieu/sai -> dien; du khop -> giu
+#   - Duong mau bat ky -> SinhHoaMau_DuongMau; luc doi -> LucDoi
+#   - LoaiKham dinh ky 5152; verify cung; CCCD+ten lech -> folder CCCD
 #
 #   cd C:\Users\thais\ADMIN
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_MOT_LAN_CHUAN.ps1
@@ -35,7 +40,7 @@ function Log([string]$m) {
 }
 
 Log "############################################################"
-Log "#  CHAY 1 LAN CHUAN - quet toan G + dien du + CCCD folder  #"
+Log "#  QUET LAI TOAN G (rule moi) + BAT HOURLY                  #"
 Log "############################################################"
 Log ("Repo=" + $Repo)
 Log ("Python=" + $Python)
@@ -76,12 +81,8 @@ if ($LASTEXITCODE -ne 0) {
   Log ("WARN print_disk_counts exit=" + $LASTEXITCODE + " (tiep tuc)")
 }
 
-Log "==== 3b/6 Force refill Quoc Chu (MCHC/RDW) ===="
-& $Python ".\pipeline\refill_one_patient.py" | ForEach-Object { Log $_ }
-Log ("refill_one_patient exit=" + $LASTEXITCODE)
-
-Log "==== 4/6 FULL SCAN gap-only (toan G, 2 bot, heartbeat) ===="
-# SkipPull: da reset hard o tren. MinRoundSeconds thap hon vi gap-only.
+Log "==== 4/6 FULL SCAN gap-only (toan G, 2 bot) ===="
+# SkipPull: da reset hard o tren.
 & powershell -ExecutionPolicy Bypass -File ".\pipeline\CHAY_TONG_HOP_MOI.ps1" -SkipPull -FullRounds 2 -RematchRounds 6 -MissingBudget 4000 -MinRoundSeconds 120
 $code = $LASTEXITCODE
 Log ("TONG_HOP exit=" + $code)
@@ -90,13 +91,30 @@ Log "==== 5/6 Bo sung thieu fillable (gap-only) ===="
 & powershell -ExecutionPolicy Bypass -File ".\pipeline\CHAY_BO_SUNG_THIEU.ps1" -SkipPull -Rounds 2
 Log ("BO_SUNG exit=" + $LASTEXITCODE)
 
-Log "==== 6/6 Tong ket ===="
+Log "==== 6/6 Tong ket + BAT hourly (cung rule moi) ===="
 & $Python ".\pipeline\print_counts.py" | ForEach-Object { Log $_ }
 & $Python ".\pipeline\print_disk_counts.py" | ForEach-Object { Log $_ }
 if ($LASTEXITCODE -ne 0) {
   Log ("WARN print_disk_counts exit=" + $LASTEXITCODE)
 }
-Log "XONG. Co the tat may / di lam viec khac."
-Log "Kiem tra: form Quoc Chu (MCHC/RDW/duong dung o/kham dinh ky) + folder CCCD tren G:."
+
+Log "Bat / cai lai task PKDK_Hourly_Sync (run_hourly = cung auto_cycle rule moi)..."
+& powershell -ExecutionPolicy Bypass -File ".\pipeline\install_hourly_task.ps1"
+$hourlyCode = $LASTEXITCODE
+Log ("install_hourly_task exit=" + $hourlyCode)
+if ($hourlyCode -ne 0) {
+  Log "WARN: khong dang ky duoc Task Scheduler (can Run as Administrator)."
+  Log "Chay tay: powershell -ExecutionPolicy Bypass -File .\pipeline\install_hourly_task.ps1"
+  # Van thu Enable neu task da co
+  try {
+    Enable-ScheduledTask -TaskName "PKDK_Hourly_Sync" -ErrorAction Stop | Out-Null
+    Log "OK: Enable-ScheduledTask PKDK_Hourly_Sync"
+  } catch {
+    Log ("WARN Enable hourly: " + $_.Exception.Message)
+  }
+}
+
+Log "XONG. Da quet lai G + hourly dung rule dien moi."
+Log "Hourly: INBOX_CLS moi + rematch MISSING/TK (khong full rglob G moi gio)."
 Log ("Chi tiet: " + $MasterLog)
 exit $code
