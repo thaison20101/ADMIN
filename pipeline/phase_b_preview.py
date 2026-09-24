@@ -1,0 +1,1421 @@
+#!/usr/bin/env python3
+"""Phase B step 1: parse PDFs → Excel preview + missing/updated lists.
+
+Does NOT import to Medinet yet. Run this first so you can verify values/units.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import date, datetime
+from pathlib import Path
+
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from win_console import safe_print, setup_utf8_stdio  # noqa: E402
+
+setup_utf8_stdio()
+
+from pdf_extract import extract_pdf  # noqa: E402
+
+DEFAULT_CONFIG = ROOT / "pipeline" / "config.example.json"
+LOCAL_CONFIG = ROOT / "pipeline" / "config.local.json"
+
+LAB_COLS = [
+    "WBC",
+    "Neutrophils_pct",
+    "Neutrophils_count",
+    "Eosinophils_pct",
+    "Eosinophils_count",
+    "Monocytes_pct",
+    "Monocytes_count",
+    "Basophils_pct",
+    "Basophils_count",
+    "Lymphocytes_pct",
+    "Lymphocytes_count",
+    "RBC",
+    "HGB",
+    "HCT",
+    "MCV",
+    "MCH",
+    "MCHC",
+    "RDW",
+    "PLT",
+    "MPV",
+    "Glucose",
+    "Urea",
+    "Creatinine",
+    "AST",
+    "ALT",
+    "Urobilinogen",
+    "Glucose_NT",
+    "Ketone",
+    "Bilirubin_NT",
+    "Protein_NT",
+    "Nitrite",
+    "pH_NT",
+    "Mau_NT",
+    "Ti_trong",
+    "Bach_cau_NT",
+]
+
+
+def load_config() -> dict:
+    path = LOCAL_CONFIG if LOCAL_CONFIG.exists() else DEFAULT_CONFIG
+    with path.open(encoding="utf-8-sig") as f:
+        return json.load(f)
+
+
+def _resolve_existing_build(raw: str) -> Path:
+    """Prefer local pipeline/work/build — NEVER write logs/excel to G: (unmounts Drive)."""
+    try:
+        from drive_paths import local_work_build
+
+        return local_work_build()
+    except Exception:
+        pass
+    candidates = []
+    if raw and not str(raw).replace("/", "\\").upper().startswith("G:"):
+        candidates.append(Path(raw))
+    candidates.append(ROOT / "pipeline" / "work" / "build")
+
+    seen = set()
+    for p in candidates:
+        key = str(p).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            if p.exists():
+                return p
+        except Exception:
+            continue
+    dest = ROOT / "pipeline" / "work" / "build"
+    dest.mkdir(parents=True, exist_ok=True)
+    return dest
+
+
+def build_root(cfg: dict) -> Path:
+    """Logs/excel always under ADMIN repo — never G:\\build for Supper Data."""
+    try:
+        from drive_paths import discover_build_root, resolve_g_sync, ensure_standard_folders, g_pipeline_live
+
+        p = discover_build_root(cfg)
+        if g_pipeline_live() is not None:
+            ensure_standard_folders(resolve_g_sync(cfg), p)
+        return p
+    except Exception:
+        p = ROOT / "pipeline" / "work" / "build"
+        p.mkdir(parents=True, exist_ok=True)
+        for sub in ("excel_preview", "missing_or_updated", "logs", "cases_snapshot"):
+            (p / sub).mkdir(parents=True, exist_ok=True)
+        return p
+
+
+def inbox_dir(cfg: dict) -> Path:
+    """INBOX under G: pipeline only — never ADMIN / ROOT fallback."""
+    try:
+        from drive_paths import resolve_g_sync, PINNED_PIPELINE
+
+        sync = resolve_g_sync(cfg)
+        if str(sync).replace("/", "\\").upper().startswith("G:") or not sys.platform.startswith("win"):
+            return sync / cfg["drive"].get("inbox_folder", "INBOX_CLS")
+        return PINNED_PIPELINE / cfg["drive"].get("inbox_folder", "INBOX_CLS")
+    except Exception:
+        from drive_paths import PINNED_PIPELINE
+
+        return PINNED_PIPELINE / "INBOX_CLS"
+
+
+def list_pdfs(inbox: Path, limit: int | None) -> list[Path]:
+    files = sorted([p for p in inbox.rglob("*.pdf") if p.is_file()])
+    if limit:
+        files = files[:limit]
+    return files
+
+
+def authenticate(user: str, password: str) -> str:
+    BE = "https://be-qlskcd.medinet.org.vn"
+    from medinet_ssl import urlopen as _urlopen
+
+    req = urllib.request.Request(
+        f"{BE}/api/TokenAuth/Authenticate",
+        data=json.dumps(
+            {"userNameOrEmailAddress": user, "password": password, "rememberClient": True}
+        ).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with _urlopen(req, timeout=60) as r:
+        return json.loads(r.read())["result"]["accessToken"]
+
+
+def to_fparams(obj: dict) -> list:
+    return [{"Varible": k, "Value": "" if v is None else str(v)} for k, v in obj.items()]
+
+
+def api(token: str, path: str, method: str = "GET", body=None):
+    BE = "https://be-qlskcd.medinet.org.vn"
+    from medinet_ssl import urlopen as _urlopen
+
+    url = f"{BE}{path}" if path.startswith("/") else path
+    data = None if body is None else json.dumps(body, ensure_ascii=False).encode()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "SessionSiteId": "130",
+    }
+    for attempt in range(4):
+        try:
+            req = urllib.request.Request(url, data=data, headers=headers, method=method)
+            with _urlopen(req, timeout=180) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8", errors="replace")
+            if e.code == 401 and attempt < 3:
+                time.sleep(1)
+                continue
+            try:
+                return e.code, json.loads(raw)
+            except Exception:
+                return e.code, {"error": raw[:500]}
+        except Exception as e:
+            time.sleep(1 + attempt)
+            last = e
+    return 0, {"error": str(last)}
+
+
+
+def _fold_name(s: str) -> str:
+    """Uppercase + strip Vietnamese accents for soft name match."""
+    import unicodedata
+
+    s = unicodedata.normalize("NFD", (s or "").upper())
+    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def verify_tthc_record(
+    pdf_name: str,
+    pdf_year: str,
+    rec: dict | None,
+) -> bool:
+    """Strict TTHC: exact folded họ+tên + matching birth year."""
+    if not rec or not pdf_name or not pdf_year:
+        return False
+    rn = str(rec.get("HoTen") or "")
+    if _fold_name(pdf_name) != _fold_name(rn):
+        return False
+    return _year_from_ngaysinh(rec.get("NgaySinh")) == str(pdf_year).strip()
+
+
+def _year_from_ngaysinh(ns) -> str:
+    """Extract birth year from Medinet NgaySinh.
+
+    API may return ISO `1943-01-01` OR DMY `01/01/1943`. Taking [:4] on DMY
+    wrongly yields `01/0` and breaks all name|year matches → mass NO_TTHC.
+    """
+    s = str(ns or "").strip()
+    if not s:
+        return ""
+    if re.match(r"^(19|20)\d{2}\b", s):
+        return s[:4]
+    m = re.search(r"(19\d{2}|20\d{2})\s*$", s)
+    if m:
+        return m.group(1)
+    m = re.search(r"(19\d{2}|20\d{2})", s)
+    return m.group(1) if m else ""
+
+
+def _parse_any_date(value) -> date | None:
+    """Parse PDF ngay_co_kq / Medinet NgayKham / filename DDMMYY → date."""
+    s = str(value or "").strip()
+    if not s:
+        return None
+    # ISO / Medinet: 2026-07-23 or 2026-07-23T00:00:00
+    m = re.match(r"^(20\d{2}|19\d{2})-(\d{2})-(\d{2})", s)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            return None
+    # DMY: 23/07/2026 or 23/07/2026 14:30
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(20\d{2}|19\d{2})", s)
+    if m:
+        try:
+            return date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+        except ValueError:
+            return None
+    # Filename prefix DDMMYY
+    m = re.match(r"^(\d{2})(\d{2})(\d{2})\b", s)
+    if m:
+        dd, mm, yy = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        year = 2000 + yy if yy < 100 else yy
+        try:
+            return date(year, mm, dd)
+        except ValueError:
+            return None
+    return None
+
+
+def _date_proximity_score(pdf_d: date | None, rec_d: date | None) -> int:
+    """Score how well PDF result-print date fits Medinet NgayKham.
+
+    Lab may be printed BEFORE khám (ngay_co_kq earlier than NgayKham).
+    Allow exam up to 45 days after print, or print up to 7 days after exam.
+    """
+    if not pdf_d or not rec_d:
+        return 0
+    delta = (rec_d - pdf_d).days  # + = khám after print
+    if -7 <= delta <= 3:
+        return 3  # same day / nearly same
+    if 0 <= delta <= 14:
+        return 2  # print before exam within 2 weeks
+    if -7 <= delta <= 45:
+        return 1  # still plausible
+    return 0  # too far — demote heavily when disambiguating
+
+
+def _names_soft_match(a: str, b: str) -> bool:
+    """True when folded names are the same person (strict on họ + tên).
+
+    Rejects subset traps like "NGUYEN THI KIEU" ⊂ "NGUYEN THI KIEU DIEM"
+    which previously caused false TTHC matches → wrong PROCESSED.
+    """
+    fa, fb = _fold_name(a), _fold_name(b)
+    if not fa or not fb:
+        return False
+    if fa == fb:
+        return True
+    ta, tb = fa.split(), fb.split()
+    if not ta or not tb:
+        return False
+    if sorted(ta) == sorted(tb):
+        return True
+    # Vietnamese identity: họ (first) + tên (last) must both match.
+    # Extra middle tokens OK (OCR drop "THI"); different LAST token = other person.
+    if len(ta) < 2 or len(tb) < 2:
+        return False
+    if ta[0] != tb[0] or ta[-1] != tb[-1]:
+        return False
+    return True
+
+def _norm_gender(val: str) -> str:
+    """Return 'M', 'F', or '' if unknown."""
+    s = _fold_name(str(val or "")).replace(" ", "")
+    if not s or s in {".", "-", "?", "X"}:
+        return ""
+    if s in {"M", "NAM", "MALE", "1", "TRUE"}:
+        return "M"
+    if s in {"F", "NU", "NỮ", "FEMALE", "0", "FALSE", "NU"}:
+        return "F"
+    # Vietnamese folded: NU (from Nữ)
+    if s.startswith("NAM"):
+        return "M"
+    if s.startswith("NU"):
+        return "F"
+    return ""
+
+
+def _rec_gender(rec: dict) -> str:
+    for k in ("GioiTinh", "gioi_tinh", "Gender", "IsNamGioi"):
+        if k not in rec and k != "IsNamGioi":
+            continue
+        raw = rec.get(k)
+        if k == "IsNamGioi":
+            if raw in (1, "1", True, "true", "True"):
+                return "M"
+            if raw in (0, "0", False, "false", "False"):
+                return "F"
+            continue
+        g = _norm_gender(str(raw or ""))
+        if g:
+            return g
+    return ""
+
+
+def _phone_digits(val: str) -> str:
+    d = re.sub(r"\D", "", str(val or ""))
+    # PDF often has "." or blank — ignore short garbage
+    if len(d) < 9:
+        return ""
+    return d
+
+
+def _phones_match(a: str, b: str) -> bool:
+    da, db = _phone_digits(a), _phone_digits(b)
+    if not da or not db:
+        return False
+    return da == db or da.endswith(db[-9:]) or db.endswith(da[-9:])
+
+
+def _daterange_chunks(d0, d1, chunk_days: int = 14):
+    """Split [d0, d1] into inclusive date windows of at most chunk_days."""
+    from datetime import timedelta
+
+    chunks = []
+    cur = d0
+    span = max(1, int(chunk_days))
+    while cur <= d1:
+        end = min(cur + timedelta(days=span - 1), d1)
+        chunks.append((cur, end))
+        cur = end + timedelta(days=1)
+    return chunks
+
+
+# All PKDK exam list reports used on Medinet (must match export_medinet_full).
+# Old pipeline only indexed M3+M4 → mass NO_TTHC for M2 (tre) / M11.
+UNIT_INDEX_REPORTS = [
+    ("M3", "KSKDK_DanhSach_KSK_M13", "NgayTao", True),
+    ("M2", "KSKDK_DanhSach_KSK_M12", "KSKDK_NgayKham", True),
+    ("M4", "KSKDK_DanhSach_KSK_NguoiCaoTuoi_Report", "KSKDK_NgayKham", True),
+    ("M11", "KSKDK_DanhSach_KSK_M11", "KSKDK_NgayKham", False),
+]
+
+
+def fetch_unit_index(token: str, date_from: str, date_to: str, *, chunk_days: int = 14) -> dict:
+    """Build lookup by normalized name+phone and SID-ish MaPhieu for M2/M3/M4/M11.
+
+    Queries Medinet in date *windows* (default 14 days), not one HTTP call per
+    calendar day. Old per-day indexing (~48d × 2 reports × 2 calls) made each
+    full-scan round take many hours before any PDF was imported.
+    """
+    reports = UNIT_INDEX_REPORTS
+    index = {
+        "by_phone": {},
+        "by_name_year": {},
+        "by_fold_year": {},
+        "by_cccd": {},
+        "by_maphieu": {},
+        "by_pid": {},
+        "no_cls_ids": set(),
+        "all_ids": set(),
+        "by_mau_count": {},
+    }
+
+    def get_report(code):
+        s, d = api(token, f"/api/services/app/DRReport/GetIdByCode?Code={code}&SessionSiteId=130")
+        items = ((d or {}).get("result") or {}).get("data") or []
+        return items[0] if items else None
+
+    from datetime import date, timedelta
+
+    def parse_d(s):
+        dd, mm, yy = s.split("/")
+        return date(int(yy), int(mm), int(dd))
+
+    d0, d1 = parse_d(date_from), parse_d(date_to)
+    # Widen start: M3 list filters NgayTao — phiếu tạo trước khoảng khám vẫn cần index
+    d0 = d0 - timedelta(days=60)
+    chunks = _daterange_chunks(d0, d1, chunk_days=chunk_days)
+    n_days = (d1 - d0).days + 1
+    safe_print(
+        f"  Index span {d0.strftime('%d/%m/%Y')} -> {d1.strftime('%d/%m/%Y')} "
+        f"({n_days} days, {len(chunks)} windows x{chunk_days}d) reports={len(reports)}",
+        flush=True,
+    )
+
+    def _cccd_of(r: dict) -> str:
+        for k in (
+            "SoDinhDanh",
+            "CCCD",
+            "CMND",
+            "SoCMND",
+            "MaDinhDanh",
+            "DinhDanhCaNhan",
+            "SoDinhDanhCaNhan",
+        ):
+            v = re.sub(r"\D", "", str(r.get(k) or ""))
+            if len(v) >= 9:
+                return v
+        return ""
+
+    for mau, code, date_field, has_quality in reports:
+        rep = get_report(code)
+        if not rep:
+            safe_print(f"  report missing {code}")
+            continue
+        store, ds = rep["sqlContent"], rep["dataSourceId"]
+        safe_print(f"Indexing {mau} ({code}) ...", flush=True)
+        mau_n = 0
+        for w0, w1 in chunks:
+            dr = f"{w0.strftime('%d/%m/%Y')} - {w1.strftime('%d/%m/%Y')}"
+            safe_print(f"  {mau} window {dr}", flush=True)
+            for page in range(1, 21):
+                s, d = api(
+                    token,
+                    f"/api/services/app/DRViewer/ExecuteStoreWithParam_ByDatasource?dataSourceId={ds}&store={store}",
+                    "POST",
+                    to_fparams(
+                        {
+                            date_field: dr,
+                            "NgayTao": dr,
+                            "KSKDK_NgayKham": dr,
+                            "page": page,
+                            "pageSize": 5000,
+                        }
+                    ),
+                )
+                rows = ((d or {}).get("result") or {}).get("data") or []
+                if not rows:
+                    break
+                for r in rows:
+                    pid = r.get("phieukhamId") or r.get("Id")
+                    index["all_ids"].add(pid)
+                    phone = re.sub(r"\D", "", str(r.get("SDT") or ""))
+                    name = (r.get("HoTen") or "").strip().upper()
+                    year = _year_from_ngaysinh(r.get("NgaySinh"))
+                    mp = str(r.get("MaPhieu") or "")
+                    rec = {**r, "_mau": mau}
+                    mau_n += 1
+                    if phone:
+                        index["by_phone"].setdefault(phone, []).append(rec)
+                    if name and year:
+                        index["by_name_year"].setdefault(f"{name}|{year}", []).append(rec)
+                        index["by_fold_year"].setdefault(f"{_fold_name(name)}|{year}", []).append(rec)
+                    cccd = _cccd_of(r)
+                    if cccd:
+                        index["by_cccd"][cccd] = rec
+                    if mp:
+                        index["by_maphieu"][mp] = rec
+                    if pid not in (None, ""):
+                        index["by_pid"][str(pid)] = rec
+                if len(rows) < 5000:
+                    break
+
+            if has_quality:
+                for page in range(1, 21):
+                    s, d = api(
+                        token,
+                        f"/api/services/app/DRViewer/ExecuteStoreWithParam_ByDatasource?dataSourceId={ds}&store={store}",
+                        "POST",
+                        to_fparams(
+                            {
+                                date_field: dr,
+                                "NgayTao": dr,
+                                "KSKDK_NgayKham": dr,
+                                "ChatLuongDuLieu": 4,
+                                "page": page,
+                                "pageSize": 5000,
+                            }
+                        ),
+                    )
+                    rows_no = ((d or {}).get("result") or {}).get("data") or []
+                    if not rows_no:
+                        break
+                    for r in rows_no:
+                        index["no_cls_ids"].add(r.get("phieukhamId") or r.get("Id"))
+                    if len(rows_no) < 5000:
+                        break
+        index["by_mau_count"][mau] = mau_n
+        safe_print(
+            f"  {mau} indexed rows={mau_n} phones={len(index['by_phone'])} "
+            f"names={len(index['by_name_year'])} fold={len(index['by_fold_year'])} "
+            f"cccd={len(index['by_cccd'])}",
+            flush=True,
+        )
+    safe_print(
+        f"  INDEX TOTAL ids={len(index['all_ids'])} no_cls={len(index['no_cls_ids'])} "
+        f"by_mau={index['by_mau_count']}",
+        flush=True,
+    )
+    return index
+
+
+def load_or_fetch_unit_index(
+    token: str,
+    date_from: str,
+    date_to: str,
+    *,
+    cache_dir: Path | None = None,
+    max_age_hours: float = 6,
+) -> dict:
+    """Reuse a recent pickle so full-scan rounds 2+ skip Medinet re-index."""
+    import pickle
+
+    if cache_dir is None:
+        cache_dir = Path(__file__).resolve().parent / "work" / "index_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    # v2 = M2+M3+M4+M11 (old caches only had M3+M4 → mass MISSING)
+    key = f"v2_{date_from.replace('/', '')}_{date_to.replace('/', '')}.pkl"
+    path = cache_dir / key
+    now = time.time()
+    if path.exists():
+        age_h = (now - path.stat().st_mtime) / 3600.0
+        if age_h <= max_age_hours:
+            try:
+                with path.open("rb") as f:
+                    idx = pickle.load(f)
+                n = len(idx.get("all_ids") or [])
+                mau = idx.get("by_mau_count") or {}
+                # Reject stale/partial caches without M2/M11
+                if n < 50:
+                    safe_print(f"  Index CACHE skip (too small ids={n}) — rebuild", flush=True)
+                elif "M2" not in mau and "M11" not in mau:
+                    safe_print("  Index CACHE skip (old M3+M4 only) — rebuild with M2/M11", flush=True)
+                else:
+                    safe_print(
+                        f"  Index CACHE hit age={age_h:.1f}h ids={n} by_mau={mau} file={path.name}",
+                        flush=True,
+                    )
+                    return idx
+            except Exception as e:
+                safe_print(f"  Index cache unreadable: {e} — rebuild")
+    idx = fetch_unit_index(token, date_from, date_to)
+    try:
+        with path.open("wb") as f:
+            pickle.dump(idx, f, protocol=4)
+        safe_print(f"  Index CACHE wrote ids={len(idx.get('all_ids') or [])} -> {path.name}", flush=True)
+    except Exception as e:
+        safe_print(f"  WARN index cache write: {e}")
+    return idx
+
+
+def _tag_records_in_index(index: dict, account_id: str) -> None:
+    """Stamp _medinet_account on every record in index buckets."""
+    for key in ("by_phone", "by_name_year", "by_fold_year", "by_cccd", "by_maphieu", "by_pid"):
+        bucket = index.get(key) or {}
+        if not isinstance(bucket, dict):
+            continue
+        for _k, recs in bucket.items():
+            if isinstance(recs, list):
+                for r in recs:
+                    if isinstance(r, dict):
+                        r["_medinet_account"] = account_id
+            elif isinstance(recs, dict):
+                recs["_medinet_account"] = account_id
+
+
+def _merge_dict_of_lists(into: dict, from_: dict) -> None:
+    """Merge bucket values into list-of-records (handles single-dict OR list)."""
+    for k, recs in (from_ or {}).items():
+        if isinstance(recs, list):
+            into.setdefault(k, []).extend(r for r in recs if isinstance(r, dict))
+        elif isinstance(recs, dict):
+            into.setdefault(k, []).append(recs)
+
+
+def _merge_dict_single(into: dict, from_: dict) -> None:
+    for k, v in (from_ or {}).items():
+        if k not in into:
+            into[k] = v
+
+
+def _index_recs(bucket: dict | None, key: str) -> list[dict]:
+    """Normalize index bucket value to a list of record dicts.
+
+    Single-account indexes store by_cccd/by_maphieu/by_pid as one dict;
+    merged dual-account indexes store them as list[dict]. Match must accept both.
+    """
+    if not bucket or key not in bucket:
+        return []
+    val = bucket[key]
+    if isinstance(val, list):
+        return [r for r in val if isinstance(r, dict)]
+    if isinstance(val, dict):
+        return [val]
+    return []
+
+
+def merge_unit_indexes(idx_a: dict, idx_b: dict, id_a: str, id_b: str) -> dict:
+    """Union two unit indexes; each record tagged with owning Medinet account.
+
+    by_phone / by_name_year / by_fold_year / by_cccd / by_maphieu / by_pid
+    all become list-of-records after merge (same key may exist on both accounts).
+    """
+    _tag_records_in_index(idx_a, id_a)
+    _tag_records_in_index(idx_b, id_b)
+    merged = {
+        "by_phone": {},
+        "by_name_year": {},
+        "by_fold_year": {},
+        "by_cccd": {},
+        "by_maphieu": {},
+        "by_pid": {},
+        "no_cls_ids": set(),
+        "all_ids": set(),
+        "by_mau_count": {},
+    }
+    for key in (
+        "by_phone",
+        "by_name_year",
+        "by_fold_year",
+        "by_cccd",
+        "by_maphieu",
+        "by_pid",
+    ):
+        _merge_dict_of_lists(merged[key], idx_a.get(key) or {})
+        _merge_dict_of_lists(merged[key], idx_b.get(key) or {})
+    merged["no_cls_ids"] = set(idx_a.get("no_cls_ids") or set()) | set(
+        idx_b.get("no_cls_ids") or set()
+    )
+    merged["all_ids"] = set(idx_a.get("all_ids") or set()) | set(idx_b.get("all_ids") or set())
+    mc = dict(idx_a.get("by_mau_count") or {})
+    for mau, n in (idx_b.get("by_mau_count") or {}).items():
+        mc[mau] = mc.get(mau, 0) + n
+    merged["by_mau_count"] = mc
+    return merged
+
+
+def load_or_fetch_merged_unit_index(
+    accounts: list[dict],
+    date_from: str,
+    date_to: str,
+    *,
+    cache_dir: Path | None = None,
+    max_age_hours: float = 6,
+) -> dict:
+    """Build or load merged index from all Medinet accounts (TTHC split per user)."""
+    import pickle
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    if len(accounts) < 2:
+        tok = authenticate(accounts[0]["user"], accounts[0]["password"])
+        idx = fetch_unit_index(tok, date_from, date_to)
+        _tag_records_in_index(idx, accounts[0]["id"])
+        return idx
+
+    if cache_dir is None:
+        cache_dir = Path(__file__).resolve().parent / "work" / "index_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    id1 = accounts[0]["id"].replace("/", "_")
+    id2 = accounts[1]["id"].replace("/", "_")
+    key = f"v3_merged_{id1}_{id2}_{date_from.replace('/', '')}_{date_to.replace('/', '')}.pkl"
+    path = cache_dir / key
+    now = time.time()
+    if path.exists() and max_age_hours > 0:
+        age_h = (now - path.stat().st_mtime) / 3600.0
+        if age_h <= max_age_hours:
+            try:
+                with path.open("rb") as f:
+                    idx = pickle.load(f)
+                n = len(idx.get("all_ids") or [])
+                if n >= 50:
+                    safe_print(
+                        f"  Index MERGED CACHE hit age={age_h:.1f}h ids={n} file={path.name}",
+                        flush=True,
+                    )
+                    return idx
+            except Exception as e:
+                safe_print(f"  Merged index cache unreadable: {e} — rebuild")
+
+    safe_print(
+        f"  Index MERGED build: {accounts[0]['id']} + {accounts[1]['id']}",
+        flush=True,
+    )
+
+    def _fetch_one(acct: dict) -> tuple[str, dict]:
+        tok = authenticate(acct["user"], acct["password"])
+        idx = fetch_unit_index(tok, date_from, date_to)
+        n = len(idx.get("all_ids") or set())
+        safe_print(f"  INDEX {acct['id']} ids={n}", flush=True)
+        return acct["id"], idx
+
+    results: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        futs = [ex.submit(_fetch_one, a) for a in accounts[:2]]
+        for fut in as_completed(futs):
+            aid, idx = fut.result()
+            results[aid] = idx
+
+    merged = merge_unit_indexes(
+        results[accounts[0]["id"]],
+        results[accounts[1]["id"]],
+        accounts[0]["id"],
+        accounts[1]["id"],
+    )
+    safe_print(
+        f"  INDEX MERGED ids={len(merged.get('all_ids') or set())} "
+        f"no_cls={len(merged.get('no_cls_ids') or set())}",
+        flush=True,
+    )
+    try:
+        with path.open("wb") as f:
+            pickle.dump(merged, f, protocol=4)
+        safe_print(f"  Index MERGED CACHE wrote -> {path.name}", flush=True)
+    except Exception as e:
+        safe_print(f"  WARN merged index cache write: {e}")
+    return merged
+
+
+def resolve_name_year(row: dict) -> tuple[str, str]:
+    """Return (ho_ten, nam_sinh) using PDF fields + filename hints.
+
+    Filename pattern: DDMMYY-SID - NAME - YEAR - M/F
+    Prefer filename year when present (stable).
+    """
+    name = (row.get("ho_ten") or "").strip().upper()
+    year = str(row.get("nam_sinh") or "").strip()
+    fname = str(row.get("file_name") or row.get("source_file") or "")
+    stem = Path(fname).stem if fname else ""
+    m_fn = re.search(
+        r"^\d{6}-\d+\s*-\s*(.+?)\s*-\s*(19\d{2}|20\d{2})\s*-\s*[MF](?:_|\.|$)",
+        stem,
+        re.I,
+    )
+    if not m_fn:
+        m_fn = re.search(
+            r"^\d{6}-\d+\s*-\s*(.+?)\s*-\s*(19\d{2}|20\d{2})\s*-\s*[MF]\b",
+            stem,
+            re.I,
+        )
+    if m_fn:
+        fn_name = m_fn.group(1).strip().upper()
+        fn_year = m_fn.group(2)
+        if not name:
+            name = fn_name
+        if fn_year:
+            year = fn_year
+    return name, year
+
+
+def match_patient(row: dict, index: dict) -> tuple[str, dict | None]:
+    """Return (status, medinet_row).
+
+    Hard keys:
+      - nam_sinh (năm sinh) MUST match
+      - họ + tên (strict soft: same first+last token; no subset names)
+    Soft key:
+      - ngày có kết quả (PDF) vs NgayKham (Medinet): may differ because lab
+        can be printed BEFORE khám — allow exam up to ~45 days after print.
+    """
+    phone = re.sub(r"\D", "", str(row.get("sdt") or ""))
+    name, year = resolve_name_year(row)
+    sid = str(row.get("sid") or row.get("ma_phieu") or "")
+    cccd = re.sub(r"\D", "", str(row.get("cccd") or ""))
+    fname = str(row.get("file_name") or row.get("source_file") or "")
+    stem = Path(fname).stem if fname else ""
+
+    # PDF result-print date: header "Ngày có kết quả" or filename DDMMYY
+    pdf_result_d = _parse_any_date(row.get("ngay_co_kq"))
+    if not pdf_result_d:
+        pdf_result_d = _parse_any_date(stem[:6] if re.match(r"^\d{6}-", stem) else "")
+
+    fn_name, fn_year = "", ""
+    # Keep aliases used below for soft name from filename when PDF name empty
+    m_fn = re.search(
+        r"^\d{6}-\d+\s*-\s*(.+?)\s*-\s*(19\d{2}|20\d{2})\s*-\s*[MF]",
+        stem,
+        re.I,
+    )
+    if m_fn:
+        fn_name = m_fn.group(1).strip().upper()
+        fn_year = m_fn.group(2)
+
+    yr_target = year or fn_year
+
+    def _rec_year(rec) -> str:
+        if not isinstance(rec, dict):
+            return ""
+        return _year_from_ngaysinh(rec.get("NgaySinh"))
+
+    def _year_ok(rec) -> bool:
+        if not isinstance(rec, dict) or not yr_target:
+            return False
+        return _rec_year(rec) == yr_target
+
+    def _rec_ngaykham(rec) -> date | None:
+        if not isinstance(rec, dict):
+            return None
+        return _parse_any_date(rec.get("NgayKham") or rec.get("KSKDK_NgayKham") or rec.get("NgayTao"))
+
+    strong = []  # CCCD / MaPhieu / explicit pid — still verify year when we have one
+    if cccd:
+        strong.extend(_index_recs(index.get("by_cccd"), cccd))
+    for mp in filter(None, [sid, row.get("ma_phieu")]):
+        mp = str(mp).strip()
+        if not mp:
+            continue
+        strong.extend(_index_recs(index.get("by_maphieu"), mp))
+        strong.extend(_index_recs(index.get("by_pid"), mp))
+    for m in re.finditer(r"KSKDKP\d+", stem, re.I):
+        mp = m.group(0).upper()
+        strong.extend(_index_recs(index.get("by_maphieu"), mp))
+    for m in re.finditer(r"_(\d{5,7})(?:_|\.|$)", stem):
+        token = m.group(1)
+        strong.extend(_index_recs(index.get("by_pid"), token))
+
+    candidates = []
+    # Phone: only keep same birth year when year known (avoid wrong twin-name)
+    if phone:
+        for rec in _index_recs(index.get("by_phone"), phone):
+            if not yr_target or _year_ok(rec):
+                candidates.append(rec)
+
+    # Name+year only (required year — never name-only across 1950 vs 1953)
+    if yr_target:
+        for nm in filter(None, [name, fn_name]):
+            key = f"{nm}|{yr_target}"
+            candidates.extend(_index_recs(index.get("by_name_year"), key))
+            fk = f"{_fold_name(nm)}|{yr_target}"
+            candidates.extend(_index_recs(index.get("by_fold_year"), fk))
+            for k, recs in (index.get("by_fold_year") or {}).items():
+                kn, ky = (k.split("|", 1) + [""])[:2]
+                if ky == yr_target and _names_soft_match(nm, kn):
+                    candidates.extend(_index_recs({k: recs}, k))
+
+    # Lab SID in "DDMMYY-SID - NAME - YEAR - M/F" is NOT phieukhamId
+    lab_sid = ""
+    m_lab = re.match(r"^(\d{6})-(\d+)\b", stem)
+    if m_lab:
+        lab_sid = m_lab.group(2)
+
+    digit_hits = []
+    for m in re.finditer(r"(?<!\d)(\d{6,7})(?!\d)", stem):
+        token = m.group(1)
+        if re.match(r"^\d{6}-\d+", stem) and token == stem.split("-", 1)[0][:6]:
+            continue
+        if lab_sid and token == lab_sid:
+            continue
+        digit_hits.extend(_index_recs(index.get("by_pid"), token))
+        digit_hits.extend(_index_recs(index.get("by_maphieu"), token))
+
+    fold_target = name or fn_name
+    for rec in digit_hits:
+        if not isinstance(rec, dict):
+            continue
+        if yr_target and not _year_ok(rec):
+            continue
+        if fold_target and not _names_soft_match(fold_target, str(rec.get("HoTen") or "")):
+            continue
+        candidates.append(rec)
+
+    # Strong keys: prefer year agreement; if year known and conflicts → drop
+    for rec in strong:
+        if not isinstance(rec, dict):
+            continue
+        if yr_target and not _year_ok(rec):
+            # Unique id with conflicting year: still trust id (CCCD/MaPhieu/pid)
+            # only when name also soft-matches or no name available
+            rn = str(rec.get("HoTen") or "")
+            if fold_target and rn and not _names_soft_match(fold_target, rn):
+                continue
+        candidates.append(rec)
+
+    seen = set()
+    uniq = []
+    for c in candidates:
+        if not isinstance(c, dict):
+            continue
+        pid = c.get("phieukhamId") or c.get("Id")
+        if pid in seen:
+            continue
+        seen.add(pid)
+        uniq.append(c)
+
+    if not uniq:
+        return "WAITING_ADMIN", None
+
+    # HARD FILTER: when PDF/filename has nam_sinh, only same-year candidates
+    if yr_target:
+        same_year = [c for c in uniq if _year_ok(c)]
+        if same_year:
+            uniq = same_year
+        else:
+            # No year agreement → do not guess among same-name different years
+            return "WAITING_ADMIN", None
+
+    def _score(c: dict) -> tuple:
+        rn = str(c.get("HoTen") or "")
+        ns = _rec_year(c)
+        name_ok = 2 if fold_target and _fold_name(fold_target) == _fold_name(rn) else (
+            1 if fold_target and _names_soft_match(fold_target, rn) else 0
+        )
+        year_ok = 2 if yr_target and ns == yr_target else 0
+        phone_ok = 1 if phone and re.sub(r"\D", "", str(c.get("SDT") or "")) == phone else 0
+        date_ok = _date_proximity_score(pdf_result_d, _rec_ngaykham(c))
+        mau = row.get("mau_kham")
+        mau_ok = 1 if mau and c.get("_mau") == mau else 0
+        # Kids (age<=17): prefer M2/M12 list over M3/M4
+        kid_boost = 0
+        if yr_target and yr_target.isdigit():
+            try:
+                if int(yr_target) >= date.today().year - 17 and c.get("_mau") in {"M2", "M12"}:
+                    kid_boost = 2
+            except Exception:
+                pass
+        # Primary: year+name+phone+date; secondary: mau / kid form
+        return (year_ok + name_ok + phone_ok + date_ok + kid_boost, mau_ok, date_ok)
+
+    uniq.sort(key=_score, reverse=True)
+    # Require name soft-match when we have a name (after year filter)
+    if fold_target:
+        named = [c for c in uniq if _names_soft_match(fold_target, str(c.get("HoTen") or ""))]
+        if named:
+            uniq = named
+        elif not cccd and not any(
+            str(row.get("ma_phieu") or "") and str(row.get("ma_phieu")) in index.get("by_maphieu", {})
+            for _ in [0]
+        ):
+            # keep strong pid-only hits already year-filtered
+            pass
+
+    # Prefer exact folded name over soft (ho+ten) matches
+    if fold_target:
+        exact = [
+            c
+            for c in uniq
+            if _fold_name(fold_target) == _fold_name(str(c.get("HoTen") or ""))
+        ]
+        if exact:
+            uniq = exact
+
+    # When several same name+year: use ngày in KQ vs NgayKham to pick / reject
+    if len(uniq) > 1 and pdf_result_d:
+        dated = [c for c in uniq if _date_proximity_score(pdf_result_d, _rec_ngaykham(c)) > 0]
+        if len(dated) == 1:
+            uniq = dated
+        elif len(dated) > 1:
+            dated.sort(key=_score, reverse=True)
+            top = _score(dated[0])
+            tied = [c for c in dated if _score(c) == top]
+            if len(tied) == 1:
+                uniq = tied
+            elif phone or cccd:
+                uniq = tied
+            else:
+                return "WAITING_ADMIN", None
+        elif not phone and not cccd:
+            # Multiple name+year but NONE near PDF print date → do not guess
+            return "WAITING_ADMIN", None
+
+    if len(uniq) > 1:
+        # Still ambiguous after year+name(+date) — need phone/cccd; else wait
+        top = _score(uniq[0])
+        tied = [c for c in uniq if _score(c) == top]
+        if len(tied) > 1 and not phone and not cccd:
+            return "WAITING_ADMIN", None
+        uniq = tied
+
+    mau = row.get("mau_kham")
+    preferred = [c for c in uniq if c.get("_mau") == mau] or uniq
+    preferred.sort(key=_score, reverse=True)
+    rec = preferred[0]
+
+    # Single candidate with known PDF date but NgayKham far away: still accept
+    # (in trước / khám sau can exceed window for unique name+year). Only block
+    # when we had to choose among multiples (handled above).
+
+    pid = rec.get("phieukhamId") or rec.get("Id")
+    if pid not in index["no_cls_ids"]:
+        return "SKIP_ALREADY_CLS", rec
+    return "READY_IMPORT", rec
+
+
+
+def search_patient_live(
+    token: str,
+    *,
+    name: str,
+    year: str,
+    date_from: str,
+    date_to: str,
+    ngay_co_kq: str = "",
+    gioi_tinh: str = "",
+    sdt: str = "",
+) -> tuple[str, dict | None, str]:
+    """Fallback when day-index miss: query M2/M3/M4/M11 by HoTen over date span.
+
+    Same rule as match_patient (ho+ten + year; no hard gender/phone block).
+    Unique name+year hit is accepted even if NgayKham is far from PDF print date.
+    gioi_tinh/sdt kwargs kept for callers but not used. Returns (status, rec, token).
+    """
+    if not name or not year:
+        return "WAITING_ADMIN", None, token
+
+    reports = UNIT_INDEX_REPORTS
+    fold = _fold_name(name)
+    pdf_d = _parse_any_date(ngay_co_kq)
+    hits = []
+
+    def get_report(code):
+        s, d = api(token, f"/api/services/app/DRReport/GetIdByCode?Code={code}&SessionSiteId=130")
+        items = ((d or {}).get("result") or {}).get("data") or []
+        return items[0] if items else None
+
+    # Widen live window like index (NgayTao may precede exam)
+    from datetime import timedelta
+
+    def parse_d(s):
+        dd, mm, yy = s.split("/")
+        return date(int(yy), int(mm), int(dd))
+
+    try:
+        d0 = parse_d(date_from) - timedelta(days=60)
+        d1 = parse_d(date_to)
+        dr = f"{d0.strftime('%d/%m/%Y')} - {d1.strftime('%d/%m/%Y')}"
+    except Exception:
+        dr = f"{date_from} - {date_to}"
+
+    for mau, code, date_field, _has_q in reports:
+        rep = get_report(code)
+        if not rep:
+            continue
+        store, ds = rep["sqlContent"], rep["dataSourceId"]
+        for ho in filter(None, [name, fold]):
+            s, d = api(
+                token,
+                f"/api/services/app/DRViewer/ExecuteStoreWithParam_ByDatasource?dataSourceId={ds}&store={store}",
+                "POST",
+                to_fparams(
+                    {
+                        date_field: dr,
+                        "NgayTao": dr,
+                        "KSKDK_NgayKham": dr,
+                        "HoTen": ho,
+                        "page": 1,
+                        "pageSize": 200,
+                    }
+                ),
+            )
+            for r in ((d or {}).get("result") or {}).get("data") or []:
+                if _year_from_ngaysinh(r.get("NgaySinh")) != str(year):
+                    continue
+                if not _names_soft_match(name, str(r.get("HoTen") or "")):
+                    continue
+                hits.append({**r, "_mau": mau})
+
+    seen = set()
+    uniq = []
+    for h in hits:
+        pid = h.get("phieukhamId") or h.get("Id")
+        if pid in seen:
+            continue
+        seen.add(pid)
+        uniq.append(h)
+    if not uniq:
+        return "WAITING_ADMIN", None, token
+
+    # Prefer exact folded name
+    exact = [h for h in uniq if _fold_name(name) == _fold_name(str(h.get("HoTen") or ""))]
+    if exact:
+        uniq = exact
+
+    # Unique name+year → accept (date only helps disambiguate multiples)
+    if len(uniq) == 1:
+        return "READY_IMPORT", uniq[0], token
+
+    if pdf_d:
+        dated = [
+            h
+            for h in uniq
+            if _date_proximity_score(
+                pdf_d, _parse_any_date(h.get("NgayKham") or h.get("KSKDK_NgayKham") or h.get("NgayTao"))
+            )
+            > 0
+        ]
+        if len(dated) == 1:
+            return "READY_IMPORT", dated[0], token
+        if len(dated) > 1:
+            dated.sort(
+                key=lambda h: _date_proximity_score(
+                    pdf_d,
+                    _parse_any_date(h.get("NgayKham") or h.get("KSKDK_NgayKham") or h.get("NgayTao")),
+                ),
+                reverse=True,
+            )
+            best = _date_proximity_score(
+                pdf_d,
+                _parse_any_date(dated[0].get("NgayKham") or dated[0].get("KSKDK_NgayKham") or dated[0].get("NgayTao")),
+            )
+            tied = [
+                h
+                for h in dated
+                if _date_proximity_score(
+                    pdf_d,
+                    _parse_any_date(h.get("NgayKham") or h.get("KSKDK_NgayKham") or h.get("NgayTao")),
+                )
+                == best
+            ]
+            if len(tied) == 1:
+                return "READY_IMPORT", tied[0], token
+
+    # Still ambiguous
+    return "WAITING_ADMIN", None, token
+
+
+def search_patient_live_multi(
+    accounts: list[dict],
+    tokens: dict[str, str],
+    *,
+    name: str,
+    year: str,
+    date_from: str,
+    date_to: str,
+    ngay_co_kq: str = "",
+    gioi_tinh: str = "",
+    sdt: str = "",
+) -> tuple[str, dict | None, str]:
+    """Try live search on each Medinet account until strict name+year hit.
+
+    Returns (status, rec, account_id). Updates tokens dict in place.
+    """
+    for acct in accounts:
+        aid = acct["id"]
+        tok = tokens.get(aid) or ""
+        if not tok:
+            try:
+                tok = authenticate(acct["user"], acct["password"])
+                tokens[aid] = tok
+            except Exception:
+                continue
+        st, rec, new_tok = search_patient_live(
+            tok,
+            name=name,
+            year=year,
+            date_from=date_from,
+            date_to=date_to,
+            ngay_co_kq=ngay_co_kq,
+            gioi_tinh=gioi_tinh,
+            sdt=sdt,
+        )
+        tokens[aid] = new_tok
+        if st != "WAITING_ADMIN" and rec:
+            rec["_medinet_account"] = aid
+            if _fold_name(name) == _fold_name(str(rec.get("HoTen") or "")):
+                return st, rec, aid
+            # soft hit from live — still require exact for PROCESSED path later
+            return st, rec, aid
+    return "WAITING_ADMIN", None, ""
+
+
+def write_preview_excel(rows: list[dict], path: Path) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Preview_CLS"
+    header = [
+        "STT",
+        "file_name",
+        "sid",
+        "ho_ten",
+        "nam_sinh",
+        "gioi_tinh",
+        "sdt",
+        "mau_kham",
+        "ngay_co_kq",
+        "status_medinet",
+        "medinet_MaPhieu",
+        "medinet_NgayKham",
+        "medinet_phieukhamId",
+        "medinet_cdId",
+        "parse_ok",
+    ]
+    for lab in LAB_COLS:
+        header += [f"{lab}_raw", f"{lab}_unit_raw", f"{lab}_web", f"{lab}_unit_web", f"{lab}_note"]
+
+    head_fill = PatternFill("solid", fgColor="1F4E79")
+    head_font = Font(color="FFFFFF", bold=True)
+    for c, h in enumerate(header, 1):
+        cell = ws.cell(1, c, h)
+        cell.fill = head_fill
+        cell.font = head_font
+        cell.alignment = Alignment(wrap_text=True, horizontal="center")
+
+    for i, row in enumerate(rows, 1):
+        labs = row.get("labs") or {}
+        vals = [
+            i,
+            row.get("file_name"),
+            row.get("sid"),
+            row.get("ho_ten"),
+            row.get("nam_sinh"),
+            row.get("gioi_tinh"),
+            row.get("sdt"),
+            row.get("mau_kham"),
+            row.get("ngay_co_kq"),
+            row.get("status_medinet"),
+            row.get("medinet_MaPhieu"),
+            row.get("medinet_NgayKham"),
+            row.get("medinet_phieukhamId"),
+            row.get("medinet_cdId"),
+            "YES" if row.get("parse_ok") else "NO",
+        ]
+        for lab in LAB_COLS:
+            item = labs.get(lab) or {}
+            vals += [
+                item.get("value_raw", ""),
+                item.get("unit_raw", ""),
+                item.get("value_web", ""),
+                item.get("unit_web", ""),
+                item.get("convert_note", ""),
+            ]
+        for c, v in enumerate(vals, 1):
+            ws.cell(1 + i, c, v)
+
+    ws2 = wb.create_sheet("Missing_or_Updated")
+    h2 = ["STT", "file_name", "sid", "ho_ten", "nam_sinh", "sdt", "mau_kham", "status_medinet", "reason"]
+    for c, h in enumerate(h2, 1):
+        cell = ws2.cell(1, c, h)
+        cell.fill = head_fill
+        cell.font = head_font
+    r = 2
+    stt = 1
+    for row in rows:
+        st = row.get("status_medinet")
+        if st in ("WAITING_ADMIN", "SKIP_ALREADY_CLS", "PARSE_ERROR"):
+            reason = {
+                "WAITING_ADMIN": "Chưa thấy TTHC trên Medinet",
+                "SKIP_ALREADY_CLS": "Đã có CLS trên web — cần kiểm tra trước khi ghi đè",
+                "PARSE_ERROR": "Không đọc được PDF đủ thông tin",
+            }.get(st, st)
+            for c, v in enumerate(
+                [
+                    stt,
+                    row.get("file_name"),
+                    row.get("sid"),
+                    row.get("ho_ten"),
+                    row.get("nam_sinh"),
+                    row.get("sdt"),
+                    row.get("mau_kham"),
+                    st,
+                    reason,
+                ],
+                1,
+            ):
+                ws2.cell(r, c, v)
+            r += 1
+            stt += 1
+
+    wb.save(path)
+
+
+def update_cases_csv(cases_path: Path, rows: list[dict]) -> None:
+    if not cases_path.exists():
+        return
+    with cases_path.open(encoding="utf-8-sig", newline="") as f:
+        existing = list(csv.DictReader(f))
+    by_file = {}
+    for r in rows:
+        by_file[Path(r.get("source_file") or r.get("file_name") or "").name] = r
+        by_file[r.get("file_name")] = r
+
+    for e in existing:
+        src = Path(e.get("source_file") or "").name
+        hit = by_file.get(src)
+        if not hit:
+            continue
+        e["status"] = hit.get("status_medinet") or e.get("status")
+        e["ho_ten"] = e.get("ho_ten") or hit.get("ho_ten")
+        e["notes"] = f"phase_b:{hit.get('status_medinet')}"
+        e["last_checked_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if hit.get("medinet_MaPhieu"):
+            e["ma_phieu"] = hit["medinet_MaPhieu"]
+
+    if existing:
+        with cases_path.open("w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(existing[0].keys()))
+            w.writeheader()
+            w.writerows(existing)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--limit", type=int, default=0, help="Limit PDFs for test (0=all)")
+    ap.add_argument("--skip-medinet", action="store_true", help="Only parse PDFs, no Medinet match")
+    ap.add_argument("--inbox", default="", help="Override inbox folder")
+    args = ap.parse_args()
+
+    cfg = load_config()
+    build = build_root(cfg)
+    inbox = Path(args.inbox) if args.inbox else inbox_dir(cfg)
+    safe_print(f"Inbox: {inbox}")
+    safe_print(f"Build: {build}")
+
+    pdfs = list_pdfs(inbox, args.limit or None)
+    safe_print(f"PDF count: {len(pdfs)}", flush=True)
+    if not pdfs:
+        safe_print("No PDFs found.")
+        return 1
+
+    rows = []
+    for i, p in enumerate(pdfs, 1):
+        try:
+            data = extract_pdf(p)
+        except Exception as e:
+            data = {
+                "source_file": str(p),
+                "file_name": p.name,
+                "parse_ok": False,
+                "labs": {},
+                "status_medinet": "PARSE_ERROR",
+                "notes": str(e),
+            }
+        if not data.get("parse_ok"):
+            data["status_medinet"] = data.get("status_medinet") or "PARSE_ERROR"
+        rows.append(data)
+        if i % 50 == 0 or i == len(pdfs):
+            safe_print(f"  parsed {i}/{len(pdfs)}", flush=True)
+
+    index = None
+    if not args.skip_medinet:
+        import os
+
+        from medinet_creds import get_medinet_creds
+
+        user, password = get_medinet_creds(cfg)
+        safe_print("Auth Medinet + index July lists...", flush=True)
+        token = authenticate(user, password)
+        date_from = cfg.get("medinet", {}).get("date_from") or "01/07/2026"
+        date_to = (cfg.get("medinet", {}).get("date_to") or "").strip()
+        if not date_to:
+            from datetime import date as _date
+
+            date_to = _date.today().strftime("%d/%m/%Y")
+        index = fetch_unit_index(token, date_from, date_to)
+        for row in rows:
+            if row.get("status_medinet") == "PARSE_ERROR":
+                continue
+            st, rec = match_patient(row, index)
+            row["status_medinet"] = st
+            if rec:
+                row["medinet_MaPhieu"] = rec.get("MaPhieu")
+                nk = rec.get("NgayKham") or ""
+                row["medinet_NgayKham"] = str(nk).split("T")[0]
+                row["medinet_phieukhamId"] = rec.get("phieukhamId") or rec.get("Id")
+                row["medinet_cdId"] = rec.get("cdId") or ""
+            else:
+                row["medinet_MaPhieu"] = ""
+                row["medinet_NgayKham"] = ""
+                row["medinet_phieukhamId"] = ""
+                row["medinet_cdId"] = ""
+    else:
+        for row in rows:
+            row.setdefault("status_medinet", "NOT_CHECKED")
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out = build / "excel_preview" / f"CLS_preview_{stamp}.xlsx"
+    write_preview_excel(rows, out)
+    # also copy missing sheet-only workbook
+    missing_rows = [r for r in rows if r.get("status_medinet") in ("WAITING_ADMIN", "SKIP_ALREADY_CLS", "PARSE_ERROR")]
+    miss_path = build / "missing_or_updated" / f"missing_or_updated_{stamp}.xlsx"
+    write_preview_excel(missing_rows, miss_path)
+
+    cases_path = ROOT / cfg.get("tracking", {}).get("cases_csv", "tracking/cases.csv")
+    update_cases_csv(cases_path, rows)
+
+    # summary
+    from collections import Counter
+
+    c = Counter(r.get("status_medinet") for r in rows)
+    safe_print("---")
+    safe_print(f"Preview Excel: {out}")
+    safe_print(f"Missing/Updated Excel: {miss_path}")
+    safe_print(f"Status: {dict(c)}")
+    safe_print("NEXT: open Preview Excel, check value_web/unit_web. Then run import step.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

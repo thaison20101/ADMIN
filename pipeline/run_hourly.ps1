@@ -1,0 +1,281 @@
+# Windows hourly runner for Drive pipeline (MAY A ONLY)
+# ASCII-only comments for Windows PowerShell 5.1
+#
+# CUNG rule dien moi voi CHAY_MOT_LAN_CHUAN / auto_cycle:
+#   - Parse MCHC/RDW (Ghi chu / token dinh)
+#   - Gap-only: PDF co ma web thieu/sai -> dien; du khop -> giu
+#   - Duong mau bat ky -> SinhHoaMau_DuongMau; luc doi -> LucDoi (khong copy cheo)
+#   - LoaiKham dinh ky 5152; verify cung sau Set
+#   - Match: ho+ten DAY DU + nam/SDT/CCCD; CCCD+ten lech -> folder CCCD
+#   - Route: 2TK+FULL->PROCESSED/U18 | 1TK+FULL->TK1/TK2
+#            PARTIAL/OTHER->ERROR | noTTHC->MISSING | trung ten->UNDER18
+#
+# 2 bot: INBOX_CLS disk + MISSING/TK1/TK2 CSV rematch
+# Lan dau (chua FIRST_FULL_SCAN_DONE): full-scan 2 bot
+# Sau do: hourly nhe (KHONG full rglob G moi gio)
+#
+# Installed by: .\pipeline\install_hourly_task.ps1
+# Quet lai toan G + bat hourly: .\pipeline\CHAY_MOT_LAN_CHUAN.ps1
+
+$ErrorActionPreference = "Continue"
+$Repo = Split-Path -Parent $PSScriptRoot
+Set-Location $Repo
+
+. (Join-Path $PSScriptRoot "Resolve-PkdkPython.ps1")
+$Python = Resolve-PkdkPython
+$env:PKDK_PYTHON = $Python
+
+$env:PYTHONIOENCODING = "utf-8"
+$env:PYTHONUTF8 = "1"
+$env:PYTHONUNBUFFERED = "1"
+# May A self-signed: force OFF (override only with MEDINET_SSL_VERIFY=1 manually)
+if (-not $env:MEDINET_SSL_VERIFY) { $env:MEDINET_SSL_VERIFY = "0" }
+try {
+  [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+  $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+} catch {}
+
+# 2 TK (cung hardcode trong pipeline/medinet_creds.py)
+if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdkthuankieu" }
+if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "P@ssw0rd" }
+if (-not $env:MEDINET_USER_2) { $env:MEDINET_USER_2 = "pkdk_Thuankieu" }
+if (-not $env:MEDINET_PASS_2) { $env:MEDINET_PASS_2 = "pkdk_Thuankieu#2026" }
+
+if (-not (Test-Path ".\pipeline\config.local.json")) {
+  Copy-Item ".\pipeline\config.example.json" ".\pipeline\config.local.json" -Force
+}
+
+& $Python ".\pipeline\ensure_config.py" | Out-Null
+Write-Host ("MEDINET_SSL_VERIFY=" + $env:MEDINET_SSL_VERIFY)
+
+$MissingBudget = 2500
+
+$buildRootFile = Join-Path $env:TEMP "pkdk_build_root.txt"
+& $Python ".\pipeline\resolve_build_root.py" --out "$buildRootFile" | Out-Null
+if (Test-Path -LiteralPath $buildRootFile) {
+  $BuildRoot = (Get-Content -LiteralPath $buildRootFile -Encoding UTF8 -Raw).Trim()
+} else {
+  $BuildRoot = Join-Path $Repo "pipeline\work\build"
+}
+
+function Ensure-Dir([string]$Path) {
+  try { New-Item -ItemType Directory -Force -Path $Path | Out-Null; return $true }
+  catch { Write-Host "WARN: cannot create $Path"; return $false }
+}
+
+function Write-HourlyHeartbeat {
+  param(
+    [string]$Started,
+    [int]$Code,
+    [string]$Abort = "",
+    [string]$LogMain = "",
+    [string]$LogInbox = "",
+    [string]$LogMiss = "",
+    [bool]$DoFull = $false,
+    [int]$InboxExit = -1,
+    [int]$MissingExit = -1
+  )
+  $ended = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+  $dur = -1
+  try {
+    $t0 = [datetime]::ParseExact($Started, "yyyy-MM-dd HH:mm:ss", $null)
+    $dur = [int]([math]::Round(((Get-Date) - $t0).TotalSeconds))
+  } catch {}
+  $lines = @(
+    "started=$Started"
+    "ended=$ended"
+    "duration_s=$dur"
+    "exit=$Code"
+    "abort=$Abort"
+    "inbox_exit=$InboxExit"
+    "missing_exit=$MissingExit"
+    "log=$LogMain"
+    "log_inbox=$LogInbox"
+    "log_missing=$LogMiss"
+    "full=$DoFull"
+    "accounts=pkdkthuankieu+pkdk_Thuankieu"
+    "missing_budget=$MissingBudget"
+    "python=$Python"
+    "pid=$PID"
+  )
+  $hb = ($lines -join "`n") + "`n"
+  foreach ($dir in @((Join-Path $BuildRoot "logs"), $LocalLogDir)) {
+    try {
+      Ensure-Dir $dir | Out-Null
+      Set-Content -LiteralPath (Join-Path $dir "LAST_HOURLY_OK.txt") -Value $hb -Encoding utf8
+    } catch {
+      Write-Host ("WARN heartbeat write failed: " + $dir + " :: " + $_)
+    }
+  }
+  if ($dur -ge 0 -and $dur -lt 15 -and $Abort -eq "") {
+    Write-Host "WARN: hourly duration_s=$dur (<15s) - thuong la abort G:/lock/python, khong phai quet that."
+  }
+  if ($Abort -ne "") {
+    Write-Host ("HEARTBEAT abort=$Abort duration_s=$dur exit=$Code python=$Python")
+  } else {
+    Write-Host ("HEARTBEAT exit=$Code duration_s=$dur inbox_exit=$InboxExit missing_exit=$MissingExit")
+  }
+}
+
+$LocalLogDir = Join-Path $Repo "pipeline\work\logs"
+Ensure-Dir $LocalLogDir | Out-Null
+$logDirOk = Ensure-Dir (Join-Path $BuildRoot "logs")
+Ensure-Dir (Join-Path $BuildRoot "excel_preview") | Out-Null
+Ensure-Dir (Join-Path $BuildRoot "missing_or_updated") | Out-Null
+Ensure-Dir (Join-Path $BuildRoot "cases_snapshot") | Out-Null
+
+$stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+if ($logDirOk) {
+  $log = Join-Path $BuildRoot ("logs\hourly-" + $stamp + ".log")
+  $logInbox = Join-Path $BuildRoot ("logs\hourly-inbox-" + $stamp + ".log")
+  $logMiss = Join-Path $BuildRoot ("logs\hourly-missing-" + $stamp + ".log")
+} else {
+  $log = Join-Path $LocalLogDir ("hourly-" + $stamp + ".log")
+  $logInbox = Join-Path $LocalLogDir ("hourly-inbox-" + $stamp + ".log")
+  $logMiss = Join-Path $LocalLogDir ("hourly-missing-" + $stamp + ".log")
+}
+
+$FlagFull = Join-Path $BuildRoot "FIRST_FULL_SCAN_DONE.txt"
+$doFull = -not (Test-Path -LiteralPath $FlagFull)
+
+$script:LastInboxExit = -1
+$script:LastMissingExit = -1
+
+function Start-TwoBots {
+  param(
+    [string[]]$ExtraInbox = @(),
+    [string[]]$ExtraMissing = @("--missing-budget", "$MissingBudget")
+  )
+  $argsInbox = @("-u", ".\pipeline\hourly_sync.py", "--bot", "inbox", "--missing-budget", "0") + $ExtraInbox
+  $argsMiss = @("-u", ".\pipeline\hourly_sync.py", "--bot", "missing") + $ExtraMissing
+  $b1 = Start-Process -FilePath $Python -ArgumentList $argsInbox -WorkingDirectory $Repo `
+    -PassThru -NoNewWindow -RedirectStandardOutput $logInbox -RedirectStandardError ($logInbox + ".err")
+  $b2 = Start-Process -FilePath $Python -ArgumentList $argsMiss -WorkingDirectory $Repo `
+    -PassThru -NoNewWindow -RedirectStandardOutput $logMiss -RedirectStandardError ($logMiss + ".err")
+  Write-Host ("Bot INBOX  PID={0} log={1}" -f $b1.Id, $logInbox)
+  Write-Host ("Bot MISSING PID={0} log={1}" -f $b2.Id, $logMiss)
+  Wait-Process -Id $b1.Id, $b2.Id -ErrorAction SilentlyContinue
+  $null = $b1.HasExited; $null = $b2.HasExited
+  $c1 = $b1.ExitCode
+  $c2 = $b2.ExitCode
+  if ($null -eq $c1) {
+    $err1 = Get-Content ($logInbox + ".err") -Raw -ErrorAction SilentlyContinue
+    $c1 = if ($err1 -match "Traceback|Error|cannot find|not recognized") { 1 } else { 0 }
+  }
+  if ($null -eq $c2) {
+    $err2 = Get-Content ($logMiss + ".err") -Raw -ErrorAction SilentlyContinue
+    $c2 = if ($err2 -match "Traceback|Error|cannot find|not recognized") { 1 } else { 0 }
+  }
+  $script:LastInboxExit = [int]$c1
+  $script:LastMissingExit = [int]$c2
+  Write-Host ("Bot exit: inbox={0} missing={1}" -f $c1, $c2)
+  return [Math]::Max([int]$c1, [int]$c2)
+}
+
+$header = @(
+  "BuildRoot: $BuildRoot"
+  "Python: $Python"
+  "Accounts: pkdkthuankieu + pkdk_Thuankieu (merged TTHC index)"
+  "INBOX: G:\Drive cua toi\PKDK_Thuankieu_Pipeline\INBOX_CLS"
+  "Rule: ho+ten DAY DU (exact) + nam/ngay sinh/SDT/CCCD (thieu OK neu khong conflict)"
+  "      unique ten khong param -> dien | trung ten >=2 -> UNDER 18"
+  "Route: 2TK+FULL->PROCESSED/U18 | 1TK+FULL->TK1/TK2 | PARTIAL/OTHER->ERROR | noTTHC->MISSING"
+  "Hourly: INBOX disk + MISSING CSV + TK1/TK2 CSV rematch (khong list G: TK1/TK2)"
+  "doFull=$doFull missing_budget=$MissingBudget"
+)
+$header | ForEach-Object { Write-Host $_ }
+$header | Set-Content -LiteralPath $log -Encoding utf8
+
+$started = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+$code = 0
+$abort = ""
+
+if (-not (Test-Path -LiteralPath $Python) -and $Python -ne "python") {
+  Write-Host ("ABORT: python khong tim thay: " + $Python)
+  $abort = "python_missing"
+  $code = 2
+  Write-HourlyHeartbeat -Started $started -Code $code -Abort $abort -LogMain $log `
+    -LogInbox $logInbox -LogMiss $logMiss -DoFull $doFull
+  exit 2
+}
+
+& $Python ".\pipeline\assert_g_pipeline.py"
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "ABORT: G: chua san. Mo Google Drive Desktop."
+  $abort = "g_drive"
+  $code = 2
+  Write-HourlyHeartbeat -Started $started -Code $code -Abort $abort -LogMain $log `
+    -LogInbox $logInbox -LogMiss $logMiss -DoFull $doFull
+  exit 2
+}
+
+if ($doFull) {
+  Write-Host "MODE: FIRST FULL SCAN 2 BOT (INBOX + MISSING + fillable audit)"
+  $code = Start-TwoBots -ExtraInbox @("--full-scan", "--repair") -ExtraMissing @(
+    "--full-scan", "--repair", "--missing-budget", "$MissingBudget"
+  )
+  if ($code -eq 0) {
+    try {
+      Set-Content -LiteralPath $FlagFull -Value ("done=" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss")) -Encoding utf8
+      Write-Host "OK: FIRST_FULL_SCAN_DONE - lan sau hourly INBOX+MISSING"
+    } catch {}
+  }
+} else {
+  Write-Host "MODE: HOURLY 2 BOT - INBOX disk + MISSING CSV + TK1/TK2 CSV rematch"
+  $code = Start-TwoBots
+}
+
+# Detect abort reason from bot logs + exit codes
+try {
+  $blob = ""
+  foreach ($p in @(($logInbox + ".err"), ($logMiss + ".err"), $logInbox, $logMiss)) {
+    if (Test-Path -LiteralPath $p) {
+      $blob += (Get-Content -LiteralPath $p -Raw -ErrorAction SilentlyContinue)
+    }
+  }
+  if ($blob -match "UnicodeDecodeError|invalid continuation byte") {
+    $abort = "cases_csv_encoding"
+  } elseif ($blob -match "CERTIFICATE_VERIFY_FAILED|SSLCertVerificationError|self-signed certificate") {
+    $abort = "ssl_verify"
+  } elseif ($blob -match "another_instance_running|ABORT: da co bot|LOCK_HELD") {
+    $abort = "another_instance"
+  } elseif ($blob -match "ABORT: G:|g_drive_missing|assert_g") {
+    $abort = "g_drive"
+  } elseif ($blob -match "cannot find the file|not recognized as an internal|No such file") {
+    $abort = "python_missing"
+  }
+  if ([int]$code -ne 0) {
+    Write-Host "==== BOT STDERR (tail) ===="
+    foreach ($p in @(($logInbox + ".err"), ($logMiss + ".err"))) {
+      if (Test-Path -LiteralPath $p) {
+        Write-Host ("--- " + $p + " ---")
+        Get-Content -LiteralPath $p -Tail 30 -ErrorAction SilentlyContinue
+      }
+    }
+  }
+} catch {}
+
+if ($abort -eq "cases_csv_encoding") {
+  Write-Host "!! cases.csv encoding loi - chay: python .\\pipeline\\repair_cases_encoding.py"
+}
+if ($abort -eq "ssl_verify") {
+  Write-Host "!! SSL self-signed - pull code moi (medinet_ssl verify OFF). Roi chay lai run_hourly."
+}
+if ($abort -eq "python_missing") {
+  Write-Host "!! python khong chay duoc trong Task - set env PKDK_PYTHON=C:\\Path\\to\\python.exe roi install_hourly_task lai."
+}
+& $Python ".\pipeline\print_counts.py" | ForEach-Object { Write-Host $_ }
+& $Python ".\pipeline\super_data_status.py" --publish | Out-Null
+
+Write-HourlyHeartbeat -Started $started -Code ([int]$code) -Abort $abort -LogMain $log `
+  -LogInbox $logInbox -LogMiss $logMiss -DoFull $doFull `
+  -InboxExit $script:LastInboxExit -MissingExit $script:LastMissingExit
+
+$snapDir = Join-Path $BuildRoot "cases_snapshot"
+if (Ensure-Dir $snapDir) {
+  Copy-Item ".\tracking\cases.csv" (Join-Path $snapDir "cases-$stamp.csv") -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "Log main: $log"
+Write-Host "Exit code: $code"
+if ($code -ne 0) { exit $code }
