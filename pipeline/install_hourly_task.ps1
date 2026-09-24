@@ -1,22 +1,32 @@
-# Install Windows Task Scheduler: chay pipeline moi 1 gio.
-# Neu Access denied: mo PowerShell "Run as administrator" roi chay lai file nay.
+# Install Windows Task Scheduler: PKDK_Hourly_Sync moi 1 gio.
+# ASCII-only. NO console flash: runs via wscript + run_hourly_hidden.vbs
 #
-# Task can: laptop BAT + da dang nhap Windows + Google Drive sync G:\
-# Khuyen nghi: tat Sleep khi cam dien (Settings > Power > Sleep = Never).
+#   powershell -ExecutionPolicy Bypass -File .\pipeline\install_hourly_task.ps1
+#   powershell -ExecutionPolicy Bypass -File .\pipeline\install_hourly_task.ps1 -NoStart
+#
+# Can: laptop BAT + da dang nhap Windows + Google Drive sync G:\
+
+param(
+  [switch]$NoStart
+)
 
 $ErrorActionPreference = "Continue"
 
 $Repo = Split-Path -Parent $PSScriptRoot
 Set-Location $Repo
-$Runner = Join-Path $PSScriptRoot "run_hourly.ps1"
+$RunnerPs1 = Join-Path $PSScriptRoot "run_hourly.ps1"
+$RunnerVbs = Join-Path $PSScriptRoot "run_hourly_hidden.vbs"
 $TaskName = "PKDK_Hourly_Sync"
 
 . (Join-Path $PSScriptRoot "Resolve-PkdkPython.ps1")
 $Python = Resolve-PkdkPython
 $env:PKDK_PYTHON = $Python
 
-if (-not (Test-Path $Runner)) {
-  throw "Missing runner: $Runner"
+if (-not (Test-Path -LiteralPath $RunnerPs1)) {
+  throw "Missing runner: $RunnerPs1"
+}
+if (-not (Test-Path -LiteralPath $RunnerVbs)) {
+  throw "Missing hidden wrapper: $RunnerVbs"
 }
 
 $buildRootFile = Join-Path $env:TEMP "pkdk_build_root.txt"
@@ -31,7 +41,6 @@ foreach ($sub in @("logs", "excel_preview", "missing_or_updated", "cases_snapsho
   try { New-Item -ItemType Directory -Force -Path (Join-Path $BuildRoot $sub) | Out-Null } catch {}
 }
 
-# Persist python path for Task Scheduler (minimal PATH)
 $envFile = Join-Path $Repo "pipeline\work\pkdk_python.txt"
 try {
   $wd = Split-Path -Parent $envFile
@@ -39,10 +48,11 @@ try {
   Set-Content -LiteralPath $envFile -Value $Python -Encoding utf8
 } catch {}
 
-$psArgs = '-NoProfile -ExecutionPolicy Bypass -File "' + $Runner + '"'
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $psArgs -WorkingDirectory $Repo
+# Hidden: wscript //B runs VBS which launches powershell -WindowStyle Hidden
+$wscript = Join-Path $env:SystemRoot "System32\wscript.exe"
+$vbsArgs = '//B //Nologo "' + $RunnerVbs + '"'
+$action = New-ScheduledTaskAction -Execute $wscript -Argument $vbsArgs -WorkingDirectory $Repo
 
-# Daily + repeat every 1 hour (ben hon -Once sau reboot/sleep)
 $nextHour = (Get-Date).Date.AddHours((Get-Date).Hour).AddHours(1)
 $trigger = New-ScheduledTaskTrigger -Daily -At $nextHour
 try {
@@ -53,7 +63,6 @@ try {
   $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(2)) -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Days 3650)
 }
 
-# WakeToRun + StartWhenAvailable: bat buoc neu laptop sleep miss gio
 $settings = New-ScheduledTaskSettingsSet `
   -AllowStartIfOnBatteries `
   -DontStopIfGoingOnBatteries `
@@ -64,7 +73,11 @@ $settings = New-ScheduledTaskSettingsSet `
   -RestartCount 2 `
   -RestartInterval (New-TimeSpan -Minutes 5)
 
-# Interactive: can user da login (Drive G:\ moi mount). Khong doi Password.
+# Hidden UI: do not flash a console when the task fires
+try {
+  $settings.Hidden = $true
+} catch {}
+
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
 
 $registered = $false
@@ -75,12 +88,12 @@ try {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
   }
   Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
-  Write-Host "OK: Registered task $TaskName (Daily+hourly, WakeToRun, Highest)"
+  Write-Host "OK: Registered $TaskName (hidden wscript, no PowerShell flash)"
   $registered = $true
 } catch {
   Write-Host ("WARN: Register failed: " + $_.Exception.Message)
-  Write-Host "Trying schtasks.exe fallback..."
-  $trCmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' + $Runner + '"'
+  Write-Host "Trying schtasks.exe fallback (hidden powershell)..."
+  $trCmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $RunnerPs1 + '"'
   $schArgs = @("/Create", "/F", "/TN", $TaskName, "/TR", $trCmd, "/SC", "HOURLY", "/MO", "1", "/RL", "HIGHEST")
   $p = Start-Process -FilePath "schtasks.exe" -ArgumentList $schArgs -Wait -PassThru -NoNewWindow
   if ($p.ExitCode -eq 0) {
@@ -97,32 +110,30 @@ if (-not $registered) {
   Write-Host "Access denied: can chay PowerShell Run as administrator."
   Write-Host "  cd C:\Users\thais\ADMIN"
   Write-Host "  powershell -ExecutionPolicy Bypass -File .\pipeline\install_hourly_task.ps1"
-  Write-Host "Import/repair PDF van OK. Chi thieu lich tu dong moi 1 gio."
-  Write-Host ("Chay tay: powershell -ExecutionPolicy Bypass -File " + $Runner)
   Write-Host "=============================================="
   exit 1
 }
 
-try {
-  Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
-  Write-Host "OK: Da Start-ScheduledTask $TaskName (chay ngay 1 lan)"
-} catch {
-  Write-Host ("WARN: khong Start duoc task: " + $_)
-  Write-Host ("Chay tay: powershell -ExecutionPolicy Bypass -File " + $Runner)
+if ($NoStart) {
+  try {
+    Disable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null
+    Write-Host "OK: Task registered but DISABLED (-NoStart). Use desktop button to start later."
+  } catch {
+    schtasks.exe /Change /TN $TaskName /DISABLE | Out-Null
+    Write-Host "OK: Task DISABLED via schtasks (-NoStart)"
+  }
+} else {
+  try {
+    Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+    Write-Host "OK: Start-ScheduledTask $TaskName (hidden, no flash)"
+  } catch {
+    Write-Host ("WARN: khong Start duoc task: " + $_)
+  }
 }
 
-Write-Host ("OK: Task moi 1 gio: " + $TaskName)
+Write-Host ("OK: Task: " + $TaskName)
 Write-Host ("Repo: " + $Repo)
-Write-Host ("Runner: " + $Runner)
-Write-Host ("WorkingDirectory: " + $Repo)
+Write-Host ("Hidden runner: " + $RunnerVbs)
 Write-Host ("Python: " + $Python)
-Write-Host ("Build: " + $BuildRoot)
-Write-Host "Kiem tra task:"
-Write-Host "  Get-ScheduledTask -TaskName PKDK_Hourly_Sync | Format-List *"
-Write-Host "  Get-ScheduledTaskInfo -TaskName PKDK_Hourly_Sync"
-Write-Host "Kiem tra da chay:"
-Write-Host ("  Get-ChildItem '" + (Join-Path $BuildRoot "logs") + "' | Sort-Object LastWriteTime -Descending | Select-Object -First 8")
-Write-Host ("  Get-Content '" + (Join-Path $BuildRoot "logs\LAST_HOURLY_OK.txt") + "'")
-Write-Host "Chan doan nhanh: powershell -ExecutionPolicy Bypass -File .\pipeline\CHAY_KIEM_HOURLY.ps1"
-Write-Host "QUAN TRONG: Settings > System > Power > Sleep = Never (khi cam dien)."
-Write-Host "MultipleInstances=Queue (khong bo tick khi lan truoc con chay)."
+Write-Host "Desktop buttons: powershell -File .\pipeline\TAO_NUT_DESKTOP.ps1"
+Write-Host "Pause: .\pipeline\TAM_NGUNG_HOURLY.ps1 | Resume: .\pipeline\NUT_BAT_LAI_KHI_CO_INBOX.ps1"

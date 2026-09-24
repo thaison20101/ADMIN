@@ -91,30 +91,17 @@ Log "==== 5/6 Bo sung thieu fillable (gap-only) ===="
 & powershell -ExecutionPolicy Bypass -File ".\pipeline\CHAY_BO_SUNG_THIEU.ps1" -SkipPull -Rounds 2
 Log ("BO_SUNG exit=" + $LASTEXITCODE)
 
-Log "==== 6/6 Tong ket + BAT hourly (cung rule moi) ===="
+Log "==== 6/6 Tong ket + TAM DUNG hourly (het chop) + nut Desktop ===="
 & $Python ".\pipeline\print_counts.py" | ForEach-Object { Log $_ }
 & $Python ".\pipeline\print_disk_counts.py" | ForEach-Object { Log $_ }
 if ($LASTEXITCODE -ne 0) {
   Log ("WARN print_disk_counts exit=" + $LASTEXITCODE)
 }
 
-Log "Bat / cai lai task PKDK_Hourly_Sync (run_hourly = cung auto_cycle rule moi)..."
-& powershell -ExecutionPolicy Bypass -File ".\pipeline\install_hourly_task.ps1"
-$hourlyCode = $LASTEXITCODE
-Log ("install_hourly_task exit=" + $hourlyCode)
-if ($hourlyCode -ne 0) {
-  Log "WARN: khong dang ky duoc Task Scheduler (can Run as Administrator)."
-  Log "Chay tay: powershell -ExecutionPolicy Bypass -File .\pipeline\install_hourly_task.ps1"
-  # Van thu Enable neu task da co
-  try {
-    Enable-ScheduledTask -TaskName "PKDK_Hourly_Sync" -ErrorAction Stop | Out-Null
-    Log "OK: Enable-ScheduledTask PKDK_Hourly_Sync"
-  } catch {
-    Log ("WARN Enable hourly: " + $_.Exception.Message)
-  }
-}
+# Hidden task + DISABLED + Desktop buttons (resume when INBOX ready)
+& powershell -ExecutionPolicy Bypass -File ".\pipeline\TAM_DUNG_VA_TAO_NUT.ps1" | ForEach-Object { Log $_ }
 
-Log "XONG. Da quet lai G + hourly dung rule dien moi."
-Log "Hourly: INBOX_CLS moi + rematch MISSING/TK (khong full rglob G moi gio)."
+Log "XONG. Da quet lai G. Hourly dang TAT (khong chop PowerShell)."
+Log "Khi co them PDF INBOX: Desktop 'PKDK - Bat lai khi co INBOX'."
 Log ("Chi tiet: " + $MasterLog)
 exit $code
