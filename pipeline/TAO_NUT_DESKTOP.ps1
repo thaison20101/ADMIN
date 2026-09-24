@@ -31,9 +31,9 @@ $pause = Join-Path $PSScriptRoot "NUT_TAM_DUNG_HOURLY.ps1"
 $resume = Join-Path $PSScriptRoot "NUT_BAT_LAI_KHI_CO_INBOX.ps1"
 $inboxOnce = Join-Path $PSScriptRoot "NUT_CHAY_INBOX_1_LAN.ps1"
 
-New-PkdkShortcut -Name "PKDK - Tam dung hourly" -TargetPs1 $pause -Description "Disable PKDK_Hourly_Sync (no flash)"
-New-PkdkShortcut -Name "PKDK - Bat lai khi co INBOX" -TargetPs1 $resume -Description "Enable hourly + run 1 inbox pass"
-New-PkdkShortcut -Name "PKDK - Chay INBOX 1 lan" -TargetPs1 $inboxOnce -Description "One inbox/missing pass without enabling hourly"
+New-PkdkShortcut -Name "PKDK - Tam dung hourly" -TargetPs1 $pause -Description "Pause schedule only. Scan/fill rules UNCHANGED."
+New-PkdkShortcut -Name "PKDK - Bat lai khi co INBOX" -TargetPs1 $resume -Description "Resume hourly with SAME scan/fill rules + 1 inbox pass"
+New-PkdkShortcut -Name "PKDK - Chay INBOX 1 lan" -TargetPs1 $inboxOnce -Description "One inbox pass; leave hourly paused"
 
 Write-Host ""
 Write-Host "Desktop buttons created. Double-click when ready."
