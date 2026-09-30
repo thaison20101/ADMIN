@@ -20,7 +20,7 @@ MEDINET_ACCOUNTS = [
     {
         "id": "pkdkthuankieu",
         "user": "pkdkthuankieu",
-        "password": "P@ssw0rd",
+        "password": "Qlskcd@2026",
     },
     {
         "id": "pkdk_Thuankieu",

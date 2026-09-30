@@ -28,7 +28,7 @@ $env:PYTHONUTF8 = "1"
 $env:PYTHONUNBUFFERED = "1"
 # 2 TK Medinet (cung hardcode pipeline/medinet_creds.py + hourly) - luon dung 2 TK nay
 $env:MEDINET_USER = "pkdkthuankieu"
-$env:MEDINET_PASS = "P@ssw0rd"
+$env:MEDINET_PASS = "Qlskcd@2026"
 $env:MEDINET_USER_2 = "pkdk_Thuankieu"
 $env:MEDINET_PASS_2 = "pkdk_Thuankieu#2026"
 

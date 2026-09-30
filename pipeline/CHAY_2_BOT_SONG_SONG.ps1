@@ -22,7 +22,7 @@ $env:PYTHONUTF8 = "1"
 $env:PYTHONUNBUFFERED = "1"
 if (-not $env:MEDINET_SSL_VERIFY) { $env:MEDINET_SSL_VERIFY = "0" }
 if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdkthuankieu" }
-if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "P@ssw0rd" }
+if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "Qlskcd@2026" }
 if (-not $env:MEDINET_USER_2) { $env:MEDINET_USER_2 = "pkdk_Thuankieu" }
 if (-not $env:MEDINET_PASS_2) { $env:MEDINET_PASS_2 = "pkdk_Thuankieu#2026" }
 
