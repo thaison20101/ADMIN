@@ -1,5 +1,5 @@
 # ============================================================
-# 1 LENH MAY A: BAT LAI hourly + din web (INBOX + rematch)
+# 1 LENH MAY A: BAT LAI hourly + dien web (INBOX + rematch)
 # ASCII-only. Hidden task (khong chop PowerShell).
 #
 #   cd C:\Users\thais\ADMIN
