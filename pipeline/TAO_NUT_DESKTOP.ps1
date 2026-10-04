@@ -28,12 +28,13 @@ function New-PkdkShortcut {
 }
 
 $pause = Join-Path $PSScriptRoot "NUT_TAM_DUNG_HOURLY.ps1"
-$resume = Join-Path $PSScriptRoot "NUT_BAT_LAI_KHI_CO_INBOX.ps1"
+$resume = Join-Path $PSScriptRoot "BAT_LAI_DIEN_WEB.ps1"
 $inboxOnce = Join-Path $PSScriptRoot "NUT_CHAY_INBOX_1_LAN.ps1"
 
 New-PkdkShortcut -Name "PKDK - Tam dung hourly" -TargetPs1 $pause -Description "Pause schedule only. Scan/fill rules UNCHANGED."
-New-PkdkShortcut -Name "PKDK - Bat lai khi co INBOX" -TargetPs1 $resume -Description "Resume hourly with SAME scan/fill rules + 1 inbox pass"
+New-PkdkShortcut -Name "PKDK - Bat lai dien web" -TargetPs1 $resume -Description "Enable hourly + fill INBOX now (same rules)"
 New-PkdkShortcut -Name "PKDK - Chay INBOX 1 lan" -TargetPs1 $inboxOnce -Description "One inbox pass; leave hourly paused"
+
 
 Write-Host ""
 Write-Host "Desktop buttons created. Double-click when ready."
