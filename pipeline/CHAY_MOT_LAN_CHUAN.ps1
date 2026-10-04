@@ -91,17 +91,17 @@ Log "==== 5/6 Bo sung thieu fillable (gap-only) ===="
 & powershell -ExecutionPolicy Bypass -File ".\pipeline\CHAY_BO_SUNG_THIEU.ps1" -SkipPull -Rounds 2
 Log ("BO_SUNG exit=" + $LASTEXITCODE)
 
-Log "==== 6/6 Tong ket + TAM DUNG hourly (het chop) + nut Desktop ===="
+Log "==== 6/6 Tong ket + BAT hourly (dien web) + nut Desktop ===="
 & $Python ".\pipeline\print_counts.py" | ForEach-Object { Log $_ }
 & $Python ".\pipeline\print_disk_counts.py" | ForEach-Object { Log $_ }
 if ($LASTEXITCODE -ne 0) {
   Log ("WARN print_disk_counts exit=" + $LASTEXITCODE)
 }
 
-# Hidden task + DISABLED + Desktop buttons (resume when INBOX ready)
-& powershell -ExecutionPolicy Bypass -File ".\pipeline\TAM_DUNG_VA_TAO_NUT.ps1" | ForEach-Object { Log $_ }
+# Bat lich hidden + chay dien web (KHONG tam dung)
+Log "Bat lai dien web (hourly ON)..."
+& powershell -ExecutionPolicy Bypass -File ".\pipeline\BAT_LAI_DIEN_WEB.ps1" | ForEach-Object { Log $_ }
 
-Log "XONG. Da quet lai G. Hourly dang TAT (khong chop PowerShell)."
-Log "Khi co them PDF INBOX: Desktop 'PKDK - Bat lai khi co INBOX'."
+Log "XONG. Da quet lai G. Hourly DANG BAT - dien INBOX/MISSING."
 Log ("Chi tiet: " + $MasterLog)
 exit $code

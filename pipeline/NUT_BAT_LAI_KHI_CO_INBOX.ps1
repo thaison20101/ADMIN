@@ -32,6 +32,18 @@ $sha = (git rev-parse --short HEAD)
 Write-Host ("HEAD=" + $sha)
 
 Write-Host ""
+Write-Host "==== SSL + config (TK1 pass moi) ===="
+. (Join-Path $PSScriptRoot "Resolve-PkdkPython.ps1")
+$Python = Resolve-PkdkPython
+$env:PKDK_PYTHON = $Python
+& $Python ".\pipeline\ensure_config.py"
+& $Python ".\pipeline\medinet_ssl.py"
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "DUNG: SSL/auth FAIL"
+  exit 2
+}
+
+Write-Host ""
 Write-Host "==== Cai task HIDDEN + BAT lich (khong chop) ===="
 & powershell -NoProfile -ExecutionPolicy Bypass -File ".\pipeline\install_hourly_task.ps1"
 $inst = $LASTEXITCODE
