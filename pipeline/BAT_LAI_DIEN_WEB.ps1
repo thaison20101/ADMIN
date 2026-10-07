@@ -1,5 +1,5 @@
 # ============================================================
-# BAT LAI DIEN WEB = goi EP_DIEN_INBOX_NGAY (1 lenh day du)
+# BAT LAI DIEN WEB -> CHAY_LAI_NHU_TRUOC (hourly luon ON)
 # ASCII-only.
 #
 #   cd C:\Users\thais\ADMIN
@@ -13,14 +13,14 @@ $Repo = Split-Path -Parent $PSScriptRoot
 if (-not $Repo) { $Repo = "C:\Users\thais\ADMIN" }
 Set-Location $Repo
 
-$Ep = Join-Path $PSScriptRoot "EP_DIEN_INBOX_NGAY.ps1"
-if (-not (Test-Path -LiteralPath $Ep)) {
-  Write-Host "Thieu EP_DIEN_INBOX_NGAY.ps1 - keo tip truoc:"
+$Main = Join-Path $PSScriptRoot "CHAY_LAI_NHU_TRUOC.ps1"
+if (-not (Test-Path -LiteralPath $Main)) {
+  Write-Host "Thieu CHAY_LAI_NHU_TRUOC.ps1 - keo tip:"
   Write-Host "  git fetch origin"
   Write-Host "  git checkout cursor/hourly-flash-fix-df0f"
   Write-Host "  git reset --hard origin/cursor/hourly-flash-fix-df0f"
   exit 3
 }
 
-& powershell -NoProfile -ExecutionPolicy Bypass -File $Ep
+& powershell -NoProfile -ExecutionPolicy Bypass -File $Main
 exit $LASTEXITCODE

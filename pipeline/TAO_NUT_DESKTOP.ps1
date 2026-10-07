@@ -1,5 +1,5 @@
-# Create Desktop shortcuts (buttons) for pause / resume hourly.
-# ASCII-only for Windows PowerShell 5.1
+# Create Desktop shortcuts. Primary = chay nhu truoc (hourly ON).
+# ASCII-only.
 #
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\TAO_NUT_DESKTOP.ps1
 
@@ -18,7 +18,6 @@ function New-PkdkShortcut {
   $w = New-Object -ComObject WScript.Shell
   $s = $w.CreateShortcut($lnkPath)
   $s.TargetPath = "powershell.exe"
-  # Keep window open so user sees result (not a flash-close)
   $s.Arguments = '-NoExit -NoProfile -ExecutionPolicy Bypass -File "' + $TargetPs1 + '"'
   $s.WorkingDirectory = $Repo
   $s.WindowStyle = 1
@@ -27,16 +26,15 @@ function New-PkdkShortcut {
   Write-Host ("OK shortcut: " + $lnkPath)
 }
 
+$main = Join-Path $PSScriptRoot "CHAY_LAI_NHU_TRUOC.ps1"
 $pause = Join-Path $PSScriptRoot "NUT_TAM_DUNG_HOURLY.ps1"
-$resume = Join-Path $PSScriptRoot "BAT_LAI_DIEN_WEB.ps1"
 $inboxOnce = Join-Path $PSScriptRoot "NUT_CHAY_INBOX_1_LAN.ps1"
 
-New-PkdkShortcut -Name "PKDK - Tam dung hourly" -TargetPs1 $pause -Description "Pause schedule only. Scan/fill rules UNCHANGED."
-New-PkdkShortcut -Name "PKDK - Bat lai dien web" -TargetPs1 $resume -Description "Enable hourly + fill INBOX now (same rules)"
-New-PkdkShortcut -Name "PKDK - Chay INBOX 1 lan" -TargetPs1 $inboxOnce -Description "One inbox pass; leave hourly paused"
-
+New-PkdkShortcut -Name "PKDK - Chay lai nhu truoc" -TargetPs1 $main -Description "Hourly ON + fill INBOX (default, no pause)"
+New-PkdkShortcut -Name "PKDK - Tam dung hourly" -TargetPs1 $pause -Description "Optional pause only"
+New-PkdkShortcut -Name "PKDK - Chay INBOX 1 lan" -TargetPs1 $inboxOnce -Description "One inbox pass"
 
 Write-Host ""
-Write-Host "Desktop buttons created. Double-click when ready."
+Write-Host "Desktop: dung 'PKDK - Chay lai nhu truoc' de bat dien web."
 Write-Host ("Desktop: " + $Desktop)
 exit 0

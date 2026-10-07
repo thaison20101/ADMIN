@@ -136,4 +136,5 @@ Write-Host ("Repo: " + $Repo)
 Write-Host ("Hidden runner: " + $RunnerVbs)
 Write-Host ("Python: " + $Python)
 Write-Host "Desktop buttons: powershell -File .\pipeline\TAO_NUT_DESKTOP.ps1"
-Write-Host "Pause: .\pipeline\TAM_NGUNG_HOURLY.ps1 | Resume: .\pipeline\NUT_BAT_LAI_KHI_CO_INBOX.ps1"
+Write-Host "Chay lai nhu truoc: .\pipeline\CHAY_LAI_NHU_TRUOC.ps1"
+Write-Host "Pause (tuy chon): .\pipeline\TAM_NGUNG_HOURLY.ps1"
