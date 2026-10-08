@@ -27,20 +27,53 @@ NITRIT_AM_TINH = 5120
 NITRIT_DUONG_TINH = 5119
 
 
-def authenticate(user: str, password: str) -> str:
-    req = urllib.request.Request(
-        f"{BE}/api/TokenAuth/Authenticate",
-        data=json.dumps(
-            {"userNameOrEmailAddress": user, "password": password, "rememberClient": True}
-        ).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
+def authenticate(user: str, password: str, *, timeout: float = 120, retries: int = 4) -> str:
+    """Login Medinet. Retries on timeout/network; raises RuntimeError on bad password."""
+    last_err: Exception | None = None
+    payload = json.dumps(
+        {"userNameOrEmailAddress": user, "password": password, "rememberClient": True}
+    ).encode()
+    for attempt in range(max(1, retries)):
+        try:
+            req = urllib.request.Request(
+                f"{BE}/api/TokenAuth/Authenticate",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with _urlopen(req, timeout=timeout) as r:
+                body = json.loads(r.read())
+            if not body.get("success"):
+                # Wrong password / locked — do not retry as network
+                raise RuntimeError(f"Auth failed (sai user/pass hoac bi khoa): {body}")
+            return body["result"]["accessToken"]
+        except RuntimeError:
+            raise
+        except Exception as e:
+            last_err = e
+            msg = str(e).lower()
+            transient = any(
+                x in msg
+                for x in (
+                    "timed out",
+                    "timeout",
+                    "temporarily unavailable",
+                    "connection reset",
+                    "connection aborted",
+                    "name or service not known",
+                    "getaddrinfo",
+                    "10060",
+                    "10054",
+                    "10061",
+                )
+            )
+            if not transient or attempt >= retries - 1:
+                break
+            time.sleep(1.5 * (attempt + 1))
+    raise TimeoutError(
+        f"Auth TIMEOUT toi {BE} (user={user}). "
+        f"Pass co the DUNG — mang/proxy/DNS toi Medinet bi treo. last={last_err}"
     )
-    with _urlopen(req, timeout=60) as r:
-        body = json.loads(r.read())
-    if not body.get("success"):
-        raise RuntimeError(f"Auth failed: {body}")
-    return body["result"]["accessToken"]
 
 
 def to_fparams(obj: dict) -> list:

@@ -109,24 +109,57 @@ def urlopen(req, timeout: float = 60):
     return urllib.request.urlopen(req, timeout=timeout, context=medinet_ssl_context())
 
 
+def probe_connectivity(host: str = "be-qlskcd.medinet.org.vn", port: int = 443) -> None:
+    """Print DNS + TCP reachability (helps separate timeout vs bad password)."""
+    import socket
+
+    print(f"probe: DNS/TCP {host}:{port} ...", flush=True)
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        ips = sorted({i[4][0] for i in infos})
+        print(f"probe: DNS OK ips={ips[:4]}", flush=True)
+    except Exception as e:
+        print(f"probe: DNS FAIL {e}", flush=True)
+        return
+    try:
+        s = socket.create_connection((ips[0], port), timeout=15)
+        s.close()
+        print(f"probe: TCP OK {ips[0]}:{port}", flush=True)
+    except Exception as e:
+        print(f"probe: TCP FAIL {ips[0]}:{port} {e}", flush=True)
+
+
 def probe_auth() -> int:
     """Exit 0 if Medinet auth works with current SSL policy; else 2."""
     reset_ssl_cache()
     install_medinet_https_opener()
     print(f"probe: MEDINET_SSL_VERIFY={os.environ.get('MEDINET_SSL_VERIFY')!r} want_verify={_want_verify()}")
     print(f"probe: monkeypatch={_monkey_patched} file={__file__}")
+    probe_connectivity()
     try:
         from medinet_api import authenticate
         from medinet_creds import get_medinet_accounts
 
         accts = get_medinet_accounts({})
+        print(
+            f"probe: trying login user={accts[0]['user']} pass_prefix={accts[0]['password'][:4]}***",
+            flush=True,
+        )
         tok = authenticate(accts[0]["user"], accts[0]["password"])
         print(f"probe: auth OK account={accts[0]['id']} token_len={len(tok or '')}")
         return 0
+    except TimeoutError as e:
+        print(f"probe: AUTH TIMEOUT (KHONG phai sai pass): {e}")
+        print("probe: Mo trinh duyet https://quanlyskcd.medinet.org.vn — neu khong dong duoc thi mang/proxy.")
+        print("probe: Tat VPN la / thu WiFi khac / doi Available offline Drive xong chay lai.")
+        return 2
     except Exception as e:
         print(f"probe: AUTH FAIL: {e}")
-        if "CERTIFICATE" in str(e).upper() or "SSL" in str(e).upper():
+        err = str(e).upper()
+        if "CERTIFICATE" in err or "SSL" in err:
             print("probe: SSL still failing - git pull cursor/hourly-flash-fix-df0f roi chay lai")
+        elif "AUTH FAILED" in err or "SAI USER" in err:
+            print("probe: SAI PASS — doi lai Qlskcd@2026 tren web Medinet cho pkdkthuankieu")
         return 2
 
 

@@ -56,8 +56,18 @@ Log "==== Pin creds + auth ===="
 & $Python ".\pipeline\ensure_config.py"
 & $Python ".\pipeline\medinet_creds.py" --write --user pkdkthuankieu --pass Qlskcd@2026
 & $Python ".\pipeline\medinet_creds.py" --show
+Log "NOTE: pass tip = Qlskcd@2026 (len 11). Timeout = mang toi Medinet, KHONG phai sai pass."
 & $Python ".\pipeline\medinet_ssl.py"
-if ($LASTEXITCODE -ne 0) { Log "AUTH FAIL TK1"; exit 2 }
+$auth = $LASTEXITCODE
+if ($auth -ne 0) {
+  Log "AUTH TIMEOUT/FAIL — thu mo Chrome: https://quanlyskcd.medinet.org.vn"
+  Log "Neu web cung khong vao duoc: mang/proxy. Neu web login OK: chay lai script (retry dai hon)."
+  # Mot lan retry them sau 5s
+  Start-Sleep -Seconds 5
+  & $Python ".\pipeline\medinet_ssl.py"
+  $auth = $LASTEXITCODE
+}
+if ($auth -ne 0) { Log "DUNG: khong login duoc Medinet (timeout/mang). Pass tip da dung Qlskcd@2026."; exit 2 }
 & $Python ".\pipeline\probe_both_accounts.py"
 if ($LASTEXITCODE -ne 0) { Log "AUTH FAIL 2TK"; exit 2 }
 & $Python ".\pipeline\assert_g_pipeline.py"
