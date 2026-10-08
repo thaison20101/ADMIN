@@ -10,7 +10,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from medinet_ssl import install_medinet_https_opener, urlopen as _urlopen
+from medinet_ssl import (
+    install_medinet_https_opener,
+    medinet_http_headers,
+    urlopen as _urlopen,
+)
 
 # May A: install unverified HTTPS opener before any Medinet call
 install_medinet_https_opener()
@@ -27,24 +31,29 @@ NITRIT_AM_TINH = 5120
 NITRIT_DUONG_TINH = 5119
 
 
-def authenticate(user: str, password: str, *, timeout: float = 120, retries: int = 4) -> str:
-    """Login Medinet. Retries on timeout/network; raises RuntimeError on bad password."""
+def authenticate(user: str, password: str, *, timeout: float = 60, retries: int = 3) -> str:
+    """Login Medinet. Retries on timeout/network; raises RuntimeError on bad password.
+
+    Must send browser User-Agent: Medinet WAF drops bare Python-urllib (read timeout
+    forever) while Chrome / Mozilla UA returns in ~2s.
+    """
     last_err: Exception | None = None
     payload = json.dumps(
         {"userNameOrEmailAddress": user, "password": password, "rememberClient": True}
     ).encode()
+    headers = medinet_http_headers({"Content-Type": "application/json"})
     for attempt in range(max(1, retries)):
         try:
             req = urllib.request.Request(
                 f"{BE}/api/TokenAuth/Authenticate",
                 data=payload,
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 method="POST",
             )
             with _urlopen(req, timeout=timeout) as r:
                 body = json.loads(r.read())
             if not body.get("success"):
-                # Wrong password / locked — do not retry as network
+                # Wrong password / locked - do not retry as network
                 raise RuntimeError(f"Auth failed (sai user/pass hoac bi khoa): {body}")
             return body["result"]["accessToken"]
         except RuntimeError:
@@ -72,7 +81,7 @@ def authenticate(user: str, password: str, *, timeout: float = 120, retries: int
             time.sleep(1.5 * (attempt + 1))
     raise TimeoutError(
         f"Auth TIMEOUT toi {BE} (user={user}). "
-        f"Pass co the DUNG — mang/proxy/DNS toi Medinet bi treo. last={last_err}"
+        f"Pass co the DUNG - mang/proxy/DNS toi Medinet bi treo. last={last_err}"
     )
 
 
@@ -86,12 +95,14 @@ def api(token: str, path: str, method: str = "GET", body=None, reauth=None):
     data = None if body is None else json.dumps(body, ensure_ascii=False).encode()
     last = None
     for attempt in range(5):
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "SessionSiteId": SITE_ID,
-        }
+        headers = medinet_http_headers(
+            {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "SessionSiteId": SITE_ID,
+            }
+        )
         try:
             req = urllib.request.Request(url, data=data, headers=headers, method=method)
             with _urlopen(req, timeout=180) as r:

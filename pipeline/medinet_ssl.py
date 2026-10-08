@@ -101,11 +101,52 @@ def install_medinet_https_opener() -> None:
     _opener_installed = True
 
 
+# Medinet / WAF silently drops default Python-urllib User-Agent (read timeout).
+# Browser UA works (~2s). Inject on every HTTPS call through this wrapper.
+BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+BROWSER_ORIGIN = "https://quanlyskcd.medinet.org.vn"
+
+
+def medinet_http_headers(extra: dict | None = None) -> dict:
+    """Headers that Medinet accepts (not bare Python-urllib)."""
+    h = {
+        "User-Agent": BROWSER_UA,
+        "Accept": "application/json, text/plain, */*",
+        "Origin": BROWSER_ORIGIN,
+        "Referer": BROWSER_ORIGIN + "/",
+    }
+    if extra:
+        h.update(extra)
+    return h
+
+
+def _ensure_browser_headers(req) -> None:
+    """Mutate Request so WAF does not hang on Python-urllib UA."""
+    import urllib.request
+
+    if not isinstance(req, urllib.request.Request):
+        return
+    # urllib stores headers with title-case; get_header looks up 'User-agent'
+    if not req.has_header("User-agent"):
+        req.add_header("User-Agent", BROWSER_UA)
+    if not req.has_header("Accept"):
+        req.add_header("Accept", "application/json, text/plain, */*")
+    if not req.has_header("Origin"):
+        req.add_header("Origin", BROWSER_ORIGIN)
+    if not req.has_header("Referer"):
+        req.add_header("Referer", BROWSER_ORIGIN + "/")
+
+
 def urlopen(req, timeout: float = 60):
-    """urllib.request.urlopen with Medinet SSL policy."""
+    """urllib.request.urlopen with Medinet SSL policy + browser UA."""
     import urllib.request
 
     install_medinet_https_opener()
+    _ensure_browser_headers(req)
     return urllib.request.urlopen(req, timeout=timeout, context=medinet_ssl_context())
 
 
@@ -150,8 +191,8 @@ def probe_auth() -> int:
         return 0
     except TimeoutError as e:
         print(f"probe: AUTH TIMEOUT (KHONG phai sai pass): {e}")
-        print("probe: Mo trinh duyet https://quanlyskcd.medinet.org.vn — neu khong dong duoc thi mang/proxy.")
-        print("probe: Tat VPN la / thu WiFi khac / doi Available offline Drive xong chay lai.")
+        print("probe: Tip da gui User-Agent Chrome. Neu van timeout: mang/proxy.")
+        print("probe: Mo https://quanlyskcd.medinet.org.vn - neu web OK ma Python van treo: git pull tip moi.")
         return 2
     except Exception as e:
         print(f"probe: AUTH FAIL: {e}")
@@ -159,7 +200,7 @@ def probe_auth() -> int:
         if "CERTIFICATE" in err or "SSL" in err:
             print("probe: SSL still failing - git pull cursor/hourly-flash-fix-df0f roi chay lai")
         elif "AUTH FAILED" in err or "SAI USER" in err:
-            print("probe: SAI PASS — doi lai Qlskcd@2026 tren web Medinet cho pkdkthuankieu")
+            print("probe: SAI PASS - doi lai Qlskcd@2026 tren web Medinet cho pkdkthuankieu")
         return 2
 
 
