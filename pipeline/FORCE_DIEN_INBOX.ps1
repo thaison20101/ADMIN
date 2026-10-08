@@ -60,7 +60,7 @@ Log "NOTE: pass tip = Qlskcd@2026 (len 11). Timeout = mang toi Medinet, KHONG ph
 & $Python ".\pipeline\medinet_ssl.py"
 $auth = $LASTEXITCODE
 if ($auth -ne 0) {
-  Log "AUTH TIMEOUT/FAIL — thu mo Chrome: https://quanlyskcd.medinet.org.vn"
+  Log "AUTH TIMEOUT/FAIL - thu mo Chrome: https://quanlyskcd.medinet.org.vn"
   Log "Neu web cung khong vao duoc: mang/proxy. Neu web login OK: chay lai script (retry dai hon)."
   # Mot lan retry them sau 5s
   Start-Sleep -Seconds 5
