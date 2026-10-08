@@ -55,28 +55,17 @@ def main() -> int:
     else:
         med["ssl_verify"] = False
         print("config: medinet.ssl_verify=false (may A self-signed OK)")
-    # Rotate legacy TK1 password in config.local (gitignored)
-    # TK1 user stays pkdkthuankieu; TK2 remains pkdk_Thuankieu
-    TK1_USER = "pkdkthuankieu"
-    TK1_PASS = "Qlskcd@2026"
-    old_tk1_passes = {"", "P@ssw0rd"}
-    raw_accts = med.get("accounts")
-    if isinstance(raw_accts, list):
-        for item in raw_accts:
-            if not isinstance(item, dict):
-                continue
-            u = str(item.get("user") or item.get("username") or "").strip()
-            if u in {TK1_USER, "pkthuankieu"} and str(item.get("password") or "").strip() in old_tk1_passes:
-                item["user"] = TK1_USER
-                item["id"] = item.get("id") or TK1_USER
-                item["password"] = TK1_PASS
-                print(f"config: rotated TK1 password for {TK1_USER}")
-    # Legacy single username/password fields: only rotate if still old TK1 pass
-    if str(med.get("username") or "").strip() in {TK1_USER, "pkthuankieu", ""}:
-        if str(med.get("password") or "").strip() in old_tk1_passes:
-            med["username"] = TK1_USER
-            med["password"] = TK1_PASS
-            print(f"config: rotated medinet.username/password -> {TK1_USER}")
+    # Always pin both PKDK accounts into config.local (never keep old P@ssw0rd)
+    from medinet_creds import MEDINET_ACCOUNTS
+
+    med["accounts"] = [a.copy() for a in MEDINET_ACCOUNTS]
+    med["username"] = MEDINET_ACCOUNTS[0]["user"]
+    med["password"] = MEDINET_ACCOUNTS[0]["password"]
+    print(
+        f"config: pinned accounts TK1={MEDINET_ACCOUNTS[0]['user']} "
+        f"pass={MEDINET_ACCOUNTS[0]['password'][:4]}*** "
+        f"TK2={MEDINET_ACCOUNTS[1]['user']}"
+    )
 
     rules = cfg.setdefault("import_rules", {})
     rules["enabled"] = True

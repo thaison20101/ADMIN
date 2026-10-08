@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Resolve Medinet login: env -> config.local.json -> hardcoded defaults.
+"""Resolve Medinet login: hardcoded PKDK defaults, then env override.
 
-PKDK Thuận Kiều has 2 Medinet accounts; TTHC entered on one may be invisible
-on the other until merged at report level. Pipeline indexes BOTH accounts.
+config.local.json must NOT silently keep an old TK1 password (that blocked
+fills after Qlskcd@2026 rotation). Known clinic accounts always use
+MEDINET_ACCOUNTS unless MEDINET_USER/PASS env explicitly overrides.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LOCAL_CONFIG = Path(__file__).resolve().parent / "config.local.json"
 EXAMPLE_CONFIG = Path(__file__).resolve().parent / "config.example.json"
 
-# Hardcoded PKDK accounts (may A) — override via env if needed
+# Hardcoded PKDK accounts (may A) — source of truth
 MEDINET_ACCOUNTS = [
     {
         "id": "pkdkthuankieu",
@@ -34,33 +35,13 @@ DEFAULT_PASS = MEDINET_ACCOUNTS[0]["password"]
 
 
 def get_medinet_accounts(cfg: dict | None = None) -> list[dict]:
-    """Return [{id, user, password}, ...] — always at least 2 PKDK accounts."""
-    if cfg is None:
-        path = LOCAL_CONFIG if LOCAL_CONFIG.exists() else EXAMPLE_CONFIG
-        if path.exists():
-            try:
-                cfg = json.loads(path.read_text(encoding="utf-8-sig"))
-            except Exception:
-                cfg = {}
-        else:
-            cfg = {}
+    """Return [{id, user, password}, ...] — always the 2 PKDK accounts.
 
-    med = (cfg or {}).get("medinet") or {}
-    raw = med.get("accounts")
-    if isinstance(raw, list) and len(raw) >= 2:
-        out = []
-        for i, item in enumerate(raw[:2]):
-            if not isinstance(item, dict):
-                continue
-            uid = str(item.get("id") or item.get("user") or f"acct{i}").strip()
-            user = str(item.get("user") or item.get("username") or "").strip()
-            password = str(item.get("password") or item.get("pass") or "").strip()
-            if user and password:
-                out.append({"id": uid, "user": user, "password": password})
-        if len(out) >= 2:
-            return out
-
-    # Env override for account 1 / 2
+    Env overrides (optional):
+      MEDINET_USER / MEDINET_PASS       -> TK1
+      MEDINET_USER_2 / MEDINET_PASS_2   -> TK2
+    config.local accounts[] is ignored for passwords (was trapping old P@ssw0rd).
+    """
     a1 = MEDINET_ACCOUNTS[0].copy()
     a2 = MEDINET_ACCOUNTS[1].copy()
     u1 = (os.environ.get("MEDINET_USER") or "").strip()
@@ -87,7 +68,7 @@ def get_medinet_creds(cfg: dict | None = None) -> tuple[str, str]:
 
 
 def write_local_creds(username: str, password: str) -> Path:
-    """Persist credentials into gitignored config.local.json."""
+    """Persist both PKDK accounts into gitignored config.local.json."""
     if LOCAL_CONFIG.exists():
         cfg = json.loads(LOCAL_CONFIG.read_text(encoding="utf-8-sig"))
     elif EXAMPLE_CONFIG.exists():
@@ -95,8 +76,13 @@ def write_local_creds(username: str, password: str) -> Path:
     else:
         cfg = {}
     med = cfg.setdefault("medinet", {})
-    med["username"] = username
-    med["password"] = password
+    med["username"] = username or DEFAULT_USER
+    med["password"] = password or DEFAULT_PASS
+    med["accounts"] = [a.copy() for a in MEDINET_ACCOUNTS]
+    if username or password:
+        med["accounts"][0]["user"] = username or DEFAULT_USER
+        med["accounts"][0]["id"] = username or DEFAULT_USER
+        med["accounts"][0]["password"] = password or DEFAULT_PASS
     med["date_from"] = med.get("date_from") or "01/07/2026"
     med["date_to"] = med.get("date_to") or ""
     LOCAL_CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -111,7 +97,7 @@ if __name__ == "__main__":
     ap.add_argument("--user", default="")
     ap.add_argument("--pass", dest="password", default="")
     ap.add_argument("--show", action="store_true", help="Print resolved user (mask password)")
-    ap.add_argument("--write", action="store_true", help="Write --user/--pass into config.local.json")
+    ap.add_argument("--write", action="store_true", help="Write accounts into config.local.json")
     ap.add_argument("--list-accounts", action="store_true", help="List both account ids")
     args = ap.parse_args()
 
@@ -132,6 +118,7 @@ if __name__ == "__main__":
         print(f"user={u} pass={'*' * len(p)} (len={len(p)})")
         accts = get_medinet_accounts()
         print(f"accounts={accts[0]['id']}+{accts[1]['id']}")
+        print(f"tk1_pass_prefix={accts[0]['password'][:4]}")
     else:
         print(u)
         print(p)
