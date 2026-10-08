@@ -1,9 +1,9 @@
-# EP_DIEN_INBOX_NGAY -> CHAY_LAI_NHU_TRUOC (hourly ON, nhu truoc tam dung)
+# EP_DIEN_INBOX_NGAY -> FORCE_DIEN_INBOX
 # ASCII-only.
 $ErrorActionPreference = "Continue"
-$Main = Join-Path $PSScriptRoot "CHAY_LAI_NHU_TRUOC.ps1"
+$Main = Join-Path $PSScriptRoot "FORCE_DIEN_INBOX.ps1"
 if (-not (Test-Path -LiteralPath $Main)) {
-  Write-Host "Thieu CHAY_LAI_NHU_TRUOC.ps1 - git reset --hard origin/cursor/hourly-flash-fix-df0f"
+  Write-Host "Thieu FORCE_DIEN_INBOX.ps1 - git reset --hard origin/cursor/hourly-flash-fix-df0f"
   exit 3
 }
 & powershell -NoProfile -ExecutionPolicy Bypass -File $Main
