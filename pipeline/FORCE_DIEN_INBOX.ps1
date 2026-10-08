@@ -67,7 +67,8 @@ if ($auth -ne 0) {
 }
 if ($auth -ne 0) { Log "DUNG: khong login duoc Medinet. Pass tip da dung Qlskcd@2026."; exit 2 }
 & $Python ".\pipeline\probe_both_accounts.py"
-if ($LASTEXITCODE -ne 0) { Log "AUTH FAIL 2TK"; exit 2 }
+if ($LASTEXITCODE -ne 0) { Log "AUTH FAIL TK1"; exit 2 }
+Log "AUTH TK1 OK (TK2 soft-fail neu sai pass - van dien INBOX bang TK1)"
 & $Python ".\pipeline\assert_g_pipeline.py"
 if ($LASTEXITCODE -ne 0) { Log "G: FAIL"; exit 2 }
 

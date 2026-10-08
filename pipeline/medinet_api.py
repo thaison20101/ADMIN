@@ -31,11 +31,25 @@ NITRIT_AM_TINH = 5120
 NITRIT_DUONG_TINH = 5119
 
 
+def _auth_fail_detail(body: dict | None, raw: str = "") -> str:
+    if isinstance(body, dict):
+        err = body.get("error") or {}
+        if isinstance(err, dict):
+            detail = err.get("details") or err.get("message") or ""
+            if detail:
+                return str(detail)
+        return json.dumps(body, ensure_ascii=False)[:400]
+    return (raw or "")[:400]
+
+
 def authenticate(user: str, password: str, *, timeout: float = 60, retries: int = 3) -> str:
     """Login Medinet. Retries on timeout/network; raises RuntimeError on bad password.
 
     Must send browser User-Agent: Medinet WAF drops bare Python-urllib (read timeout
     forever) while Chrome / Mozilla UA returns in ~2s.
+
+    Note: Medinet returns HTTP 500 + JSON {success:false, Invalid user name or password}
+    for wrong credentials (not HTTP 401).
     """
     last_err: Exception | None = None
     payload = json.dumps(
@@ -53,11 +67,42 @@ def authenticate(user: str, password: str, *, timeout: float = 60, retries: int 
             with _urlopen(req, timeout=timeout) as r:
                 body = json.loads(r.read())
             if not body.get("success"):
-                # Wrong password / locked - do not retry as network
-                raise RuntimeError(f"Auth failed (sai user/pass hoac bi khoa): {body}")
+                detail = _auth_fail_detail(body)
+                raise RuntimeError(
+                    f"Auth failed (sai user/pass hoac bi khoa) user={user}: {detail}"
+                )
             return body["result"]["accessToken"]
         except RuntimeError:
             raise
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode("utf-8", errors="replace")
+            body = None
+            try:
+                body = json.loads(raw)
+            except Exception:
+                pass
+            detail = _auth_fail_detail(body, raw).lower()
+            # Wrong password often comes as HTTP 500 + "Invalid user name or password"
+            if (
+                e.code in (400, 401, 403, 500)
+                and body is not None
+                and (
+                    body.get("success") is False
+                    or "invalid user" in detail
+                    or "password" in detail
+                    or "login failed" in detail
+                )
+            ):
+                raise RuntimeError(
+                    f"Auth failed (sai user/pass) user={user} http={e.code}: "
+                    f"{_auth_fail_detail(body, raw)}"
+                ) from e
+            last_err = e
+            msg = f"http {e.code} {detail}"
+            transient = e.code >= 500 or e.code == 429
+            if not transient or attempt >= retries - 1:
+                break
+            time.sleep(1.5 * (attempt + 1))
         except Exception as e:
             last_err = e
             msg = str(e).lower()
@@ -83,6 +128,36 @@ def authenticate(user: str, password: str, *, timeout: float = 60, retries: int 
         f"Auth TIMEOUT toi {BE} (user={user}). "
         f"Pass co the DUNG - mang/proxy/DNS toi Medinet bi treo. last={last_err}"
     )
+
+
+def login_accounts(
+    accounts: list[dict],
+    *,
+    require_first: bool = True,
+) -> tuple[list[dict], dict[str, str]]:
+    """Authenticate accounts; drop secondary failures (TK2 stale pass).
+
+    Returns (working_accounts, tokens). If require_first and TK1 fails, raises.
+    """
+    working: list[dict] = []
+    tokens: dict[str, str] = {}
+    for i, acct in enumerate(accounts):
+        try:
+            tok = authenticate(acct["user"], acct["password"])
+            working.append(acct)
+            tokens[acct["id"]] = tok
+            print(f"AUTH_OK {acct['user']} token_len={len(tok or '')}", flush=True)
+        except Exception as e:
+            if i == 0 and require_first:
+                raise
+            print(f"AUTH_WARN skip {acct['user']}: {e}", flush=True)
+            print(
+                "AUTH_WARN: tiep tuc voi TK da login OK (can pass TK2 moi neu can dien TK2).",
+                flush=True,
+            )
+    if not working:
+        raise RuntimeError("Khong login duoc TK Medinet nao")
+    return working, tokens
 
 
 def to_fparams(obj: dict) -> list:

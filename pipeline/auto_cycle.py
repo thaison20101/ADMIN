@@ -941,15 +941,22 @@ def _run_auto_cycle_inner(
     if full_scan or repair:
         max_incomplete = max(max_incomplete, 20000)
 
+    from medinet_api import login_accounts
     from medinet_creds import get_medinet_accounts
 
-    accounts = get_medinet_accounts(cfg)
-    safe_print(
-        f"Medinet accounts: {accounts[0]['id']} + {accounts[1]['id']} (merged TTHC index)"
-    )
-    tokens: dict[str, str] = {}
-    for acct in accounts:
-        tokens[acct["id"]] = authenticate(acct["user"], acct["password"])
+    accounts_all = get_medinet_accounts(cfg)
+    # TK2 pass co the stale (HTTP 500 Invalid password) — van dien INBOX bang TK1
+    accounts, tokens = login_accounts(accounts_all, require_first=True)
+    if len(accounts) < len(accounts_all):
+        safe_print(
+            f"Medinet accounts: {accounts[0]['id']} ONLY "
+            f"(skip {[a['id'] for a in accounts_all if a['id'] not in tokens]}) "
+            f"- TTHC index 1 TK; TK2 can pass moi"
+        )
+    else:
+        safe_print(
+            f"Medinet accounts: {accounts[0]['id']} + {accounts[1]['id']} (merged TTHC index)"
+        )
 
     def reauth_acct(aid: str) -> str:
         for acct in accounts:
@@ -1001,8 +1008,8 @@ def _run_auto_cycle_inner(
         cache_dir=cache_dir,
         max_age_hours=index_max_age,
     )
-    for acct in accounts:
-        tokens[acct["id"]] = authenticate(acct["user"], acct["password"])
+    # Refresh tokens after long index build (TK1 required; TK2 optional)
+    accounts, tokens = login_accounts(accounts_all, require_first=True)
 
     stats = Counter()
     results = []
