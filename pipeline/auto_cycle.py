@@ -1617,6 +1617,35 @@ def _run_auto_cycle_inner(
     except Exception as e:
         safe_print(f"WARN: moves log write failed: {e}")
 
+    # Bao cao gio tieng Viet co dau -> G:\Drive cua toi\BAO_CAO_GIO
+    try:
+        from bao_cao_gio import write_hourly_report
+
+        report_paths = write_hourly_report(
+            mode=mode,
+            bot_role=role,
+            summary={
+                **dict(stats),
+                "new_files": added,
+                "new_files_missing": added_missing,
+                "results": len(results),
+                "mode": mode,
+            },
+            moves=list(moves),
+            results=list(results),
+            counts0=counts0,
+            counts1=counts_from_rows(rows),
+            scan_dirs=[str(p) for p in scan_dirs],
+            missing_budget=int(missing_budget),
+            accounts=[a["id"] for a in accounts],
+        )
+        if report_paths:
+            safe_print(f"BAO CAO GIO (G): {report_paths[0]}")
+        else:
+            safe_print("WARN: bao cao gio khong ghi duoc file")
+    except Exception as e:
+        safe_print(f"WARN: bao cao gio: {e}")
+
     # snapshot ledger
     snap = build / "cases_snapshot" / f"cases-{stamp}.csv"
     try:

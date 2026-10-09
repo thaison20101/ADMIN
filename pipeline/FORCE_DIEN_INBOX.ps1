@@ -100,6 +100,7 @@ Log "==== INBOX SAU ===="
 $code = [Math]::Max([int]$code1, [int]$code2)
 Write-Host "############################################################"
 Write-Host (" FORCE xong exit=" + $code + " HEAD=" + $sha)
+Write-Host " Bao cao gio (tieng Viet): G:\\Drive cua toi\\BAO_CAO_GIO\\MOI_NHAT.txt"
 Write-Host " Neu INBOX van khong giam: copy toan bo log mau do/AUTH o tren gui lai."
 Write-Host "############################################################"
 exit $code
