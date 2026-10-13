@@ -955,17 +955,13 @@ def _run_auto_cycle_inner(
     from medinet_creds import get_medinet_accounts
 
     accounts_all = get_medinet_accounts(cfg)
-    # TK2 pass co the stale (HTTP 500 Invalid password) — van dien INBOX bang TK1
+    # Default: chi TK1 (MEDINET_ENABLE_TK2=1 moi gom TK2)
     accounts, tokens = login_accounts(accounts_all, require_first=True)
-    if len(accounts) < len(accounts_all):
-        safe_print(
-            f"Medinet accounts: {accounts[0]['id']} ONLY "
-            f"(skip {[a['id'] for a in accounts_all if a['id'] not in tokens]}) "
-            f"- TTHC index 1 TK; TK2 can pass moi"
-        )
+    if len(accounts) == 1:
+        safe_print(f"Medinet accounts: {accounts[0]['id']} ONLY (bo qua TK2)")
     else:
         safe_print(
-            f"Medinet accounts: {accounts[0]['id']} + {accounts[1]['id']} (merged TTHC index)"
+            f"Medinet accounts: {' + '.join(a['id'] for a in accounts)} (merged TTHC index)"
         )
 
     def reauth_acct(aid: str) -> str:

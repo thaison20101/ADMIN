@@ -474,16 +474,25 @@ if __name__ == "__main__":
 
     test_match_patient_merged_maphieu_list_no_crash()
 
-    def test_get_medinet_accounts_two_hardcoded():
+    def test_get_medinet_accounts_tk1_only_by_default():
+        import os
+
         from pipeline.medinet_creds import get_medinet_accounts
 
+        os.environ.pop("MEDINET_ENABLE_TK2", None)
         accts = get_medinet_accounts({})
-        assert len(accts) >= 2
-        ids = {a["id"] for a in accts[:2]}
-        assert "pkdkthuankieu" in ids
-        assert "pkdk_Thuankieu" in ids
+        assert len(accts) == 1
+        assert accts[0]["id"] == "pkdkthuankieu"
+        os.environ["MEDINET_ENABLE_TK2"] = "1"
+        try:
+            accts2 = get_medinet_accounts({})
+            assert len(accts2) == 2
+            ids = {a["id"] for a in accts2}
+            assert "pkdkthuankieu" in ids and "pkdk_Thuankieu" in ids
+        finally:
+            os.environ.pop("MEDINET_ENABLE_TK2", None)
 
-    test_get_medinet_accounts_two_hardcoded()
+    test_get_medinet_accounts_tk1_only_by_default()
 
     def test_search_patient_live_multi_callable():
         from pipeline.phase_b_preview import search_patient_live_multi

@@ -38,8 +38,11 @@ try {
 # 2 TK (cung hardcode trong pipeline/medinet_creds.py)
 if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdkthuankieu" }
 if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "Qlskcd@2026" }
-if (-not $env:MEDINET_USER_2) { $env:MEDINET_USER_2 = "pkdk_Thuankieu" }
-if (-not $env:MEDINET_PASS_2) { $env:MEDINET_PASS_2 = "pkdk_Thuankieu#2026" }
+# Bo qua TK2 (mac dinh). Bat lai: $env:MEDINET_ENABLE_TK2 = "1"
+if (-not $env:MEDINET_ENABLE_TK2) {
+  Remove-Item Env:MEDINET_USER_2 -ErrorAction SilentlyContinue
+  Remove-Item Env:MEDINET_PASS_2 -ErrorAction SilentlyContinue
+}
 
 if (-not (Test-Path ".\pipeline\config.local.json")) {
   Copy-Item ".\pipeline\config.example.json" ".\pipeline\config.local.json" -Force
@@ -93,7 +96,7 @@ function Write-HourlyHeartbeat {
     "log_inbox=$LogInbox"
     "log_missing=$LogMiss"
     "full=$DoFull"
-    "accounts=pkdkthuankieu+pkdk_Thuankieu"
+    "accounts=pkdkthuankieu(skip_tk2)"
     "missing_budget=$MissingBudget"
     "python=$Python"
     "pid=$PID"

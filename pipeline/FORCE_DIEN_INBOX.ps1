@@ -18,8 +18,10 @@ $Branch = "cursor/hourly-flash-fix-df0f"
 $env:MEDINET_SSL_VERIFY = "0"
 $env:MEDINET_USER = "pkdkthuankieu"
 $env:MEDINET_PASS = "Qlskcd@2026"
-$env:MEDINET_USER_2 = "pkdk_Thuankieu"
-$env:MEDINET_PASS_2 = "pkdk_Thuankieu#2026"
+# Bo qua TK2 (khong auth / khong index TK2). Bat lai: $env:MEDINET_ENABLE_TK2 = "1"
+Remove-Item Env:MEDINET_ENABLE_TK2 -ErrorAction SilentlyContinue
+Remove-Item Env:MEDINET_USER_2 -ErrorAction SilentlyContinue
+Remove-Item Env:MEDINET_PASS_2 -ErrorAction SilentlyContinue
 $env:PKDK_FORCE_INDEX = "1"
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUNBUFFERED = "1"
@@ -69,7 +71,7 @@ if ($auth -ne 0) {
 if ($auth -ne 0) { Log "DUNG: khong login duoc Medinet. Pass tip da dung Qlskcd@2026."; exit 2 }
 & $Python ".\pipeline\probe_both_accounts.py"
 if ($LASTEXITCODE -ne 0) { Log "AUTH FAIL TK1"; exit 2 }
-Log "AUTH TK1 OK (TK2 soft-fail neu sai pass - van dien INBOX bang TK1)"
+Log "AUTH TK1 OK (bo qua TK2)"
 & $Python ".\pipeline\assert_g_pipeline.py"
 if ($LASTEXITCODE -ne 0) { Log "G: FAIL"; exit 2 }
 

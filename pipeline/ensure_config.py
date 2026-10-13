@@ -55,16 +55,19 @@ def main() -> int:
     else:
         med["ssl_verify"] = False
         print("config: medinet.ssl_verify=false (may A self-signed OK)")
-    # Always pin both PKDK accounts into config.local (never keep old P@ssw0rd)
-    from medinet_creds import MEDINET_ACCOUNTS
+    # Pin active Medinet accounts (default TK1 only — skip TK2)
+    from medinet_creds import MEDINET_TK1, get_medinet_accounts, tk2_enabled
 
-    med["accounts"] = [a.copy() for a in MEDINET_ACCOUNTS]
-    med["username"] = MEDINET_ACCOUNTS[0]["user"]
-    med["password"] = MEDINET_ACCOUNTS[0]["password"]
+    active = get_medinet_accounts()
+    med["accounts"] = [a.copy() for a in active]
+    med["username"] = MEDINET_TK1["user"]
+    med["password"] = MEDINET_TK1["password"]
+    med["skip_tk2"] = not tk2_enabled()
+    ids = "+".join(a["id"] for a in active)
     print(
-        f"config: pinned accounts TK1={MEDINET_ACCOUNTS[0]['user']} "
-        f"pass={MEDINET_ACCOUNTS[0]['password'][:4]}*** "
-        f"TK2={MEDINET_ACCOUNTS[1]['user']}"
+        f"config: pinned accounts {ids} "
+        f"pass={MEDINET_TK1['password'][:4]}*** "
+        f"skip_tk2={med['skip_tk2']}"
     )
 
     rules = cfg.setdefault("import_rules", {})

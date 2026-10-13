@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Probe Medinet accounts. Exit 0 if TK1 OK (TK2 soft-fail with warn). Exit 2 if TK1 fails."""
+"""Probe Medinet accounts. Exit 0 if TK1 OK. TK2 skipped by default."""
 from __future__ import annotations
 
 import os
@@ -15,9 +15,11 @@ def main() -> int:
     reset_ssl_cache()
     install_medinet_https_opener()
     from medinet_api import login_accounts
-    from medinet_creds import get_medinet_accounts
+    from medinet_creds import get_medinet_accounts, tk2_enabled
 
     accounts = get_medinet_accounts()
+    if not tk2_enabled():
+        print("AUTH_MODE: TK1 only (bo qua TK2)")
     try:
         working, tokens = login_accounts(accounts, require_first=True)
     except Exception as e:
@@ -25,9 +27,6 @@ def main() -> int:
         return 2
     ids = "+".join(a["id"] for a in working)
     print(f"AUTH_READY accounts={ids} n={len(working)}")
-    if len(working) < len(accounts):
-        print("AUTH_READY: TK2 skip (sai pass / khoa) - dien INBOX bang TK1")
-    # tokens unused; just prove login
     _ = tokens
     return 0
 

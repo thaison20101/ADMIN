@@ -19,8 +19,10 @@ $Branch = "cursor/hourly-flash-fix-df0f"
 $env:MEDINET_SSL_VERIFY = "0"
 $env:MEDINET_USER = "pkdkthuankieu"
 $env:MEDINET_PASS = "Qlskcd@2026"
-$env:MEDINET_USER_2 = "pkdk_Thuankieu"
-$env:MEDINET_PASS_2 = "pkdk_Thuankieu#2026"
+# Bo qua TK2
+Remove-Item Env:MEDINET_ENABLE_TK2 -ErrorAction SilentlyContinue
+Remove-Item Env:MEDINET_USER_2 -ErrorAction SilentlyContinue
+Remove-Item Env:MEDINET_PASS_2 -ErrorAction SilentlyContinue
 $env:PKDK_FORCE_INDEX = "1"
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUNBUFFERED = "1"
@@ -98,6 +100,6 @@ $code = [Math]::Max([int]$code1, [int]$code2)
 Write-Host "############################################################"
 Write-Host (" DIEN CO TTHC xong exit=" + $code + " HEAD=" + $sha)
 Write-Host " Bao cao: G:\\Drive cua toi\\BAO_CAO_GIO\\MOI_NHAT.txt"
-Write-Host " Neu con nhieu chua dien: gui pass TK2 moi (pkdk_Thuankieu) - hien TK2 dang sai pass."
+Write-Host " Che do: CHI TK1 (bo qua TK2)."
 Write-Host "############################################################"
 exit $code

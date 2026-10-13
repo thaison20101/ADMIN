@@ -18,8 +18,10 @@ $env:PYTHONUNBUFFERED = "1"
 $env:MEDINET_SSL_VERIFY = "0"
 if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdkthuankieu" }
 if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "Qlskcd@2026" }
-if (-not $env:MEDINET_USER_2) { $env:MEDINET_USER_2 = "pkdk_Thuankieu" }
-if (-not $env:MEDINET_PASS_2) { $env:MEDINET_PASS_2 = "pkdk_Thuankieu#2026" }
+# Bo qua TK2
+Remove-Item Env:MEDINET_ENABLE_TK2 -ErrorAction SilentlyContinue
+Remove-Item Env:MEDINET_USER_2 -ErrorAction SilentlyContinue
+Remove-Item Env:MEDINET_PASS_2 -ErrorAction SilentlyContinue
 $env:PKDK_FORCE_INDEX = "1"
 
 function Get-Counts {
