@@ -15,8 +15,12 @@ Set-Location $Repo
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUTF8 = "1"
 $env:PYTHONUNBUFFERED = "1"
-if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdk_Thuankieu" }
-if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "pkdk_Thuankieu#2026" }
+$env:MEDINET_SSL_VERIFY = "0"
+if (-not $env:MEDINET_USER) { $env:MEDINET_USER = "pkdkthuankieu" }
+if (-not $env:MEDINET_PASS) { $env:MEDINET_PASS = "Qlskcd@2026" }
+if (-not $env:MEDINET_USER_2) { $env:MEDINET_USER_2 = "pkdk_Thuankieu" }
+if (-not $env:MEDINET_PASS_2) { $env:MEDINET_PASS_2 = "pkdk_Thuankieu#2026" }
+$env:PKDK_FORCE_INDEX = "1"
 
 function Get-Counts {
   $lines = @(& python ".\pipeline\print_counts.py" 2>$null)
@@ -84,8 +88,8 @@ for ($round = 1; $round -le 8; $round++) {
   }
   $before = Get-Counts
   Write-Host ("COUNTS before: {0}" -f $before.raw)
-  Write-Host "Chay hourly_sync --missing-budget 2500 (CSV rematch, log live) ..."
-  $code = Invoke-PythonLive @(".\pipeline\hourly_sync.py", "--missing-budget", "2500")
+  Write-Host "Chay hourly_sync --bot missing --force --missing-budget 2500 (index moi) ..."
+  $code = Invoke-PythonLive @(".\pipeline\hourly_sync.py", "--bot", "missing", "--force", "--missing-budget", "2500")
   $text = ($script:LastPyLines -join "`n")
   if ($text -match "ABORT:") {
     Write-Host "DUNG: ABORT (khong fallback ADMIN). Mo G: Drive roi chay lai."

@@ -20,6 +20,7 @@ $env:MEDINET_USER = "pkdkthuankieu"
 $env:MEDINET_PASS = "Qlskcd@2026"
 $env:MEDINET_USER_2 = "pkdk_Thuankieu"
 $env:MEDINET_PASS_2 = "pkdk_Thuankieu#2026"
+$env:PKDK_FORCE_INDEX = "1"
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUNBUFFERED = "1"
 $env:PYTHONUTF8 = "1"
@@ -81,11 +82,15 @@ $t0 = Get-Date
 $code1 = $LASTEXITCODE
 Log ("inbox bot exit=" + $code1 + " sec=" + [int]((Get-Date) - $t0).TotalSeconds)
 
-Log "==== Rematch MISSING CSV (budget 2500) ===="
-$t1 = Get-Date
-& $Python -u ".\pipeline\hourly_sync.py" --bot missing --force --missing-budget 2500
-$code2 = $LASTEXITCODE
-Log ("missing bot exit=" + $code2 + " sec=" + [int]((Get-Date) - $t1).TotalSeconds)
+$code2 = 0
+for ($round = 1; $round -le 4; $round++) {
+  Log ("==== Rematch MISSING CSV vong $round/4 --force budget 2500 (TTHC moi) ====")
+  $t1 = Get-Date
+  & $Python -u ".\pipeline\hourly_sync.py" --bot missing --force --missing-budget 2500
+  $code2 = $LASTEXITCODE
+  Log ("missing vong $round exit=$code2 sec=" + [int]((Get-Date) - $t1).TotalSeconds)
+  if ($code2 -ne 0) { break }
+}
 
 Log "==== Bat hourly task (an) de chay tiep moi gio ===="
 & powershell -NoProfile -ExecutionPolicy Bypass -File ".\pipeline\install_hourly_task.ps1"

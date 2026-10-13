@@ -775,14 +775,24 @@ def _run_auto_cycle_inner(
                 r.get("file_name") or r.get("source_file") or "",
             )
         )
+        # Con nam trong MISSING = chua luu xong. --force: rematch MOI status
+        # (ke ca IMPORTED/SKIP sai) vi TTHC co the da co tren web.
+        allow_stale = {
+            "WAITING_ADMIN",
+            "READY_IMPORT",
+            "NEW_LAB",
+            "PARSE_ERROR",
+            "ERROR",
+            "ERROR_IMPORT",
+        }
         for r in miss_rows:
             if rematch_missing_left <= 0:
                 break
             old = (r.get("status") or "").upper()
-            if old not in {"WAITING_ADMIN", "READY_IMPORT", "NEW_LAB", "PARSE_ERROR"}:
+            if (not force) and old not in allow_stale:
                 continue
             fname = Path(r.get("source_file") or "").name or r.get("file_name") or ""
-            _, year = resolve_name_year(
+            resolve_name_year(
                 {
                     "ho_ten": r.get("ho_ten") or "",
                     "nam_sinh": r.get("nam_sinh") or "",
@@ -790,15 +800,15 @@ def _run_auto_cycle_inner(
                     "source_file": r.get("source_file") or "",
                 }
             )
-            # Under-18 in MISSING still rematch (M2 form) — do not skip
+            # Under-18 in MISSING still rematch (M2 form) - do not skip
             r["status"] = "READY_IMPORT"
             r["import_attempts"] = "0"
-            r["notes"] = f"csv_missing_rematch:{old}"[:200]
+            r["notes"] = f"csv_missing_rematch:{old or 'EMPTY'}"[:200]
             rematch_missing_left -= 1
             csv_missing_queued += 1
         safe_print(
             f"MISSING rematch from CSV (no G: walk): queued={csv_missing_queued} "
-            f"tracked={csv_missing_total} budget={missing_budget}"
+            f"tracked={csv_missing_total} budget={missing_budget} force={int(force)}"
         )
 
     # Rematch TK1/TK2 from CSV when opposite account later gets TTHC
@@ -993,12 +1003,20 @@ def _run_auto_cycle_inner(
     # Fresh index when rematching MISSING — TTHC often entered after last cache
     # Rematch: reuse index up to 3h (rounds 2-8). Force rebuild only on full-scan
     # or first rematch after cache miss. Old force-every-round wasted 10+ min/vong.
-    if full_scan:
+    # Fresh index when: full-scan, --force (TTHC moi nhap), or PKDK_FORCE_INDEX=1
+    force_index = force or (os.environ.get("PKDK_FORCE_INDEX") or "").strip() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if full_scan or force_index:
         index_max_age = 0.0
-        safe_print("Index: FORCE REFRESH (full-scan)")
+        why = "full-scan" if full_scan else "--force/PKDK_FORCE_INDEX"
+        safe_print(f"Index: FORCE REFRESH ({why}) — bat TTHC moi nhap")
     elif missing_budget > 0:
         index_max_age = 3.0
-        safe_print("Index: rematch — reuse cache <=3h (M2/M3/M4/M11)")
+        safe_print("Index: rematch - reuse cache <=3h (M2/M3/M4/M11)")
     else:
         index_max_age = 2.0
     index = load_or_fetch_merged_unit_index(
