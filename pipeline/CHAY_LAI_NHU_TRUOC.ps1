@@ -1,9 +1,9 @@
-# CHAY_LAI_NHU_TRUOC -> FORCE_DIEN_INBOX (pin pass + dien truc tiep)
+# CHAY_LAI_NHU_TRUOC -> QUET_GAP_VA_BAT_HOURLY
 # ASCII-only.
 $ErrorActionPreference = "Continue"
-$Main = Join-Path $PSScriptRoot "FORCE_DIEN_INBOX.ps1"
+$Main = Join-Path $PSScriptRoot "QUET_GAP_VA_BAT_HOURLY.ps1"
 if (-not (Test-Path -LiteralPath $Main)) {
-  Write-Host "Thieu FORCE_DIEN_INBOX.ps1 - git reset --hard origin/cursor/hourly-flash-fix-df0f"
+  Write-Host "Thieu QUET_GAP_VA_BAT_HOURLY.ps1 - git reset --hard origin/cursor/hourly-flash-fix-df0f"
   exit 3
 }
 & powershell -NoProfile -ExecutionPolicy Bypass -File $Main

@@ -78,10 +78,10 @@ $code1 = $LASTEXITCODE
 Log ("inbox exit=" + $code1 + " sec=" + [int]((Get-Date) - $t0).TotalSeconds)
 
 $code2 = 0
-for ($round = 1; $round -le 6; $round++) {
-  Log ("==== 2) MISSING rematch vong $round/6 --force budget 2500 ====")
+for ($round = 1; $round -le 8; $round++) {
+  Log ("==== 2) MISSING rematch vong $round/8 --force budget 3000 ====")
   $t1 = Get-Date
-  & $Python -u ".\pipeline\hourly_sync.py" --bot missing --force --missing-budget 2500
+  & $Python -u ".\pipeline\hourly_sync.py" --bot missing --force --missing-budget 3000
   $code2 = $LASTEXITCODE
   Log ("missing vong $round exit=$code2 sec=" + [int]((Get-Date) - $t1).TotalSeconds)
   & $Python ".\pipeline\print_counts.py" | ForEach-Object { Log $_ }
@@ -91,6 +91,10 @@ for ($round = 1; $round -le 6; $round++) {
 Log "==== Bat hourly tiep ===="
 & powershell -NoProfile -ExecutionPolicy Bypass -File ".\pipeline\install_hourly_task.ps1"
 try { Enable-ScheduledTask -TaskName "PKDK_Hourly_Sync" -ErrorAction SilentlyContinue | Out-Null } catch {}
+try {
+  $t = Get-ScheduledTask -TaskName "PKDK_Hourly_Sync" -ErrorAction SilentlyContinue
+  if ($t) { Log ("Task State=" + $t.State) }
+} catch {}
 
 Log "==== COUNTS SAU ===="
 & $Python ".\pipeline\print_disk_counts.py" | ForEach-Object { Log $_ }
