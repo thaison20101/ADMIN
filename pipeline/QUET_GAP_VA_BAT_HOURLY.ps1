@@ -7,7 +7,7 @@
 #
 #   cd C:\Users\thais\ADMIN
 #   git fetch origin
-#   git reset --hard origin/cursor/hourly-flash-fix-df0f
+#   git reset --hard origin/cursor/formviewer-cls-bypass-df0f
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\QUET_GAP_VA_BAT_HOURLY.ps1
 # ============================================================
 
@@ -16,7 +16,8 @@ $Repo = Split-Path -Parent $PSScriptRoot
 if (-not $Repo) { $Repo = "C:\Users\thais\ADMIN" }
 Set-Location $Repo
 
-$Branch = "cursor/hourly-flash-fix-df0f"
+# FormViewer light CLS when DRViewer 403 (do NOT tip ve hourly-flash-fix cu)
+$Branch = "cursor/formviewer-cls-bypass-df0f"
 $env:MEDINET_SSL_VERIFY = "0"
 $env:MEDINET_USER = "pkdkthuankieu"
 $env:MEDINET_PASS = "Qlskcd@2026"

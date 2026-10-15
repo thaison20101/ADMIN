@@ -5,7 +5,7 @@
 #
 #   cd C:\Users\thais\ADMIN
 #   git fetch origin
-#   git reset --hard origin/cursor/hourly-flash-fix-df0f
+#   git reset --hard origin/cursor/formviewer-cls-bypass-df0f
 #   powershell -ExecutionPolicy Bypass -File .\pipeline\FORCE_DIEN_INBOX.ps1
 # ============================================================
 
@@ -14,7 +14,7 @@ $Repo = Split-Path -Parent $PSScriptRoot
 if (-not $Repo) { $Repo = "C:\Users\thais\ADMIN" }
 Set-Location $Repo
 
-$Branch = "cursor/hourly-flash-fix-df0f"
+$Branch = "cursor/formviewer-cls-bypass-df0f"
 $env:MEDINET_SSL_VERIFY = "0"
 $env:MEDINET_USER = "pkdkthuankieu"
 $env:MEDINET_PASS = "Qlskcd@2026"
@@ -63,7 +63,7 @@ Log "NOTE: pass tip = Qlskcd@2026. Auth dung User-Agent Chrome (WAF block Python
 & $Python ".\pipeline\medinet_ssl.py"
 $auth = $LASTEXITCODE
 if ($auth -ne 0) {
-  Log "AUTH TIMEOUT/FAIL - tip phai co browser UA. Neu HEAD cu: git reset --hard origin/cursor/hourly-flash-fix-df0f"
+  Log "AUTH TIMEOUT/FAIL - tip phai co browser UA. Neu HEAD cu: git reset --hard origin/cursor/formviewer-cls-bypass-df0f"
   Start-Sleep -Seconds 3
   & $Python ".\pipeline\medinet_ssl.py"
   $auth = $LASTEXITCODE
