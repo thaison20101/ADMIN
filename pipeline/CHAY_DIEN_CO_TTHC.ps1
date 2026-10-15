@@ -64,7 +64,7 @@ Log "==== Pin creds + auth ===="
 if ($LASTEXITCODE -ne 0) { Log "DUNG: AUTH TK1 FAIL"; exit 2 }
 & $Python ".\pipeline\probe_both_accounts.py"
 if ($LASTEXITCODE -ne 0) {
-  Log "DUNG: AUTH/DRViewer FAIL - khong lay duoc TTHC. Can pass TK2 hoac cap quyen Medinet."
+  Log "DUNG: TK1 DRViewer 403 - khong lay TTHC. Bo qua TK2. Chay KIEM_QUYEN_TK1.ps1"
   exit 2
 }
 & $Python ".\pipeline\assert_g_pipeline.py"

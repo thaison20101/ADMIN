@@ -64,9 +64,10 @@ Log "==== Pin creds + auth TK1 ===="
 if ($LASTEXITCODE -ne 0) { Log "DUNG: AUTH TK1 FAIL"; exit 2 }
 & $Python ".\pipeline\probe_both_accounts.py"
 if ($LASTEXITCODE -ne 0) {
-  Log "DUNG: AUTH/DRViewer FAIL - TK1 login OK nhung KHONG co quyen lay TTHC/CLS."
-  Log "Can pass TK2 dung (MEDINET_ENABLE_TK2=1) HOAC Medinet cap lai quyen DRViewer cho pkdkthuankieu."
-  Log "Neu chay tiep se mat nhieu gio ma imported=0 (nhu 8 vong truoc)."
+  Log "DUNG: TK1 login OK nhung DRViewer 403 - khong lay duoc TTHC/CLS."
+  Log "Bo qua TK2. Web mo duoc trang van co the bi 403 API (kiem F12 Network)."
+  Log "Bao Medinet/IT cap quyen DRViewer cho pkdkthuankieu. Chay: KIEM_QUYEN_TK1.ps1"
+  Log "Neu chay tiep se mat nhieu gio ma imported=0."
   exit 2
 }
 & $Python ".\pipeline\assert_g_pipeline.py"

@@ -203,9 +203,10 @@ def assert_drviewer_or_raise(tokens: dict[str, str]) -> None:
             return
         last = detail
     raise RuntimeError(
-        "DRViewer Access denied — TK dang login KHONG co quyen lay TTHC/CLS. "
-        "Can: (1) pass TK2 dung + MEDINET_ENABLE_TK2=1, hoac (2) Medinet cap lai quyen "
-        f"DRViewer cho pkdkthuankieu. last={last}"
+        "DRViewer Access denied - TK1 login OK nhung KHONG co quyen lay TTHC/CLS "
+        "(API ExecuteStoreWithParam_ByDatasource = 403). "
+        "Bo qua TK2. Can Medinet/IT cap lai quyen DRViewer cho pkdkthuankieu. "
+        f"last={last}"
     )
 
 

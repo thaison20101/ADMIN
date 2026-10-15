@@ -32,11 +32,21 @@ def main() -> int:
     except Exception as e:
         print(f"AUTH_FAIL DRViewer: {e}")
         print(
-            "DUNG: khong the quet TTHC/dien CLS. "
-            "Gui pass TK2 moi HOAC bao Medinet cap quyen DRViewer cho pkdkthuankieu."
+            "DUNG: TK1 login OK nhung API DRViewer bi 403 Access denied."
+        )
+        print(
+            "Web mo duoc trang KHONG du: can quyen DynamicReport "
+            "(ExecuteStoreWithParam_ByDatasource) de lay TTHC + dien CLS."
+        )
+        print(
+            "Bo qua TK2. Bao Medinet/IT cap lai quyen DRViewer cho pkdkthuankieu."
+        )
+        print(
+            "Chrome F12 > Network > mo danh sach BN > "
+            "ExecuteStoreWithParam_ByDatasource = 403 thi trung bot."
         )
         return 2
-    print("AUTH_READY DRViewer OK — co the index TTHC + dien CLS")
+    print("AUTH_READY DRViewer OK - co the index TTHC + dien CLS")
     return 0
 
 
