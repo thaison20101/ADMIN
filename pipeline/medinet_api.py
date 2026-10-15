@@ -160,74 +160,150 @@ def login_accounts(
     return working, tokens
 
 
+def _api_error_message(body) -> str:
+    if not isinstance(body, dict):
+        return ""
+    res = body.get("result")
+    if isinstance(res, dict):
+        msg = str(res.get("message") or "")
+        if msg:
+            return msg
+    err = body.get("error")
+    if isinstance(err, dict):
+        return str(err.get("message") or err.get("details") or "")
+    if err:
+        return str(err)
+    return ""
+
+
+def _is_access_denied(status: int | None, body=None, msg: str = "") -> bool:
+    if status == 403:
+        return True
+    text = (msg or _api_error_message(body) or "").lower()
+    return "access denied" in text or "không có quyền" in text or "khong co quyen" in text
+
+
 def probe_drviewer_access(token: str) -> tuple[bool, str]:
     """Return (ok, detail). TK1 may auth but lack DRViewer ExecuteStore (403).
 
-    Without this permission index=0 and CLS get/set fail — rematch MISSING is useless.
+    Without this permission index/live rematch fail. CLS can still use FormViewer.
     """
-    # Minimal call used by index + CLS
     path = (
         f"/api/services/app/DRViewer/ExecuteStoreWithParam_ByDatasource"
         f"?dataSourceId={CLS_DATASOURCE_ID}&store={CLS_STORE_GET}"
     )
     status, body, _tok = api(token, path, "POST", to_fparams({"phieukhamId": 1}))
-    msg = ""
-    if isinstance(body, dict):
-        res = body.get("result")
-        if isinstance(res, dict):
-            msg = str(res.get("message") or "")
-        if not msg:
-            err = body.get("error")
-            if isinstance(err, dict):
-                msg = str(err.get("message") or err.get("details") or "")
-            elif err:
-                msg = str(err)
-    low = (msg or "").lower()
-    if status == 403 or "access denied" in low:
+    msg = _api_error_message(body)
+    if _is_access_denied(status, body, msg):
         return False, f"http={status} {msg or 'Access denied DRViewer'}"
     # 200 with empty CLS for pid=1 is fine — permission exists
-    if status in (200, 404) or body.get("success") is True:
+    if status in (200, 404) or (isinstance(body, dict) and body.get("success") is True):
         return True, f"http={status} ok"
-    if "access denied" in low:
-        return False, f"http={status} {msg}"
     return True, f"http={status} {msg or 'ok'}"
 
 
-def assert_drviewer_or_raise(tokens: dict[str, str]) -> None:
-    """Abort early if no account can call DRViewer (avoids hours of 0-match rematch)."""
-    last = ""
-    for aid, tok in tokens.items():
-        ok, detail = probe_drviewer_access(tok)
-        print(f"probe: DRViewer {aid}: {'OK' if ok else 'DENIED'} {detail}", flush=True)
-        if ok:
-            return
-        last = detail
-    raise RuntimeError(
-        "DRViewer Access denied - TK1 login OK nhung KHONG co quyen lay TTHC/CLS "
-        "(API ExecuteStoreWithParam_ByDatasource = 403). "
-        "Bo qua TK2. Can Medinet/IT cap lai quyen DRViewer cho pkdkthuankieu. "
-        f"last={last}"
+def probe_formviewer_cls(token: str) -> tuple[bool, str]:
+    """Return (ok, detail). FormViewerData is the light CLS read/write path."""
+    path = (
+        f"/api/services/app/FormViewer/FormViewerData?form_id={CLS_FORM_ID}"
+        f"&SessionSiteId={SITE_ID}&UrlPage="
     )
+    status, body, _tok = api(
+        token,
+        path,
+        "POST",
+        to_fparams({"phieukhamId": 1}),
+        extra_headers={"displaymode": "0"},
+    )
+    msg = _api_error_message(body)
+    if _is_access_denied(status, body, msg):
+        return False, f"http={status} {msg or 'Access denied FormViewer'}"
+    if status == 200 or (isinstance(body, dict) and body.get("success") is True):
+        return True, f"http={status} ok"
+    if status in (404,):
+        # Form exists but empty pid — still reachable
+        return True, f"http={status} reachable"
+    return False, f"http={status} {msg or 'FormViewer fail'}"
+
+
+def probe_fill_capabilities(tokens: dict[str, str]) -> dict:
+    """Probe DRViewer + FormViewer per account. Soft gate for fill vs index."""
+    caps = {
+        "drviewer_ok": False,
+        "formviewer_ok": False,
+        "drviewer_detail": "",
+        "formviewer_detail": "",
+        "accounts": {},
+    }
+    for aid, tok in tokens.items():
+        d_ok, d_det = probe_drviewer_access(tok)
+        f_ok, f_det = probe_formviewer_cls(tok)
+        print(
+            f"probe: {aid} DRViewer={'OK' if d_ok else 'DENIED'} {d_det} | "
+            f"FormViewer={'OK' if f_ok else 'DENIED'} {f_det}",
+            flush=True,
+        )
+        caps["accounts"][aid] = {
+            "drviewer_ok": d_ok,
+            "formviewer_ok": f_ok,
+            "drviewer_detail": d_det,
+            "formviewer_detail": f_det,
+        }
+        if d_ok:
+            caps["drviewer_ok"] = True
+            caps["drviewer_detail"] = d_det
+        else:
+            caps["drviewer_detail"] = caps["drviewer_detail"] or d_det
+        if f_ok:
+            caps["formviewer_ok"] = True
+            caps["formviewer_detail"] = f_det
+        else:
+            caps["formviewer_detail"] = caps["formviewer_detail"] or f_det
+    return caps
+
+
+def assert_can_fill_or_raise(tokens: dict[str, str]) -> dict:
+    """Allow fill if DRViewer OR FormViewer CLS works. Raise only if both denied."""
+    caps = probe_fill_capabilities(tokens)
+    if caps["drviewer_ok"] or caps["formviewer_ok"]:
+        if not caps["drviewer_ok"] and caps["formviewer_ok"]:
+            print(
+                "WARN: DRViewer 403 — index/live rematch TTHC bi khoa. "
+                "Dien CLS nhe qua FormViewer khi da co phieukhamId.",
+                flush=True,
+            )
+        return caps
+    raise RuntimeError(
+        "Khong dien duoc CLS: DRViewer va FormViewer deu bi chan. "
+        f"DRViewer={caps['drviewer_detail']}; FormViewer={caps['formviewer_detail']}. "
+        "Bo qua TK2. Can Medinet/IT cap quyen DynamicReport hoac FormViewer cho pkdkthuankieu."
+    )
+
+
+def assert_drviewer_or_raise(tokens: dict[str, str]) -> None:
+    """Compat wrapper: prefer soft FormViewer gate; keep name for old callers."""
+    assert_can_fill_or_raise(tokens)
 
 
 def to_fparams(obj: dict) -> list:
     return [{"Varible": k, "Value": "" if v is None else str(v)} for k, v in obj.items()]
 
 
-def api(token: str, path: str, method: str = "GET", body=None, reauth=None):
+def api(token: str, path: str, method: str = "GET", body=None, reauth=None, extra_headers=None):
     """Call Medinet API. Optional reauth() refreshes token on 401."""
     url = f"{BE}{path}" if path.startswith("/") else path
     data = None if body is None else json.dumps(body, ensure_ascii=False).encode()
     last = None
     for attempt in range(5):
-        headers = medinet_http_headers(
-            {
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "SessionSiteId": SITE_ID,
-            }
-        )
+        hdr = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "SessionSiteId": SITE_ID,
+        }
+        if extra_headers:
+            hdr.update(extra_headers)
+        headers = medinet_http_headers(hdr)
         try:
             req = urllib.request.Request(url, data=data, headers=headers, method=method)
             with _urlopen(req, timeout=180) as r:
@@ -558,6 +634,7 @@ def web_cls_looks_incomplete(existing: dict | None, payload: dict | None = None)
     return bool(miss)
 
 def get_cls(token: str, phieukham_id: int | str, reauth=None) -> tuple[dict | None, str]:
+    """DRViewer Get. On 403/access denied return None (caller uses FormViewer)."""
     s, d, token = api(
         token,
         f"/api/services/app/DRViewer/ExecuteStoreWithParam_ByDatasource"
@@ -566,12 +643,14 @@ def get_cls(token: str, phieukham_id: int | str, reauth=None) -> tuple[dict | No
         to_fparams({"phieukhamId": phieukham_id}),
         reauth=reauth,
     )
+    if _is_access_denied(s, d):
+        return None, token
     rows = ((d or {}).get("result") or {}).get("data") or []
     return (rows[0] if rows else None), token
 
 
 def get_formviewer_cls(token: str, phieukham_id: int | str, reauth=None) -> tuple[dict | None, str]:
-    """Web form path — use together with Get for urine field presence."""
+    """Web form path — light CLS read (works when DRViewer Get is 403)."""
     s, d, token = api(
         token,
         f"/api/services/app/FormViewer/FormViewerData?form_id={CLS_FORM_ID}"
@@ -579,7 +658,10 @@ def get_formviewer_cls(token: str, phieukham_id: int | str, reauth=None) -> tupl
         "POST",
         to_fparams({"phieukhamId": phieukham_id}),
         reauth=reauth,
+        extra_headers={"displaymode": "0"},
     )
+    if _is_access_denied(s, d):
+        return None, token
     fd = (((d or {}).get("result") or {}).get("data") or {}).get("formData") or []
     return (fd[0] if fd else None), token
 
@@ -602,11 +684,15 @@ def merge_cls_rows(*rows: dict | None) -> dict:
 
 
 def load_cls_view(token: str, phieukham_id: int | str, reauth=None) -> tuple[dict | None, str]:
-    """Merged Get + FormViewer row (best view of what the UI has)."""
+    """Merged Get + FormViewer row. FormViewer alone OK when DRViewer Get is 403."""
     row_g, token = get_cls(token, phieukham_id, reauth=reauth)
     row_f, token = get_formviewer_cls(token, phieukham_id, reauth=reauth)
     if not row_g and not row_f:
         return None, token
+    if not row_g:
+        return row_f, token
+    if not row_f:
+        return row_g, token
     return merge_cls_rows(row_g, row_f), token
 
 
@@ -681,6 +767,9 @@ def _set_cls(token: str, payload: dict, reauth=None):
         to_fparams(payload),
         reauth=reauth,
     )
+    if _is_access_denied(s, d):
+        msg = _api_error_message(d) or f"http={s} Access denied"
+        return False, msg, {"_access_denied": True, "http": s, "body": d}, token
     res = (d or {}).get("result") or {}
     ok = bool(res.get("isSucceeded"))
     msg = str(res.get("message") or "")
@@ -691,6 +780,93 @@ def _set_cls(token: str, payload: dict, reauth=None):
             ok = False
             msg = str(err)
     return ok, msg or f"http={s}", res, token
+
+
+def _cls_formviewer_urlpage(phieukham_id: int | str) -> str:
+    return (
+        "/app/main/dynamicform/viewer/KSKDK_Phieu_CanLamSang"
+        f"?phieukhamId={phieukham_id}"
+    )
+
+
+def _formviewer_write_result(status: int, body: dict | None) -> tuple[bool, str, dict]:
+    """Parse FormViewer Insert/Update response; soft-ok VersionType-3-Non-Insert-Id."""
+    res = (body or {}).get("result") or {}
+    if not isinstance(res, dict):
+        res = {}
+    ok = bool(res.get("isSucceeded"))
+    code = str(res.get("code") or "")
+    msg = str(res.get("message") or "")
+    if _is_access_denied(status, body, msg):
+        return False, msg or f"http={status} Access denied", {"http": status, "body": body}
+    if (not ok) and code == "VersionType-3-Non-Insert-Id":
+        ok = True
+        msg = f"soft-ok:{code}:{msg}"
+    if ok:
+        return True, msg or f"http={status} ok", res
+    return False, msg or f"http={status}", res if res else {"http": status, "body": body}
+
+
+def _formviewer_insert_cls(token: str, payload: dict, reauth=None):
+    """Light CLS write via FormViewer (same pattern as TTHC FormToDatabaseInsert)."""
+    pid = payload.get("phieukhamId")
+    q = urllib.parse.urlencode(
+        {
+            "form_id": CLS_FORM_ID,
+            "UrlPage": _cls_formviewer_urlpage(pid),
+            "ispopup": "true",
+            "istab": "true",
+        }
+    )
+    s, d, token = api(
+        token,
+        f"/api/services/app/FormViewer/FormToDatabaseInsert?{q}",
+        "POST",
+        payload,
+        reauth=reauth,
+        extra_headers={"displaymode": "0"},
+    )
+    ok, msg, res = _formviewer_write_result(s, d)
+    return ok, msg, res, token
+
+
+def _formviewer_update_cls(token: str, payload: dict, reauth=None):
+    """Light CLS update when Insert fails for an existing form row."""
+    pid = payload.get("phieukhamId")
+    q = urllib.parse.urlencode(
+        {
+            "form_id": CLS_FORM_ID,
+            "UrlPage": _cls_formviewer_urlpage(pid),
+            "ispopup": "true",
+            "istab": "true",
+        }
+    )
+    s, d, token = api(
+        token,
+        f"/api/services/app/FormViewer/FormToDataBaseUpdate?{q}",
+        "POST",
+        payload,
+        reauth=reauth,
+        extra_headers={"displaymode": "0"},
+    )
+    ok, msg, res = _formviewer_write_result(s, d)
+    return ok, msg, res, token
+
+
+def _formviewer_save_cls(token: str, payload: dict, reauth=None):
+    """Insert then Update. Only used when DRViewer Set is access-denied."""
+    ok_i, msg_i, res_i, token = _formviewer_insert_cls(token, payload, reauth=reauth)
+    if ok_i:
+        return True, f"INSERT-fallback:{msg_i}", {"insert": res_i}, token
+    ok_u, msg_u, res_u, token = _formviewer_update_cls(token, payload, reauth=reauth)
+    if ok_u:
+        return True, f"UPDATE-fallback:{msg_u}", {"insert": res_i, "update": res_u}, token
+    return (
+        False,
+        f"INSERT:{msg_i}; UPDATE:{msg_u}",
+        {"insert": res_i, "update": res_u},
+        token,
+    )
 
 
 def _is_urine_format_error(msg: str) -> bool:
@@ -735,9 +911,11 @@ def _uro_value_variants(val) -> list:
 
 
 def insert_cls(token: str, payload: dict, reauth=None) -> tuple[bool, str, dict, str]:
-    """Save CLS via store Set (reliable). Returns (ok, message, raw_result, token).
+    """Save CLS via store Set; on DRViewer 403 fall back to FormViewer (light).
 
     Prefer KSKDK_Phieu_CanLamSang_Set with phieukhamId.
+    Access denied → FormToDatabaseInsert / FormToDataBaseUpdate (TTHC-style).
+    FormViewer is NOT used for urine-format errors (those stay on Set retries).
 
     On urine-format errors: keep blood + Nitrit, and retry urine TextBox fields
     one-by-one so Âm tính→Negative values are still saved. Never treat
@@ -771,6 +949,12 @@ def insert_cls(token: str, payload: dict, reauth=None) -> tuple[bool, str, dict,
     ok, msg, res, token = _set_cls(token, clean, reauth=reauth)
     if ok:
         return True, msg or "SET ok", res, token
+
+    # Light path: DRViewer Set blocked → FormViewer (do not use for urine format)
+    if (isinstance(res, dict) and res.get("_access_denied")) or _is_access_denied(
+        None, res if isinstance(res, dict) else None, msg
+    ):
+        return _formviewer_save_cls(token, clean, reauth=reauth)
 
     if not _is_urine_format_error(msg):
         return False, f"SET:{msg}", res, token

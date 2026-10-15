@@ -64,12 +64,11 @@ Log "==== Pin creds + auth TK1 ===="
 if ($LASTEXITCODE -ne 0) { Log "DUNG: AUTH TK1 FAIL"; exit 2 }
 & $Python ".\pipeline\probe_both_accounts.py"
 if ($LASTEXITCODE -ne 0) {
-  Log "DUNG: TK1 login OK nhung DRViewer 403 - khong lay duoc TTHC/CLS."
-  Log "Bo qua TK2. Web mo duoc trang van co the bi 403 API (kiem F12 Network)."
-  Log "Bao Medinet/IT cap quyen DRViewer cho pkdkthuankieu. Chay: KIEM_QUYEN_TK1.ps1"
-  Log "Neu chay tiep se mat nhieu gio ma imported=0."
+  Log "DUNG: TK1 login OK nhung DRViewer VA FormViewer deu bi chan - khong dien CLS."
+  Log "Bo qua TK2. Chay: KIEM_QUYEN_TK1.ps1"
   exit 2
 }
+Log "AUTH fill OK (DRViewer Set va/hoac FormViewer). Rematch MISSING + dien web + hourly."
 & $Python ".\pipeline\assert_g_pipeline.py"
 if ($LASTEXITCODE -ne 0) { Log "DUNG: G: FAIL - mo Google Drive"; exit 2 }
 

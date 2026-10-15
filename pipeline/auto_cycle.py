@@ -951,7 +951,7 @@ def _run_auto_cycle_inner(
     if full_scan or repair:
         max_incomplete = max(max_incomplete, 20000)
 
-    from medinet_api import assert_drviewer_or_raise, login_accounts
+    from medinet_api import assert_can_fill_or_raise, login_accounts
     from medinet_creds import get_medinet_accounts
 
     accounts_all = get_medinet_accounts(cfg)
@@ -964,10 +964,17 @@ def _run_auto_cycle_inner(
             f"Medinet accounts: {' + '.join(a['id'] for a in accounts)} (merged TTHC index)"
         )
     try:
-        assert_drviewer_or_raise(tokens)
+        fill_caps = assert_can_fill_or_raise(tokens)
     except Exception as e:
         safe_print(f"ABORT: {e}")
-        return {"abort": "drviewer_access_denied", "detail": str(e), "bot_role": role}
+        return {"abort": "fill_access_denied", "detail": str(e), "bot_role": role}
+    drviewer_ok = bool(fill_caps.get("drviewer_ok"))
+    formviewer_ok = bool(fill_caps.get("formviewer_ok"))
+    if formviewer_ok and not drviewer_ok:
+        safe_print(
+            "MODE: FormViewer-light — rematch bang index cache (neu co); "
+            "dien CLS qua FormViewer; bo live search DRViewer"
+        )
 
     def reauth_acct(aid: str) -> str:
         for acct in accounts:
@@ -1025,27 +1032,47 @@ def _run_auto_cycle_inner(
         date_from,
         date_to,
         cache_dir=cache_dir,
-        max_age_hours=index_max_age,
+        max_age_hours=index_max_age if drviewer_ok else max(index_max_age, 168.0),
+        allow_stale_cache=not drviewer_ok,
     )
     n_idx = len(index.get("all_ids") or [])
     safe_print(f"Index ready ids={n_idx}")
+    known_pid_queued = sum(
+        1
+        for r in rows
+        if str(r.get("medinet_phieukhamId") or "").strip()
+        not in ("", "None", "0")
+    )
     if n_idx < 1:
-        safe_print(
-            "ABORT: index TTHC rong (0 BN). Thuong do TK mat quyen DRViewer "
-            "hoac TTHC nam o TK2 ma dang bo qua TK2."
-        )
-        return {
-            "abort": "empty_tthc_index",
-            "bot_role": role,
-            "index_ids": 0,
-        }
+        if formviewer_ok and known_pid_queued > 0:
+            safe_print(
+                f"WARN: index TTHC rong nhung FormViewer OK + "
+                f"{known_pid_queued} hang da co phieukhamId — tiep tuc dien nhe"
+            )
+        elif formviewer_ok and not drviewer_ok:
+            safe_print(
+                "WARN: index rong + khong cache + DRViewer DENIED. "
+                "Khong rematch ten duoc; van chay de dien hang da co pid (neu co)."
+            )
+        else:
+            safe_print(
+                "ABORT: index TTHC rong (0 BN). Thuong do TK mat quyen DRViewer "
+                "hoac TTHC nam o TK2 ma dang bo qua TK2."
+            )
+            return {
+                "abort": "empty_tthc_index",
+                "bot_role": role,
+                "index_ids": 0,
+            }
     # Refresh tokens after long index build (TK1 required; TK2 optional)
     accounts, tokens = login_accounts(accounts_all, require_first=True)
     try:
-        assert_drviewer_or_raise(tokens)
+        fill_caps = assert_can_fill_or_raise(tokens)
+        drviewer_ok = bool(fill_caps.get("drviewer_ok"))
+        formviewer_ok = bool(fill_caps.get("formviewer_ok"))
     except Exception as e:
         safe_print(f"ABORT: {e}")
-        return {"abort": "drviewer_access_denied", "detail": str(e), "bot_role": role}
+        return {"abort": "fill_access_denied", "detail": str(e), "bot_role": role}
 
     stats = Counter()
     results = []
@@ -1316,8 +1343,31 @@ def _run_auto_cycle_inner(
         sample_kind = str(data.get("sample_kind") or "BLOOD_URINE")
         row["last_checked_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # ---- Known pid from prior match (FormViewer-light / CSV) ----
+        known_pid = str(row.get("medinet_phieukhamId") or "").strip()
+        if known_pid in ("", "None", "0"):
+            known_pid = ""
+
         # ---- Single match path: resolve_tthc_matches (2 TK) ----
         tthc = resolve_tthc_matches(data, index, accounts=accounts)
+        if tthc.status != "READY_IMPORT" and known_pid and formviewer_ok:
+            from tthc_match import TTHCMatchResult
+
+            try:
+                pid_val: int | str = int(float(known_pid))
+            except Exception:
+                pid_val = known_pid
+            synth = {
+                "phieukhamId": pid_val,
+                "Id": pid_val,
+                "MaPhieu": row.get("ma_phieu") or "",
+                "HoTen": data.get("ho_ten") or row.get("ho_ten") or "",
+                "_medinet_account": accounts[0]["id"],
+                "_mau": "CSV_PID",
+            }
+            tthc = TTHCMatchResult("READY_IMPORT", [synth], "csv_known_pid")
+            stats["csv_known_pid"] += 1
+
         if tthc.status == "WAITING_ADMIN" and tthc.mode in {
             "no_name_in_index",
             "params_conflict",
@@ -1326,6 +1376,9 @@ def _run_auto_cycle_inner(
             # Live search both accounts then re-resolve on a synthetic mini index
             live_name = str(data.get("ho_ten") or row.get("ho_ten") or "")
             live_year = str(data.get("nam_sinh") or resolved_year or "")
+            if live_name and not drviewer_ok:
+                stats["live_search_skipped_drviewer"] += 1
+                live_name = ""  # skip live block below
             if live_name:
                 stats["live_search_attempted"] += 1
                 live_st, live_rec, live_acct = search_patient_live_multi(
@@ -1448,6 +1501,7 @@ def _run_auto_cycle_inner(
             last_pid = pid
             primary_aid = aid
             row["ma_phieu"] = mrec.get("MaPhieu") or row.get("ma_phieu") or ""
+            row["medinet_phieukhamId"] = pid
 
             existing, tokens[aid] = load_cls_view(
                 tokens[aid], pid, reauth=make_reauth(mrec)

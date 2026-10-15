@@ -671,6 +671,59 @@ def merge_unit_indexes(idx_a: dict, idx_b: dict, id_a: str, id_b: str) -> dict:
     return merged
 
 
+def load_stale_unit_index_cache(
+    date_from: str,
+    date_to: str,
+    *,
+    cache_dir: Path | None = None,
+    account_id: str = "",
+) -> dict | None:
+    """Load newest usable index pickle even if older than normal max_age.
+
+    Used when DRViewer is 403 so rematch MISSING can still use last good index
+    and FormViewer can fill CLS for matched phieukhamId.
+    """
+    import pickle
+
+    if cache_dir is None:
+        cache_dir = Path(__file__).resolve().parent / "work" / "index_cache"
+    if not cache_dir.is_dir():
+        return None
+    candidates: list[Path] = []
+    # Prefer exact date-range keys, then any v2/v3 pickle
+    exact = [
+        cache_dir / f"v2_{date_from.replace('/', '')}_{date_to.replace('/', '')}.pkl",
+    ]
+    for p in exact:
+        if p.exists():
+            candidates.append(p)
+    for p in sorted(cache_dir.glob("v2_*.pkl"), key=lambda x: x.stat().st_mtime, reverse=True):
+        if p not in candidates:
+            candidates.append(p)
+    for p in sorted(cache_dir.glob("v3_merged_*.pkl"), key=lambda x: x.stat().st_mtime, reverse=True):
+        if p not in candidates:
+            candidates.append(p)
+    for path in candidates:
+        try:
+            with path.open("rb") as f:
+                idx = pickle.load(f)
+            n = len(idx.get("all_ids") or [])
+            if n < 50:
+                continue
+            age_h = (time.time() - path.stat().st_mtime) / 3600.0
+            if account_id:
+                _tag_records_in_index(idx, account_id)
+            safe_print(
+                f"  Index STALE CACHE hit age={age_h:.1f}h ids={n} file={path.name} "
+                f"(DRViewer offline — rematch bang cache)",
+                flush=True,
+            )
+            return idx
+        except Exception:
+            continue
+    return None
+
+
 def load_or_fetch_merged_unit_index(
     accounts: list[dict],
     date_from: str,
@@ -678,14 +731,45 @@ def load_or_fetch_merged_unit_index(
     *,
     cache_dir: Path | None = None,
     max_age_hours: float = 6,
+    allow_stale_cache: bool = False,
 ) -> dict:
     """Build or load merged index from all Medinet accounts (TTHC split per user)."""
     import pickle
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     if len(accounts) < 2:
-        tok = authenticate(accounts[0]["user"], accounts[0]["password"])
-        idx = fetch_unit_index(tok, date_from, date_to)
+        # TK1-only: use dated cache like dual-account path (was always live fetch).
+        if allow_stale_cache:
+            # DRViewer denied — do NOT hammer ExecuteStore; reuse last good cache.
+            stale = load_stale_unit_index_cache(
+                date_from, date_to, cache_dir=cache_dir, account_id=accounts[0]["id"]
+            )
+            if stale:
+                return stale
+            empty = {
+                "by_phone": {},
+                "by_name_year": {},
+                "by_fold_year": {},
+                "by_cccd": {},
+                "by_maphieu": {},
+                "by_pid": {},
+                "no_cls_ids": set(),
+                "all_ids": set(),
+                "by_mau_count": {},
+            }
+            safe_print(
+                "  Index EMPTY (DRViewer offline, no stale cache) — "
+                "chi dien hang da co medinet_phieukhamId",
+                flush=True,
+            )
+            return empty
+        idx = load_or_fetch_unit_index(
+            authenticate(accounts[0]["user"], accounts[0]["password"]),
+            date_from,
+            date_to,
+            cache_dir=cache_dir,
+            max_age_hours=max_age_hours,
+        )
         _tag_records_in_index(idx, accounts[0]["id"])
         return idx
 

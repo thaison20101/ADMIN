@@ -64,9 +64,10 @@ Log "==== Pin creds + auth ===="
 if ($LASTEXITCODE -ne 0) { Log "DUNG: AUTH TK1 FAIL"; exit 2 }
 & $Python ".\pipeline\probe_both_accounts.py"
 if ($LASTEXITCODE -ne 0) {
-  Log "DUNG: TK1 DRViewer 403 - khong lay TTHC. Bo qua TK2. Chay KIEM_QUYEN_TK1.ps1"
+  Log "DUNG: TK1 DRViewer+FormViewer bi chan - khong dien CLS. Bo qua TK2. Chay KIEM_QUYEN_TK1.ps1"
   exit 2
 }
+Log "AUTH fill OK - rematch MISSING (cache neu DRViewer DENIED) + dien FormViewer/Set"
 & $Python ".\pipeline\assert_g_pipeline.py"
 if ($LASTEXITCODE -ne 0) { Log "DUNG: G: FAIL"; exit 2 }
 
