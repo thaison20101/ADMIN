@@ -63,7 +63,10 @@ Log "==== Pin creds + auth ===="
 & $Python ".\pipeline\medinet_ssl.py"
 if ($LASTEXITCODE -ne 0) { Log "DUNG: AUTH TK1 FAIL"; exit 2 }
 & $Python ".\pipeline\probe_both_accounts.py"
-if ($LASTEXITCODE -ne 0) { Log "DUNG: AUTH TK1 FAIL"; exit 2 }
+if ($LASTEXITCODE -ne 0) {
+  Log "DUNG: AUTH/DRViewer FAIL - khong lay duoc TTHC. Can pass TK2 hoac cap quyen Medinet."
+  exit 2
+}
 & $Python ".\pipeline\assert_g_pipeline.py"
 if ($LASTEXITCODE -ne 0) { Log "DUNG: G: FAIL"; exit 2 }
 

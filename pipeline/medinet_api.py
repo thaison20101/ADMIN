@@ -160,6 +160,55 @@ def login_accounts(
     return working, tokens
 
 
+def probe_drviewer_access(token: str) -> tuple[bool, str]:
+    """Return (ok, detail). TK1 may auth but lack DRViewer ExecuteStore (403).
+
+    Without this permission index=0 and CLS get/set fail — rematch MISSING is useless.
+    """
+    # Minimal call used by index + CLS
+    path = (
+        f"/api/services/app/DRViewer/ExecuteStoreWithParam_ByDatasource"
+        f"?dataSourceId={CLS_DATASOURCE_ID}&store={CLS_STORE_GET}"
+    )
+    status, body, _tok = api(token, path, "POST", to_fparams({"phieukhamId": 1}))
+    msg = ""
+    if isinstance(body, dict):
+        res = body.get("result")
+        if isinstance(res, dict):
+            msg = str(res.get("message") or "")
+        if not msg:
+            err = body.get("error")
+            if isinstance(err, dict):
+                msg = str(err.get("message") or err.get("details") or "")
+            elif err:
+                msg = str(err)
+    low = (msg or "").lower()
+    if status == 403 or "access denied" in low:
+        return False, f"http={status} {msg or 'Access denied DRViewer'}"
+    # 200 with empty CLS for pid=1 is fine — permission exists
+    if status in (200, 404) or body.get("success") is True:
+        return True, f"http={status} ok"
+    if "access denied" in low:
+        return False, f"http={status} {msg}"
+    return True, f"http={status} {msg or 'ok'}"
+
+
+def assert_drviewer_or_raise(tokens: dict[str, str]) -> None:
+    """Abort early if no account can call DRViewer (avoids hours of 0-match rematch)."""
+    last = ""
+    for aid, tok in tokens.items():
+        ok, detail = probe_drviewer_access(tok)
+        print(f"probe: DRViewer {aid}: {'OK' if ok else 'DENIED'} {detail}", flush=True)
+        if ok:
+            return
+        last = detail
+    raise RuntimeError(
+        "DRViewer Access denied — TK dang login KHONG co quyen lay TTHC/CLS. "
+        "Can: (1) pass TK2 dung + MEDINET_ENABLE_TK2=1, hoac (2) Medinet cap lai quyen "
+        f"DRViewer cho pkdkthuankieu. last={last}"
+    )
+
+
 def to_fparams(obj: dict) -> list:
     return [{"Varible": k, "Value": "" if v is None else str(v)} for k, v in obj.items()]
 

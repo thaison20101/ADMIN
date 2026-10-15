@@ -167,16 +167,18 @@ def to_fparams(obj: dict) -> list:
 
 def api(token: str, path: str, method: str = "GET", body=None):
     BE = "https://be-qlskcd.medinet.org.vn"
-    from medinet_ssl import urlopen as _urlopen
+    from medinet_ssl import medinet_http_headers, urlopen as _urlopen
 
     url = f"{BE}{path}" if path.startswith("/") else path
     data = None if body is None else json.dumps(body, ensure_ascii=False).encode()
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "SessionSiteId": "130",
-    }
+    headers = medinet_http_headers(
+        {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "SessionSiteId": "130",
+        }
+    )
     for attempt in range(4):
         try:
             req = urllib.request.Request(url, data=data, headers=headers, method=method)

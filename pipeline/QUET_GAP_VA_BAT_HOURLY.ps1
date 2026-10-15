@@ -63,7 +63,12 @@ Log "==== Pin creds + auth TK1 ===="
 & $Python ".\pipeline\medinet_ssl.py"
 if ($LASTEXITCODE -ne 0) { Log "DUNG: AUTH TK1 FAIL"; exit 2 }
 & $Python ".\pipeline\probe_both_accounts.py"
-if ($LASTEXITCODE -ne 0) { Log "DUNG: AUTH TK1 FAIL"; exit 2 }
+if ($LASTEXITCODE -ne 0) {
+  Log "DUNG: AUTH/DRViewer FAIL - TK1 login OK nhung KHONG co quyen lay TTHC/CLS."
+  Log "Can pass TK2 dung (MEDINET_ENABLE_TK2=1) HOAC Medinet cap lai quyen DRViewer cho pkdkthuankieu."
+  Log "Neu chay tiep se mat nhieu gio ma imported=0 (nhu 8 vong truoc)."
+  exit 2
+}
 & $Python ".\pipeline\assert_g_pipeline.py"
 if ($LASTEXITCODE -ne 0) { Log "DUNG: G: FAIL - mo Google Drive"; exit 2 }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Probe Medinet accounts. Exit 0 if TK1 OK. TK2 skipped by default."""
+"""Probe Medinet accounts + DRViewer permission. Exit 0 if can list/fill CLS."""
 from __future__ import annotations
 
 import os
@@ -14,7 +14,7 @@ from medinet_ssl import install_medinet_https_opener, reset_ssl_cache  # noqa: E
 def main() -> int:
     reset_ssl_cache()
     install_medinet_https_opener()
-    from medinet_api import login_accounts
+    from medinet_api import assert_drviewer_or_raise, login_accounts
     from medinet_creds import get_medinet_accounts, tk2_enabled
 
     accounts = get_medinet_accounts()
@@ -27,7 +27,16 @@ def main() -> int:
         return 2
     ids = "+".join(a["id"] for a in working)
     print(f"AUTH_READY accounts={ids} n={len(working)}")
-    _ = tokens
+    try:
+        assert_drviewer_or_raise(tokens)
+    except Exception as e:
+        print(f"AUTH_FAIL DRViewer: {e}")
+        print(
+            "DUNG: khong the quet TTHC/dien CLS. "
+            "Gui pass TK2 moi HOAC bao Medinet cap quyen DRViewer cho pkdkthuankieu."
+        )
+        return 2
+    print("AUTH_READY DRViewer OK — co the index TTHC + dien CLS")
     return 0
 
 

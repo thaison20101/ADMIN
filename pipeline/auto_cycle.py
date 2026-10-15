@@ -951,7 +951,7 @@ def _run_auto_cycle_inner(
     if full_scan or repair:
         max_incomplete = max(max_incomplete, 20000)
 
-    from medinet_api import login_accounts
+    from medinet_api import assert_drviewer_or_raise, login_accounts
     from medinet_creds import get_medinet_accounts
 
     accounts_all = get_medinet_accounts(cfg)
@@ -963,6 +963,11 @@ def _run_auto_cycle_inner(
         safe_print(
             f"Medinet accounts: {' + '.join(a['id'] for a in accounts)} (merged TTHC index)"
         )
+    try:
+        assert_drviewer_or_raise(tokens)
+    except Exception as e:
+        safe_print(f"ABORT: {e}")
+        return {"abort": "drviewer_access_denied", "detail": str(e), "bot_role": role}
 
     def reauth_acct(aid: str) -> str:
         for acct in accounts:
@@ -1022,8 +1027,25 @@ def _run_auto_cycle_inner(
         cache_dir=cache_dir,
         max_age_hours=index_max_age,
     )
+    n_idx = len(index.get("all_ids") or [])
+    safe_print(f"Index ready ids={n_idx}")
+    if n_idx < 1:
+        safe_print(
+            "ABORT: index TTHC rong (0 BN). Thuong do TK mat quyen DRViewer "
+            "hoac TTHC nam o TK2 ma dang bo qua TK2."
+        )
+        return {
+            "abort": "empty_tthc_index",
+            "bot_role": role,
+            "index_ids": 0,
+        }
     # Refresh tokens after long index build (TK1 required; TK2 optional)
     accounts, tokens = login_accounts(accounts_all, require_first=True)
+    try:
+        assert_drviewer_or_raise(tokens)
+    except Exception as e:
+        safe_print(f"ABORT: {e}")
+        return {"abort": "drviewer_access_denied", "detail": str(e), "bot_role": role}
 
     stats = Counter()
     results = []
