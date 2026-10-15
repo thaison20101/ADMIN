@@ -46,7 +46,7 @@ def test_formviewer_soft_ok_versiontype3():
     assert res.get("code") == "VersionType-3-Non-Insert-Id"
 
 
-def test_insert_cls_falls_back_on_set_403():
+def test_insert_cls_falls_back_on_set_403_update_first():
     payload = {
         "phieukhamId": 12345,
         "LoaiKham": 5152,
@@ -60,11 +60,11 @@ def test_insert_cls_falls_back_on_set_403():
 
     def fake_insert(token, pl, reauth=None):
         calls["insert"] += 1
-        return True, "inserted", {"isSucceeded": True}, token
+        return False, "should not need insert", {}, token
 
     def fake_update(token, pl, reauth=None):
         calls["update"] += 1
-        return False, "should not run", {}, token
+        return True, "updated", {"isSucceeded": True}, token
 
     with (
         patch.object(api, "_set_cls", side_effect=fake_set),
@@ -74,23 +74,23 @@ def test_insert_cls_falls_back_on_set_403():
         ok, msg, raw, tok = api.insert_cls("tok", payload)
 
     assert ok is True
-    assert msg.startswith("INSERT-fallback:")
+    assert msg.startswith("UPDATE-fallback:")
     assert calls["set"] == 1
-    assert calls["insert"] == 1
-    assert calls["update"] == 0
+    assert calls["update"] == 1
+    assert calls["insert"] == 0
 
 
-def test_insert_cls_update_when_insert_fails():
+def test_insert_cls_insert_when_update_fails():
     payload = {"phieukhamId": 99, "CongThucMau_SLBC": 4.1}
     calls = {"insert": 0, "update": 0}
 
     def fake_insert(token, pl, reauth=None):
         calls["insert"] += 1
-        return False, "exists", {"code": "X"}, token
+        return True, "inserted", {"isSucceeded": True}, token
 
     def fake_update(token, pl, reauth=None):
         calls["update"] += 1
-        return True, "updated", {"isSucceeded": True}, token
+        return False, "no row", {}, token
 
     with (
         patch.object(api, "_set_cls", side_effect=_denied_set),
@@ -100,9 +100,25 @@ def test_insert_cls_update_when_insert_fails():
         ok, msg, raw, tok = api.insert_cls("tok", payload)
 
     assert ok is True
-    assert msg.startswith("UPDATE-fallback:")
-    assert calls["insert"] == 1
+    assert msg.startswith("INSERT-fallback:")
     assert calls["update"] == 1
+    assert calls["insert"] == 1
+
+
+def test_prepare_formviewer_mirrors_luc_doi_to_duong_mau():
+    pl = api._prepare_formviewer_payload(
+        {"phieukhamId": 1, "SinhHoaMau_DuongMauLucDoi": 5.1}
+    )
+    assert pl["SinhHoaMau_DuongMau"] == 5.1
+    assert pl["SinhHoaMau_DuongMauLucDoi"] == 5.1
+
+
+def test_glucose_twin_accepts_duong_mau_for_luc_doi():
+    payload = {"SinhHoaMau_DuongMauLucDoi": 5.1, "CongThucMau_SLBC": 6}
+    existing = {"SinhHoaMau_DuongMau": 5.1, "CongThucMau_SLBC": 6}
+    miss = api.cls_missing_lab_fields(existing, payload)
+    assert "SinhHoaMau_DuongMauLucDoi" not in miss
+    assert miss == []
 
 
 def test_insert_cls_urine_error_does_not_call_formviewer():
@@ -185,8 +201,10 @@ def test_assert_can_fill_raises_when_both_denied():
 if __name__ == "__main__":
     test_access_denied_helper()
     test_formviewer_soft_ok_versiontype3()
-    test_insert_cls_falls_back_on_set_403()
-    test_insert_cls_update_when_insert_fails()
+    test_insert_cls_falls_back_on_set_403_update_first()
+    test_insert_cls_insert_when_update_fails()
+    test_prepare_formviewer_mirrors_luc_doi_to_duong_mau()
+    test_glucose_twin_accepts_duong_mau_for_luc_doi()
     test_insert_cls_urine_error_does_not_call_formviewer()
     test_insert_cls_set_ok_skips_formviewer()
     test_probe_fill_capabilities_formviewer_only()

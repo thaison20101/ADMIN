@@ -571,11 +571,22 @@ def _num_close(a, b, *, rel: float = 0.02, abs_tol: float = 0.05) -> bool:
     return abs(fa - fb) <= max(abs_tol, rel * max(abs(fa), abs(fb), 1.0))
 
 
+def _glucose_twin_key(field: str) -> str | None:
+    """Định kỳ form often keeps one glucose box; LucDoi ↔ DuongMau are twins."""
+    if field == "SinhHoaMau_DuongMauLucDoi":
+        return "SinhHoaMau_DuongMau"
+    if field == "SinhHoaMau_DuongMau":
+        return "SinhHoaMau_DuongMauLucDoi"
+    return None
+
+
 def cls_missing_lab_fields(existing: dict | None, payload: dict) -> list[str]:
     """Lab fields in PDF payload that are empty OR wrong on the web form.
 
     Rule: dien theo PDF (binh thuong lan bat thuong), KE CA Urea khi PDF co.
     Also tracks LoaiKham (must be Khám định kỳ = 5152).
+    Glucose: LucDoi missing is OK when DuongMau holds the same value (FormViewer
+    định kỳ often only persists SinhHoaMau_DuongMau).
     """
     tracked = [
         k
@@ -596,6 +607,16 @@ def cls_missing_lab_fields(existing: dict | None, payload: dict) -> list[str]:
                 missing.append(k)
             continue
         if got in (None, ""):
+            twin = _glucose_twin_key(k)
+            twin_got = existing.get(twin) if twin else None
+            if (
+                twin
+                and twin_got not in (None, "")
+                and sent not in (None, "")
+                and _num_close(twin_got, sent)
+            ):
+                # Web stored glucose on the twin field — count as filled
+                continue
             missing.append(k)
             continue
         if k in NUMBER_FIELDS and sent not in (None, ""):
@@ -715,15 +736,15 @@ def verify_cls_saved(
     payload: dict | None = None,
     reauth=None,
     *,
-    retries: int = 5,
-    delay_s: float = 0.6,
+    retries: int = 6,
+    delay_s: float = 0.7,
 ) -> tuple[bool, str, str]:
     """Confirm CLS is readable on the same phieukhamId the UI uses.
 
     Prefer merged Get+FormViewer — Get alone often returns empty even when
     the web form has values (false ERROR_IMPORT / stuck INBOX).
 
-    Medinet often lags right after Set ("Thành công" but Get empty for 1–3s).
+    Medinet/FormViewer often lags after save ("Thành công" but read empty 1–4s).
     Retry briefly before declaring failure.
 
     Returns (ok, detail, token).
@@ -742,6 +763,7 @@ def verify_cls_saved(
         return False, last_detail, token
 
     # Spot-check: EVERY lab key we sent must appear on Get+FormViewer
+    # (glucose LucDoi may land on DuongMau — see cls_missing_lab_fields)
     if payload:
         miss = cls_missing_lab_fields(row, payload)
         # Urea optional only when not in payload
@@ -853,18 +875,48 @@ def _formviewer_update_cls(token: str, payload: dict, reauth=None):
     return ok, msg, res, token
 
 
+def _prepare_formviewer_payload(payload: dict) -> dict:
+    """Shape payload for FormViewer CLS (existing phieukhamId form).
+
+    Định kỳ UI often only binds SinhHoaMau_DuongMau — mirror LucDoi into it
+    when DuongMau is empty so glucose from 'lúc đói' PDF still lands on web.
+    """
+    out = dict(payload)
+    luc = out.get("SinhHoaMau_DuongMauLucDoi")
+    bat = out.get("SinhHoaMau_DuongMau")
+    if luc not in (None, "") and bat in (None, ""):
+        out["SinhHoaMau_DuongMau"] = luc
+    return out
+
+
 def _formviewer_save_cls(token: str, payload: dict, reauth=None):
-    """Insert then Update. Only used when DRViewer Set is access-denied."""
-    ok_i, msg_i, res_i, token = _formviewer_insert_cls(token, payload, reauth=reauth)
+    """Update first (CLS row usually exists), then Insert. DRViewer Set denied only."""
+    body = _prepare_formviewer_payload(payload)
+    # Prefer Update: phieukhamId form already exists; Insert soft-ok often saves nothing
+    ok_u, msg_u, res_u, token = _formviewer_update_cls(token, body, reauth=reauth)
+    if ok_u and "soft-ok" not in (msg_u or ""):
+        return True, f"UPDATE-fallback:{msg_u}", {"update": res_u}, token
+    ok_i, msg_i, res_i, token = _formviewer_insert_cls(token, body, reauth=reauth)
+    # Soft-ok Insert is unreliable — always follow with Update when possible
+    if ok_i and "soft-ok" in (msg_i or ""):
+        ok_u2, msg_u2, res_u2, token = _formviewer_update_cls(token, body, reauth=reauth)
+        if ok_u2:
+            return (
+                True,
+                f"INSERT-soft+UPDATE:{msg_i};{msg_u2}",
+                {"insert": res_i, "update": res_u2},
+                token,
+            )
+        # Keep soft-ok as tentative success; caller verify will catch empty
+        return True, f"INSERT-fallback:{msg_i}", {"insert": res_i, "update": res_u}, token
     if ok_i:
-        return True, f"INSERT-fallback:{msg_i}", {"insert": res_i}, token
-    ok_u, msg_u, res_u, token = _formviewer_update_cls(token, payload, reauth=reauth)
+        return True, f"INSERT-fallback:{msg_i}", {"insert": res_i, "update": res_u}, token
     if ok_u:
-        return True, f"UPDATE-fallback:{msg_u}", {"insert": res_i, "update": res_u}, token
+        return True, f"UPDATE-fallback:{msg_u}", {"update": res_u, "insert": res_i}, token
     return (
         False,
-        f"INSERT:{msg_i}; UPDATE:{msg_u}",
-        {"insert": res_i, "update": res_u},
+        f"UPDATE:{msg_u}; INSERT:{msg_i}",
+        {"update": res_u, "insert": res_i},
         token,
     )
 
