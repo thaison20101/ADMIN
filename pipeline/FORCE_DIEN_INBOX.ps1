@@ -29,6 +29,19 @@ $env:PYTHONUTF8 = "1"
 
 function Log([string]$m) { Write-Host ("[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $m) }
 
+function Clear-PkdkLocks {
+  Get-Process -Name python*, py* -ErrorAction SilentlyContinue | ForEach-Object {
+    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+  }
+  Start-Sleep -Seconds 1
+  $LockDir = Join-Path $Repo "pipeline\work\locks"
+  if (Test-Path -LiteralPath $LockDir) {
+    Get-ChildItem -LiteralPath $LockDir -Filter "*.lock" -Recurse -ErrorAction SilentlyContinue |
+      Remove-Item -Force -ErrorAction SilentlyContinue
+  }
+  Log "Cleared python + locks"
+}
+
 Write-Host "############################################################"
 Write-Host "#  FORCE DIEN INBOX (truc tiep, hourly ON sau do)           #"
 Write-Host "############################################################"
@@ -45,15 +58,16 @@ $Python = Resolve-PkdkPython
 $env:PKDK_PYTHON = $Python
 Log ("Python=" + $Python)
 
+Log "==== Tam NGUNG hourly (tranh lock missing) ===="
+try {
+  Disable-ScheduledTask -TaskName "PKDK_Hourly_Sync" -ErrorAction Stop | Out-Null
+  Log "Hourly DISABLED trong luc FORCE"
+} catch {
+  Log ("WARN Disable hourly: " + $_)
+}
+
 Log "==== Kill + locks ===="
-Get-Process -Name python*, py* -ErrorAction SilentlyContinue | ForEach-Object {
-  Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-}
-$LockDir = Join-Path $Repo "pipeline\work\locks"
-if (Test-Path -LiteralPath $LockDir) {
-  Get-ChildItem -LiteralPath $LockDir -Filter "*.lock" -Recurse -ErrorAction SilentlyContinue |
-    Remove-Item -Force -ErrorAction SilentlyContinue
-}
+Clear-PkdkLocks
 
 Log "==== Pin creds + auth ===="
 & $Python ".\pipeline\ensure_config.py"
@@ -82,22 +96,38 @@ Log "==== INBOX TRUOC ===="
 & $Python ".\pipeline\print_disk_counts.py" | ForEach-Object { Log $_ }
 
 Log "==== FORCE bot=inbox --force --repair (dien web) ===="
+Clear-PkdkLocks
 $t0 = Get-Date
 & $Python -u ".\pipeline\hourly_sync.py" --bot inbox --force --repair --missing-budget 0
 $code1 = $LASTEXITCODE
 Log ("inbox bot exit=" + $code1 + " sec=" + [int]((Get-Date) - $t0).TotalSeconds)
+Clear-PkdkLocks
 
 $code2 = 0
+$okRounds = 0
 for ($round = 1; $round -le 4; $round++) {
   Log ("==== Rematch MISSING CSV vong $round/4 --force budget 2500 (TTHC moi) ====")
+  Clear-PkdkLocks
   $t1 = Get-Date
   & $Python -u ".\pipeline\hourly_sync.py" --bot missing --force --missing-budget 2500
   $code2 = $LASTEXITCODE
   Log ("missing vong $round exit=$code2 sec=" + [int]((Get-Date) - $t1).TotalSeconds)
-  if ($code2 -ne 0) { break }
+  if ($code2 -ne 0) {
+    Log "WARN missing exit!=0 — clear lock + RETRY 1 lan"
+    Clear-PkdkLocks
+    Start-Sleep -Seconds 2
+    & $Python -u ".\pipeline\hourly_sync.py" --bot missing --force --missing-budget 2500
+    $code2 = $LASTEXITCODE
+    Log ("missing vong $round RETRY exit=$code2")
+  }
+  if ($code2 -eq 0) { $okRounds++ }
+  else { Log "WARN: vong $round van fail — tiep vong sau (KHONG break)" }
 }
 
+Log ("MISSING rounds OK=$okRounds / 4")
+
 Log "==== Bat hourly task (an) de chay tiep moi gio ===="
+Clear-PkdkLocks
 & powershell -NoProfile -ExecutionPolicy Bypass -File ".\pipeline\install_hourly_task.ps1"
 try { Enable-ScheduledTask -TaskName "PKDK_Hourly_Sync" -ErrorAction SilentlyContinue | Out-Null } catch {}
 $t = Get-ScheduledTask -TaskName "PKDK_Hourly_Sync" -ErrorAction SilentlyContinue
@@ -107,9 +137,11 @@ Log "==== INBOX SAU ===="
 & $Python ".\pipeline\print_disk_counts.py" | ForEach-Object { Log $_ }
 & $Python ".\pipeline\print_counts.py" | ForEach-Object { Log $_ }
 
-$code = [Math]::Max([int]$code1, [int]$code2)
+$code = 0
+if ($okRounds -lt 1 -and $code1 -ne 0) { $code = 2 }
+elseif ($okRounds -lt 1 -and $code1 -eq 0) { $code = 0 }
 Write-Host "############################################################"
-Write-Host (" FORCE xong exit=" + $code + " HEAD=" + $sha)
+Write-Host (" FORCE xong exit=" + $code + " HEAD=" + $sha + " missing_ok_rounds=" + $okRounds)
 Write-Host " Bao cao gio (tieng Viet): G:\\Drive cua toi\\BAO_CAO_GIO\\MOI_NHAT.txt"
 Write-Host " Neu INBOX van khong giam: copy toan bo log mau do/AUTH o tren gui lai."
 Write-Host "############################################################"

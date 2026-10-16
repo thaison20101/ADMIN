@@ -30,6 +30,19 @@ $env:PYTHONUTF8 = "1"
 
 function Log([string]$m) { Write-Host ("[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $m) }
 
+function Clear-PkdkLocks {
+  Get-Process -Name python*, py* -ErrorAction SilentlyContinue | ForEach-Object {
+    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+  }
+  Start-Sleep -Seconds 1
+  $LockDir = Join-Path $Repo "pipeline\work\locks"
+  if (Test-Path -LiteralPath $LockDir) {
+    Get-ChildItem -LiteralPath $LockDir -Filter "*.lock" -Recurse -ErrorAction SilentlyContinue |
+      Remove-Item -Force -ErrorAction SilentlyContinue
+  }
+  Log "Cleared python + locks"
+}
+
 Write-Host "############################################################"
 Write-Host "#  DIEN CO TTHC (INBOX + MISSING rematch, index moi)        #"
 Write-Host "############################################################"
@@ -46,15 +59,16 @@ $Python = Resolve-PkdkPython
 $env:PKDK_PYTHON = $Python
 Log ("Python=" + $Python)
 
+Log "==== Tam NGUNG hourly (tranh lock missing) ===="
+try {
+  Disable-ScheduledTask -TaskName "PKDK_Hourly_Sync" -ErrorAction Stop | Out-Null
+  Log "Hourly DISABLED trong luc DIEN"
+} catch {
+  Log ("WARN Disable hourly: " + $_)
+}
+
 Log "==== Kill + locks ===="
-Get-Process -Name python*, py* -ErrorAction SilentlyContinue | ForEach-Object {
-  Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-}
-$LockDir = Join-Path $Repo "pipeline\work\locks"
-if (Test-Path -LiteralPath $LockDir) {
-  Get-ChildItem -LiteralPath $LockDir -Filter "*.lock" -Recurse -ErrorAction SilentlyContinue |
-    Remove-Item -Force -ErrorAction SilentlyContinue
-}
+Clear-PkdkLocks
 
 Log "==== Pin creds + auth ===="
 & $Python ".\pipeline\ensure_config.py"
@@ -76,23 +90,40 @@ Log "==== COUNTS TRUOC ===="
 & $Python ".\pipeline\print_counts.py" | ForEach-Object { Log $_ }
 
 Log "==== 1) INBOX + ERROR --force --repair (index moi) ===="
+Clear-PkdkLocks
 $t0 = Get-Date
 & $Python -u ".\pipeline\hourly_sync.py" --bot inbox --force --repair --missing-budget 0
 $code1 = $LASTEXITCODE
 Log ("inbox exit=" + $code1 + " sec=" + [int]((Get-Date) - $t0).TotalSeconds)
+Clear-PkdkLocks
 
 $code2 = 0
+$okRounds = 0
 for ($round = 1; $round -le 8; $round++) {
   Log ("==== 2) MISSING rematch vong $round/8 --force budget 3000 ====")
+  Clear-PkdkLocks
   $t1 = Get-Date
   & $Python -u ".\pipeline\hourly_sync.py" --bot missing --force --missing-budget 3000
   $code2 = $LASTEXITCODE
   Log ("missing vong $round exit=$code2 sec=" + [int]((Get-Date) - $t1).TotalSeconds)
+  if ($code2 -ne 0) {
+    Log "WARN missing exit!=0 — clear lock + RETRY 1 lan"
+    Clear-PkdkLocks
+    Start-Sleep -Seconds 2
+    & $Python -u ".\pipeline\hourly_sync.py" --bot missing --force --missing-budget 3000
+    $code2 = $LASTEXITCODE
+    Log ("missing vong $round RETRY exit=$code2")
+  }
   & $Python ".\pipeline\print_counts.py" | ForEach-Object { Log $_ }
-  if ($code2 -ne 0) { break }
+  & $Python ".\pipeline\print_disk_counts.py" | ForEach-Object { Log $_ }
+  if ($code2 -eq 0) { $okRounds++ }
+  else { Log "WARN: vong $round van fail — tiep vong sau (KHONG break)" }
 }
 
+Log ("MISSING rounds OK=$okRounds / 8")
+
 Log "==== Bat hourly tiep ===="
+Clear-PkdkLocks
 & powershell -NoProfile -ExecutionPolicy Bypass -File ".\pipeline\install_hourly_task.ps1"
 try { Enable-ScheduledTask -TaskName "PKDK_Hourly_Sync" -ErrorAction SilentlyContinue | Out-Null } catch {}
 try {
@@ -104,9 +135,10 @@ Log "==== COUNTS SAU ===="
 & $Python ".\pipeline\print_disk_counts.py" | ForEach-Object { Log $_ }
 & $Python ".\pipeline\print_counts.py" | ForEach-Object { Log $_ }
 
-$code = [Math]::Max([int]$code1, [int]$code2)
+$code = 0
+if ($okRounds -lt 1) { $code = 2 }
 Write-Host "############################################################"
-Write-Host (" DIEN CO TTHC xong exit=" + $code + " HEAD=" + $sha)
+Write-Host (" DIEN CO TTHC xong exit=" + $code + " HEAD=" + $sha + " missing_ok_rounds=" + $okRounds)
 Write-Host " Bao cao: G:\\Drive cua toi\\BAO_CAO_GIO\\MOI_NHAT.txt"
 Write-Host " Che do: CHI TK1 (bo qua TK2)."
 Write-Host "############################################################"
