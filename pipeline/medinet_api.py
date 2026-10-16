@@ -236,27 +236,271 @@ def probe_formviewer_cls(token: str) -> tuple[bool, str]:
     return False, f"http={status} {msg or 'FormViewer fail'}"
 
 
+# Report codes for PostDataWithDataOutput live patient lookup (not ExecuteStore).
+POSTDATA_REPORTS = [
+    ("M3", "KSKDK_DanhSach_KSK_M13", "NgayTao"),
+    ("M2", "KSKDK_DanhSach_KSK_M12", "KSKDK_NgayKham"),
+    ("M4", "KSKDK_DanhSach_KSK_NguoiCaoTuoi_Report", "KSKDK_NgayKham"),
+    ("M11", "KSKDK_DanhSach_KSK_M11", "KSKDK_NgayKham"),
+]
+
+
+def _get_report_meta(token: str, code: str, reauth=None) -> dict | None:
+    s, d, _tok = api(
+        token,
+        f"/api/services/app/DRReport/GetIdByCode?Code={code}&SessionSiteId={SITE_ID}",
+        reauth=reauth,
+    )
+    items = ((d or {}).get("result") or {}).get("data") or []
+    return items[0] if items else None
+
+
+def postdata_fetch_page(
+    token: str,
+    report_id: int | str,
+    code: str,
+    filters: dict,
+    *,
+    page: int = 1,
+    page_size: int = 100,
+    reauth=None,
+) -> tuple[list, int, str]:
+    """POST DRViewer/PostDataWithDataOutput — live list/filter by name/CCCD.
+
+    Different method from ExecuteStore; may work when ExecuteStore is 403.
+    Returns (rows, http_status, token).
+    """
+    url_page = (
+        f"/app/main/dynamicreport/report/viewer-utility/{code}"
+    )
+    q = urllib.parse.urlencode(
+        {
+            "id": str(report_id),
+            "SessionSiteId": SITE_ID,
+            "UrlPage": url_page,
+            "ispopup": "false",
+            "istab": "false",
+        }
+    )
+    params = [{"Varible": k, "Value": v} for k, v in filters.items()]
+    params += [
+        {"Varible": "ReportId", "Value": report_id},
+        {"Varible": "PageSize", "Value": page_size},
+        {"Varible": "PageNumber", "Value": page},
+        {"Varible": "PageDefaultFilter", "Value": None},
+    ]
+    s, d, token = api(
+        token,
+        f"/api/services/app/DRViewer/PostDataWithDataOutput?{q}",
+        "POST",
+        params,
+        reauth=reauth,
+        extra_headers={"displaymode": "0"},
+    )
+    if _is_access_denied(s, d):
+        return [], s, token
+    rows = ((d or {}).get("result") or {}).get("data")
+    if not isinstance(rows, list):
+        rows = []
+    return rows, s, token
+
+
+def probe_postdata_access(token: str) -> tuple[bool, str]:
+    """Return (ok, detail) for PostDataWithDataOutput (M3 one page)."""
+    meta = _get_report_meta(token, "KSKDK_DanhSach_KSK_M13")
+    if not meta:
+        return False, "GetIdByCode M3 missing"
+    rid = meta.get("id") or meta.get("Id") or 1002176
+    code = "KSKDK_DanhSach_KSK_M13"
+    rows, status, _tok = postdata_fetch_page(
+        token,
+        rid,
+        code,
+        {
+            "KSKDK_HoVaTen": None,
+            "KSKDK_DinhDanhCaNhan": None,
+            "NgayTao": "01/01/2026 - 31/12/2026",
+        },
+        page=1,
+        page_size=5,
+    )
+    if _is_access_denied(status, None) or status == 403:
+        return False, f"http={status} Access denied PostData"
+    if status == 200:
+        return True, f"http={status} rows={len(rows)}"
+    return False, f"http={status} PostData fail"
+
+
+def lookup_tthc_by_name_cccd(
+    token: str,
+    *,
+    name: str = "",
+    cccd: str = "",
+    year: str = "",
+    date_from: str = "01/07/2026",
+    date_to: str = "",
+    reauth=None,
+) -> tuple[dict | None, str, str]:
+    """Find one TTHC via PostData filters (name and/or CCCD). Returns (rec, detail, token).
+
+    Prefer unique CCCD hit; else unique folded name+year across M2/M3/M4/M11.
+    """
+    from datetime import date as _date
+    from datetime import timedelta
+
+    if not date_to:
+        date_to = _date.today().strftime("%d/%m/%Y")
+    try:
+        d0 = _date(int(date_from.split("/")[2]), int(date_from.split("/")[1]), int(date_from.split("/")[0]))
+        d0 = d0 - timedelta(days=60)
+        date_from_w = d0.strftime("%d/%m/%Y")
+    except Exception:
+        date_from_w = date_from
+    dr = f"{date_from_w} - {date_to}"
+    name = (name or "").strip()
+    cccd = re.sub(r"\D", "", str(cccd or ""))
+    if len(cccd) < 9:
+        cccd = ""
+    if not name and not cccd:
+        return None, "no_name_or_cccd", token
+
+    def _fold(s: str) -> str:
+        import unicodedata
+
+        s2 = unicodedata.normalize("NFD", (s or "").upper())
+        s2 = "".join(c for c in s2 if unicodedata.category(c) != "Mn")
+        return re.sub(r"\s+", " ", s2).strip()
+
+    fold_want = _fold(name)
+    hits: list[dict] = []
+    last_detail = "no_hits"
+
+    for mau, code, date_field in POSTDATA_REPORTS:
+        meta = _get_report_meta(token, code, reauth=reauth)
+        if not meta:
+            continue
+        rid = meta.get("id") or meta.get("Id")
+        if not rid:
+            continue
+        # Prefer CCCD-only filter when available (unique)
+        filter_sets = []
+        if cccd:
+            filter_sets.append(
+                {
+                    "KSKDK_HoVaTen": None,
+                    "KSKDK_DinhDanhCaNhan": cccd,
+                    date_field: dr,
+                    "NgayTao": dr,
+                    "KSKDK_NgayKham": dr,
+                }
+            )
+        if name:
+            filter_sets.append(
+                {
+                    "KSKDK_HoVaTen": name,
+                    "KSKDK_DinhDanhCaNhan": None,
+                    date_field: dr,
+                    "NgayTao": dr,
+                    "KSKDK_NgayKham": dr,
+                }
+            )
+        for filters in filter_sets:
+            rows, status, token = postdata_fetch_page(
+                token, rid, code, filters, page=1, page_size=50, reauth=reauth
+            )
+            if status == 403 or _is_access_denied(status, None):
+                return None, f"postdata_denied http={status}", token
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                r = {**r, "_mau": mau, "_via": "postdata"}
+                if cccd:
+                    raw_cc = ""
+                    for k in (
+                        "SoDinhDanh",
+                        "CCCD",
+                        "CMND",
+                        "KSKDK_DinhDanhCaNhan",
+                        "SoCMND",
+                    ):
+                        raw_cc = re.sub(r"\D", "", str(r.get(k) or ""))
+                        if len(raw_cc) >= 9:
+                            break
+                    if raw_cc and raw_cc == cccd:
+                        hits.append(r)
+                        continue
+                if fold_want:
+                    hn = _fold(str(r.get("HoTen") or r.get("KSKDK_HoVaTen") or ""))
+                    if hn != fold_want:
+                        continue
+                    if year:
+                        ys = str(r.get("NgaySinh") or "")
+                        y = ""
+                        m = re.search(r"(19|20)\d{2}", ys)
+                        if m:
+                            y = m.group(0)
+                        if y and y != str(year):
+                            continue
+                    hits.append(r)
+            if hits:
+                break
+        if hits:
+            break
+
+    if not hits:
+        return None, last_detail or "no_hits", token
+
+    # Dedupe by pid
+    seen = set()
+    uniq = []
+    for h in hits:
+        pid = h.get("phieukhamId") or h.get("Id")
+        if pid in seen:
+            continue
+        seen.add(pid)
+        uniq.append(h)
+    if len(uniq) == 1:
+        rec = uniq[0]
+        pid = rec.get("phieukhamId") or rec.get("Id")
+        if pid is not None and "phieukhamId" not in rec:
+            rec["phieukhamId"] = pid
+        return rec, f"postdata_unique mau={rec.get('_mau')}", token
+    # Multiple: prefer CCCD exact already filtered; else refuse ambiguous
+    if cccd and len(uniq) > 1:
+        return None, f"postdata_ambiguous_cccd n={len(uniq)}", token
+    if fold_want and year:
+        # already year-filtered; still ambiguous
+        return None, f"postdata_ambiguous_name n={len(uniq)}", token
+    return None, f"postdata_ambiguous n={len(uniq)}", token
+
+
 def probe_fill_capabilities(tokens: dict[str, str]) -> dict:
-    """Probe DRViewer + FormViewer per account. Soft gate for fill vs index."""
+    """Probe ExecuteStore + PostData + FormViewer. Soft gate for fill vs rematch."""
     caps = {
         "drviewer_ok": False,
+        "postdata_ok": False,
         "formviewer_ok": False,
         "drviewer_detail": "",
+        "postdata_detail": "",
         "formviewer_detail": "",
         "accounts": {},
     }
     for aid, tok in tokens.items():
         d_ok, d_det = probe_drviewer_access(tok)
+        p_ok, p_det = probe_postdata_access(tok)
         f_ok, f_det = probe_formviewer_cls(tok)
         print(
-            f"probe: {aid} DRViewer={'OK' if d_ok else 'DENIED'} {d_det} | "
+            f"probe: {aid} ExecuteStore={'OK' if d_ok else 'DENIED'} {d_det} | "
+            f"PostData={'OK' if p_ok else 'DENIED'} {p_det} | "
             f"FormViewer={'OK' if f_ok else 'DENIED'} {f_det}",
             flush=True,
         )
         caps["accounts"][aid] = {
             "drviewer_ok": d_ok,
+            "postdata_ok": p_ok,
             "formviewer_ok": f_ok,
             "drviewer_detail": d_det,
+            "postdata_detail": p_det,
             "formviewer_detail": f_det,
         }
         if d_ok:
@@ -264,6 +508,11 @@ def probe_fill_capabilities(tokens: dict[str, str]) -> dict:
             caps["drviewer_detail"] = d_det
         else:
             caps["drviewer_detail"] = caps["drviewer_detail"] or d_det
+        if p_ok:
+            caps["postdata_ok"] = True
+            caps["postdata_detail"] = p_det
+        else:
+            caps["postdata_detail"] = caps["postdata_detail"] or p_det
         if f_ok:
             caps["formviewer_ok"] = True
             caps["formviewer_detail"] = f_det
@@ -273,15 +522,21 @@ def probe_fill_capabilities(tokens: dict[str, str]) -> dict:
 
 
 def assert_can_fill_or_raise(tokens: dict[str, str]) -> dict:
-    """Allow fill if DRViewer OR FormViewer CLS works. Raise only if both denied."""
+    """Allow fill if FormViewer CLS works. Rematch needs ExecuteStore OR PostData."""
     caps = probe_fill_capabilities(tokens)
-    if caps["drviewer_ok"] or caps["formviewer_ok"]:
+    if caps["formviewer_ok"] or caps["drviewer_ok"]:
         if not caps["drviewer_ok"] and caps["formviewer_ok"]:
-            print(
-                "WARN: DRViewer 403 — index/live rematch TTHC bi khoa. "
-                "Dien CLS nhe qua FormViewer khi da co phieukhamId.",
-                flush=True,
-            )
+            if caps["postdata_ok"]:
+                print(
+                    "WARN: ExecuteStore 403 — rematch live bang PostData + dien FormViewer.",
+                    flush=True,
+                )
+            else:
+                print(
+                    "WARN: ExecuteStore+PostData DENIED — chi dien khi da co phieukhamId "
+                    "(cache/CSV). Rematch ten/CCCD bi khoa.",
+                    flush=True,
+                )
         return caps
     raise RuntimeError(
         "Khong dien duoc CLS: DRViewer va FormViewer deu bi chan. "

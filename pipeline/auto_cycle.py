@@ -970,11 +970,18 @@ def _run_auto_cycle_inner(
         return {"abort": "fill_access_denied", "detail": str(e), "bot_role": role}
     drviewer_ok = bool(fill_caps.get("drviewer_ok"))
     formviewer_ok = bool(fill_caps.get("formviewer_ok"))
+    postdata_ok = bool(fill_caps.get("postdata_ok"))
     if formviewer_ok and not drviewer_ok:
-        safe_print(
-            "MODE: FormViewer-light — rematch bang index cache (neu co); "
-            "dien CLS qua FormViewer; bo live search DRViewer"
-        )
+        if postdata_ok:
+            safe_print(
+                "MODE: PostData-live + FormViewer — rematch ten/CCCD bang PostData; "
+                "CHI chuyen folder khi CLS verify du"
+            )
+        else:
+            safe_print(
+                "MODE: FormViewer-light — rematch bang index cache/CSV pid; "
+                "CHI chuyen folder khi CLS verify du"
+            )
 
     def reauth_acct(aid: str) -> str:
         for acct in accounts:
@@ -1070,6 +1077,7 @@ def _run_auto_cycle_inner(
         fill_caps = assert_can_fill_or_raise(tokens)
         drviewer_ok = bool(fill_caps.get("drviewer_ok"))
         formviewer_ok = bool(fill_caps.get("formviewer_ok"))
+        postdata_ok = bool(fill_caps.get("postdata_ok"))
     except Exception as e:
         safe_print(f"ABORT: {e}")
         return {"abort": "fill_access_denied", "detail": str(e), "bot_role": role}
@@ -1385,13 +1393,47 @@ def _run_auto_cycle_inner(
             "params_conflict",
             "no_account_match",
         }:
-            # Live search both accounts then re-resolve on a synthetic mini index
             live_name = str(data.get("ho_ten") or row.get("ho_ten") or "")
             live_year = str(data.get("nam_sinh") or resolved_year or "")
-            if live_name and not drviewer_ok:
-                stats["live_search_skipped_drviewer"] += 1
-                live_name = ""  # skip live block below
-            if live_name:
+            live_cccd = str(data.get("cccd") or row.get("cccd") or "")
+
+            # 1) PostData live (works when ExecuteStore 403 but PostData OK)
+            if (live_name or live_cccd) and postdata_ok:
+                from medinet_api import lookup_tthc_by_name_cccd
+                from tthc_match import TTHCMatchResult
+
+                stats["postdata_search_attempted"] += 1
+                aid0 = accounts[0]["id"]
+                rec_pd, det_pd, tokens[aid0] = lookup_tthc_by_name_cccd(
+                    tokens[aid0],
+                    name=live_name,
+                    cccd=live_cccd,
+                    year=live_year,
+                    date_from=date_from,
+                    date_to=date_to,
+                    reauth=lambda a=aid0: reauth_acct(a),
+                )
+                if rec_pd:
+                    rec_pd["_medinet_account"] = aid0
+                    pid_pd = rec_pd.get("phieukhamId") or rec_pd.get("Id")
+                    if pid_pd is not None:
+                        rec_pd["phieukhamId"] = pid_pd
+                    tthc = TTHCMatchResult(
+                        "READY_IMPORT", [rec_pd], f"postdata:{det_pd}"
+                    )
+                    stats["postdata_name_match"] += 1
+                    safe_print(
+                        f"  PostData HIT {live_name} cccd={live_cccd or '-'} "
+                        f"pid={pid_pd} {det_pd}"
+                    )
+                else:
+                    stats["postdata_no_hit"] += 1
+                    if "denied" in (det_pd or "").lower():
+                        postdata_ok = False
+                        safe_print(f"  PostData DENIED mid-run: {det_pd}")
+
+            # 2) ExecuteStore live search (only if DRViewer OK)
+            if tthc.status == "WAITING_ADMIN" and live_name and drviewer_ok:
                 stats["live_search_attempted"] += 1
                 live_st, live_rec, live_acct = search_patient_live_multi(
                     accounts,
@@ -1432,6 +1474,8 @@ def _run_auto_cycle_inner(
                             "READY_IMPORT", [live_rec], f"live_{live_acct}"
                         )
                         stats["live_name_match"] += 1
+            elif tthc.status == "WAITING_ADMIN" and live_name and not drviewer_ok and not postdata_ok:
+                stats["live_search_skipped_no_api"] += 1
 
         if tthc.status == "AMBIGUOUS_NAME":
             stats["ambiguous_name"] += 1
@@ -1544,8 +1588,8 @@ def _run_auto_cycle_inner(
                 continue
 
             if fields_sent <= 0 and sample_kind == "OTHER":
-                # no blood/urine labs to send — still route ERROR
-                filled_ok += 1
+                # OTHER sample: never count as CLS-complete success move
+                any_incomplete = True
                 last_msg = "other_sample_no_labs"
                 continue
 
@@ -1612,19 +1656,21 @@ def _run_auto_cycle_inner(
             f"mode={tthc.mode};name_mismatch={nm_flag};{last_msg}"
         )[:200]
 
-        route_coverage = coverage
-        if force_error:
-            route_coverage = "OTHER"
-        if any_incomplete and coverage == "FULL":
-            route_coverage = "PARTIAL"
-
-        if filled_ok > 0 or force_error:
-            imported_n += 1 if filled_ok else 0
+        # CHI chuyen folder khi CLS da dien DU + verify OK.
+        # Co TTHC ma CLS thieu/that bai → GIU nguyen folder (MISSING/INBOX), khong TK1/PROCESSED.
+        cls_complete = (
+            filled_ok > 0
+            and not any_incomplete
+            and not force_error
+            and sample_kind != "OTHER"
+        )
+        if cls_complete:
+            imported_n += 1
             _route_after_import(
                 pdf=pdf,
                 row=row,
                 pid=last_pid,
-                coverage=route_coverage if route_coverage != "OTHER" else "PARTIAL",
+                coverage="FULL",
                 processed=processed,
                 error_dir=error_dir,
                 under18_dir=under18_dir,
@@ -1638,8 +1684,7 @@ def _run_auto_cycle_inner(
                 n_accounts=n_accts,
                 primary_account=primary_aid,
                 sample_kind=sample_kind,
-                force_error=force_error
-                or route_coverage in {"PARTIAL", "URINE_ONLY", "EMPTY", "OTHER"},
+                force_error=False,
                 name_mismatch=nm_flag,
             )
             results.append(
@@ -1649,15 +1694,69 @@ def _run_auto_cycle_inner(
                     "nam_sinh": data.get("nam_sinh"),
                     "tthc_accounts": label,
                     "phieukhamId": last_pid,
-                    "import_status": "IMPORTED" if filled_ok else "ERROR_IMPORT",
+                    "import_status": "IMPORTED",
                     "message": row["notes"],
-                    "verified": "YES" if filled_ok else "NO",
+                    "verified": "YES",
+                }
+            )
+        elif force_error or sample_kind == "OTHER":
+            # Mau khac / force: dua ERROR (khong coi la thanh cong CLS)
+            _route_after_import(
+                pdf=pdf,
+                row=row,
+                pid=last_pid,
+                coverage="OTHER",
+                processed=processed,
+                error_dir=error_dir,
+                under18_dir=under18_dir,
+                stats=stats,
+                note=row["notes"],
+                moves=moves,
+                nam_sinh=str(data.get("nam_sinh") or row.get("nam_sinh") or ""),
+                tk1_dir=tk1_dir,
+                tk2_dir=tk2_dir,
+                cccd_dir=cccd_dir,
+                n_accounts=n_accts,
+                primary_account=primary_aid,
+                sample_kind=sample_kind,
+                force_error=True,
+                name_mismatch=nm_flag,
+            )
+            results.append(
+                {
+                    "file_name": pdf.name,
+                    "ho_ten": data.get("ho_ten"),
+                    "nam_sinh": data.get("nam_sinh"),
+                    "tthc_accounts": label,
+                    "phieukhamId": last_pid,
+                    "import_status": "ERROR_IMPORT",
+                    "message": row["notes"],
+                    "verified": "NO",
                 }
             )
         else:
+            # TTHC co nhung CLS chua du — GIU MISSING/INBOX de chay lai
             row["status"] = "READY_IMPORT"
-            row["notes"] = f"import_fail_all:{last_msg}"[:200]
-            stats["error_import"] += 1
+            row["notes"] = (
+                f"cls_incomplete_keep_folder:filled={filled_ok};{last_msg}"
+            )[:200]
+            stats["cls_incomplete_no_move"] += 1
+            safe_print(
+                f"  KEEP folder (chua du CLS) {row.get('ho_ten')} pid={last_pid} "
+                f"filled={filled_ok} incomplete={any_incomplete}"
+            )
+            results.append(
+                {
+                    "file_name": pdf.name,
+                    "ho_ten": data.get("ho_ten"),
+                    "nam_sinh": data.get("nam_sinh"),
+                    "tthc_accounts": label,
+                    "phieukhamId": last_pid,
+                    "import_status": "CLS_INCOMPLETE",
+                    "message": row["notes"],
+                    "verified": "NO",
+                }
+            )
 
         if sleep_s:
             time.sleep(sleep_s)

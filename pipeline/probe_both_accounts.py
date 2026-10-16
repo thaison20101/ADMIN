@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Probe Medinet AUTH + DRViewer + FormViewer CLS. Exit 0 if can fill CLS."""
+"""Probe Medinet AUTH + ExecuteStore + PostData + FormViewer. Exit 0 if can fill."""
 from __future__ import annotations
 
 import os
@@ -35,14 +35,22 @@ def main() -> int:
         print("Bo qua TK2. Bao Medinet/IT cap quyen cho pkdkthuankieu.")
         return 2
     if caps.get("drviewer_ok"):
-        print("AUTH_READY DRViewer OK - co the index TTHC + dien CLS (Set)")
+        print("AUTH_READY ExecuteStore OK - index + Set CLS")
         return 0
-    # FormViewer-only: light fill when phieukhamId known; rematch live needs DRViewer
-    print(
-        "AUTH_READY FormViewer OK (DRViewer DENIED) - "
-        "dien CLS nhe qua FormViewer; rematch ten/index can DRViewer"
-    )
-    return 0
+    if caps.get("postdata_ok") and caps.get("formviewer_ok"):
+        print(
+            "AUTH_READY PostData+FormViewer OK - rematch ten/CCCD + dien CLS; "
+            "chi chuyen folder khi CLS verify du"
+        )
+        return 0
+    if caps.get("formviewer_ok"):
+        print(
+            "AUTH_READY FormViewer OK (ExecuteStore+PostData DENIED) - "
+            "chi dien khi da co phieukhamId (cache/CSV)"
+        )
+        return 0
+    print("AUTH_FAIL: khong du quyen dien CLS")
+    return 2
 
 
 if __name__ == "__main__":

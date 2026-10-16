@@ -191,12 +191,14 @@ def test_probe_fill_capabilities_formviewer_only():
 
     with (
         patch.object(api, "probe_drviewer_access", return_value=(False, "http=403")),
+        patch.object(api, "probe_postdata_access", return_value=(True, "http=200")),
         patch.object(api, "probe_formviewer_cls", return_value=(True, "http=200 ok")),
     ):
         caps = api.probe_fill_capabilities(tokens)
         out = api.assert_can_fill_or_raise(tokens)
 
     assert caps["drviewer_ok"] is False
+    assert caps["postdata_ok"] is True
     assert caps["formviewer_ok"] is True
     assert out["formviewer_ok"] is True
 
@@ -204,6 +206,7 @@ def test_probe_fill_capabilities_formviewer_only():
 def test_assert_can_fill_raises_when_both_denied():
     with (
         patch.object(api, "probe_drviewer_access", return_value=(False, "403")),
+        patch.object(api, "probe_postdata_access", return_value=(False, "403")),
         patch.object(api, "probe_formviewer_cls", return_value=(False, "403")),
     ):
         try:
