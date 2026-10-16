@@ -113,7 +113,7 @@ for ($round = 1; $round -le $Rounds; $round++) {
   Log ("missing vong $round exit=$code2 sec=$sec")
 
   if ($code2 -ne 0) {
-    Log "WARN missing exit!=0 — clear lock + RETRY 1 lan (thuong do lock)"
+    Log "WARN missing exit ne 0 -- clear lock + RETRY 1 lan (thuong do lock)"
     Clear-PkdkLocks
     Start-Sleep -Seconds 2
     & $Python -u ".\pipeline\hourly_sync.py" --bot missing --force --missing-budget $Budget
@@ -127,10 +127,10 @@ for ($round = 1; $round -le $Rounds; $round++) {
   if ($code2 -eq 0) {
     $okRounds++
   } else {
-    Log "WARN: vong $round van fail — tiep vong sau (KHONG break ca rematch)"
+    Log "WARN: vong $round van fail -- tiep vong sau (KHONG break ca rematch)"
   }
   # Neu missing disk da thap, co the dung som
-  # (khong bat buoc — van chay het rounds de PostData bat TTHC moi)
+  # (khong bat buoc -- van chay het rounds de PostData bat TTHC moi)
 }
 
 Log ("MISSING rounds OK=$okRounds / $Rounds")

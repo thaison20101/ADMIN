@@ -107,7 +107,7 @@ for ($round = 1; $round -le 8; $round++) {
   $code2 = $LASTEXITCODE
   Log ("missing vong $round exit=$code2 sec=" + [int]((Get-Date) - $t1).TotalSeconds)
   if ($code2 -ne 0) {
-    Log "WARN missing exit!=0 — clear lock + RETRY 1 lan"
+    Log "WARN missing exit ne 0 -- clear lock + RETRY 1 lan"
     Clear-PkdkLocks
     Start-Sleep -Seconds 2
     & $Python -u ".\pipeline\hourly_sync.py" --bot missing --force --missing-budget 3000
@@ -117,7 +117,7 @@ for ($round = 1; $round -le 8; $round++) {
   & $Python ".\pipeline\print_counts.py" | ForEach-Object { Log $_ }
   & $Python ".\pipeline\print_disk_counts.py" | ForEach-Object { Log $_ }
   if ($code2 -eq 0) { $okRounds++ }
-  else { Log "WARN: vong $round van fail — tiep vong sau (KHONG break)" }
+  else { Log "WARN: vong $round van fail -- tiep vong sau (KHONG break)" }
 }
 
 Log ("MISSING rounds OK=$okRounds / 8")
