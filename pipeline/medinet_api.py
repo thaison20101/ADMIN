@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -25,10 +26,19 @@ CLS_FORM_ID = 1000250
 CLS_DATASOURCE_ID = 97
 CLS_STORE_GET = "KSKDK_Phieu_CanLamSang_Get"
 CLS_STORE_SET = "KSKDK_Phieu_CanLamSang_Set"
+CLS_MAUKHAM = "mauphieudk"
 LOAI_KHAM_DINH_KY = 5152
 LOAI_KHAM_TUYEN = 5153
 NITRIT_AM_TINH = 5120
 NITRIT_DUONG_TINH = 5119
+
+
+def _cls_formviewer_urlpage(record_id: int | str, *, maukham: str = CLS_MAUKHAM) -> str:
+    """Same UrlPage the browser uses for Khám cận lâm sàng (Lưu thay đổi)."""
+    return (
+        "/nav_group/kskdk_thongtinkham/app/main/dynamicform/viewer/"
+        f"KSKDK_Phieu_CanLamSang?TTHCId={record_id}&maukham={maukham}"
+    )
 
 
 def _auth_fail_detail(body: dict | None, raw: str = "") -> str:
@@ -671,8 +681,36 @@ def get_cls(token: str, phieukham_id: int | str, reauth=None) -> tuple[dict | No
 
 
 def get_formviewer_cls(token: str, phieukham_id: int | str, reauth=None) -> tuple[dict | None, str]:
-    """Web form path — light CLS read (works when DRViewer Get is 403)."""
+    """Web form path — light CLS read (works when DRViewer Get is 403).
+
+    Prefer FormViewerDataByRecord with TTHCId UrlPage (same context as Lưu).
+    Fall back to FormViewerData + phieukhamId fparams.
+    """
+    url_page = _cls_formviewer_urlpage(phieukham_id)
+    q = urllib.parse.urlencode(
+        {
+            "form_id": CLS_FORM_ID,
+            "SessionSiteId": SITE_ID,
+            "record_id": str(phieukham_id),
+            "UrlPage": url_page,
+            "ispopup": "false",
+            "istab": "false",
+        }
+    )
     s, d, token = api(
+        token,
+        f"/api/services/app/FormViewer/FormViewerDataByRecord?{q}",
+        "POST",
+        to_fparams({"TTHCId": phieukham_id, "maukham": CLS_MAUKHAM}),
+        reauth=reauth,
+        extra_headers={"displaymode": "0"},
+    )
+    if not _is_access_denied(s, d) and s == 200:
+        fd = (((d or {}).get("result") or {}).get("data") or {}).get("formData") or []
+        if fd:
+            return (fd[0] if isinstance(fd, list) else fd), token
+    # Fallback: classic FormViewerData
+    s2, d2, token = api(
         token,
         f"/api/services/app/FormViewer/FormViewerData?form_id={CLS_FORM_ID}"
         f"&SessionSiteId={SITE_ID}&UrlPage=",
@@ -681,10 +719,10 @@ def get_formviewer_cls(token: str, phieukham_id: int | str, reauth=None) -> tupl
         reauth=reauth,
         extra_headers={"displaymode": "0"},
     )
-    if _is_access_denied(s, d):
+    if _is_access_denied(s2, d2):
         return None, token
-    fd = (((d or {}).get("result") or {}).get("data") or {}).get("formData") or []
-    return (fd[0] if fd else None), token
+    fd2 = (((d2 or {}).get("result") or {}).get("data") or {}).get("formData") or []
+    return (fd2[0] if fd2 else None), token
 
 
 def merge_cls_rows(*rows: dict | None) -> dict:
@@ -804,15 +842,8 @@ def _set_cls(token: str, payload: dict, reauth=None):
     return ok, msg or f"http={s}", res, token
 
 
-def _cls_formviewer_urlpage(phieukham_id: int | str) -> str:
-    return (
-        "/app/main/dynamicform/viewer/KSKDK_Phieu_CanLamSang"
-        f"?phieukhamId={phieukham_id}"
-    )
-
-
 def _formviewer_write_result(status: int, body: dict | None) -> tuple[bool, str, dict]:
-    """Parse FormViewer Insert/Update response; soft-ok VersionType-3-Non-Insert-Id."""
+    """Parse FormViewer response. Soft-ok VersionType-3 is NOT success (often empty form)."""
     res = (body or {}).get("result") or {}
     if not isinstance(res, dict):
         res = {}
@@ -822,52 +853,133 @@ def _formviewer_write_result(status: int, body: dict | None) -> tuple[bool, str,
     if _is_access_denied(status, body, msg):
         return False, msg or f"http={status} Access denied", {"http": status, "body": body}
     if (not ok) and code == "VersionType-3-Non-Insert-Id":
-        ok = True
-        msg = f"soft-ok:{code}:{msg}"
+        # Historical: soft-ok frequently leaves web empty — do not treat as saved
+        return False, f"soft-fail:{code}:{msg}", res
     if ok:
         return True, msg or f"http={status} ok", res
     return False, msg or f"http={status}", res if res else {"http": status, "body": body}
 
 
-def _formviewer_insert_cls(token: str, payload: dict, reauth=None):
-    """Light CLS write via FormViewer (same pattern as TTHC FormToDatabaseInsert)."""
-    pid = payload.get("phieukhamId")
+def _to_comma_decimal(val) -> str:
+    if isinstance(val, bool):
+        return str(val)
+    if isinstance(val, int):
+        return str(val)
+    try:
+        num = float(val) if not isinstance(val, float) else val
+    except Exception:
+        return str(val)
+    if num.is_integer():
+        return str(int(num))
+    return f"{num:.6f}".rstrip("0").rstrip(".").replace(".", ",")
+
+
+def _prepare_formviewer_payload(payload: dict) -> dict:
+    """Shape labs for FormToDataBaseUpdate (UI Lưu thay đổi).
+
+    - Mirror LucDoi → DuongMau when định kỳ form only binds DuongMau
+    - NumberBox: JSON numbers; urine TextBox: comma decimals or Negative
+    """
+    out: dict = {"LoaiKham": int(LOAI_KHAM_DINH_KY)}
+    luc = payload.get("SinhHoaMau_DuongMauLucDoi")
+    bat = payload.get("SinhHoaMau_DuongMau")
+    src = dict(payload)
+    if luc not in (None, "") and bat in (None, ""):
+        src["SinhHoaMau_DuongMau"] = luc
+    for k, v in src.items():
+        if k in ("LoaiKham", "__label_action_code", "phieukhamId", "cdId", "IsNamGioi"):
+            if k == "phieukhamId":
+                out[k] = v
+            elif k in ("cdId", "IsNamGioi") and v not in (None, ""):
+                out[k] = v
+            continue
+        if v in (None, ""):
+            continue
+        if k == "NuocTieu_NiTrit":
+            try:
+                out[k] = int(v)
+            except Exception:
+                continue
+            continue
+        if k in URINE_TEXT_FIELDS:
+            if v == "Negative" or str(v).strip().lower() == "negative":
+                out[k] = "Negative"
+            else:
+                try:
+                    out[k] = _to_comma_decimal(v)
+                except Exception:
+                    continue
+            continue
+        if k in NUMBER_FIELDS:
+            num = _to_number(v)
+            if num is not None:
+                out[k] = num
+            continue
+        num = _to_number(v)
+        if num is not None:
+            out[k] = num
+    return out
+
+
+def _formviewer_open_cls(token: str, record_id: int | str, reauth=None):
+    """Open CLS form context (CREATE_PHIEU,SAVE,BACK) like the browser."""
+    url_page = _cls_formviewer_urlpage(record_id)
     q = urllib.parse.urlencode(
         {
             "form_id": CLS_FORM_ID,
-            "UrlPage": _cls_formviewer_urlpage(pid),
-            "ispopup": "true",
-            "istab": "true",
+            "SessionSiteId": SITE_ID,
+            "UrlPage": url_page,
+            "ispopup": "false",
+            "istab": "false",
         }
     )
+    params = [
+        {"Varible": "TTHCId", "Value": str(record_id)},
+        {"Varible": "maukham", "Value": CLS_MAUKHAM},
+        {"Varible": "KSKDK_Phieu_CanLamSang_guid", "Value": str(uuid.uuid4())},
+        {"Varible": "formdata_parent", "Value": "null"},
+        {
+            "Varible": "DataFlowData",
+            "Value": json.dumps(
+                {
+                    "LoaiKham": LOAI_KHAM_DINH_KY,
+                    "__label_action_code": "CREATE_PHIEU,SAVE,BACK",
+                },
+                ensure_ascii=False,
+            ),
+        },
+    ]
     s, d, token = api(
         token,
-        f"/api/services/app/FormViewer/FormToDatabaseInsert?{q}",
+        f"/api/services/app/FormViewer/FormViewerData?{q}",
         "POST",
-        payload,
+        params,
         reauth=reauth,
         extra_headers={"displaymode": "0"},
     )
-    ok, msg, res = _formviewer_write_result(s, d)
-    return ok, msg, res, token
+    return s, d, token
 
 
 def _formviewer_update_cls(token: str, payload: dict, reauth=None):
-    """Light CLS update when Insert fails for an existing form row."""
-    pid = payload.get("phieukhamId")
+    """Persist CLS via FormToDataBaseUpdate?record_id= (UI Lưu thay đổi)."""
+    record_id = payload.get("phieukhamId")
+    url_page = _cls_formviewer_urlpage(record_id)
     q = urllib.parse.urlencode(
         {
             "form_id": CLS_FORM_ID,
-            "UrlPage": _cls_formviewer_urlpage(pid),
-            "ispopup": "true",
-            "istab": "true",
+            "record_id": str(record_id),
+            "SessionSiteId": SITE_ID,
+            "UrlPage": url_page,
+            "ispopup": "false",
+            "istab": "false",
         }
     )
+    body = {k: v for k, v in payload.items() if k != "phieukhamId"}
     s, d, token = api(
         token,
         f"/api/services/app/FormViewer/FormToDataBaseUpdate?{q}",
         "POST",
-        payload,
+        body,
         reauth=reauth,
         extra_headers={"displaymode": "0"},
     )
@@ -875,48 +987,134 @@ def _formviewer_update_cls(token: str, payload: dict, reauth=None):
     return ok, msg, res, token
 
 
-def _prepare_formviewer_payload(payload: dict) -> dict:
-    """Shape payload for FormViewer CLS (existing phieukhamId form).
+def _formviewer_insert_cls(token: str, payload: dict, reauth=None):
+    """Fallback Insert when Update has no row yet (rare for existing TTHC)."""
+    record_id = payload.get("phieukhamId")
+    url_page = _cls_formviewer_urlpage(record_id)
+    q = urllib.parse.urlencode(
+        {
+            "form_id": CLS_FORM_ID,
+            "UrlPage": url_page,
+            "SessionSiteId": SITE_ID,
+            "ispopup": "false",
+            "istab": "false",
+        }
+    )
+    body = {k: v for k, v in payload.items() if k != "phieukhamId"}
+    s, d, token = api(
+        token,
+        f"/api/services/app/FormViewer/FormToDatabaseInsert?{q}",
+        "POST",
+        body,
+        reauth=reauth,
+        extra_headers={"displaymode": "0"},
+    )
+    ok, msg, res = _formviewer_write_result(s, d)
+    return ok, msg, res, token
 
-    Định kỳ UI often only binds SinhHoaMau_DuongMau — mirror LucDoi into it
-    when DuongMau is empty so glucose from 'lúc đói' PDF still lands on web.
-    """
-    out = dict(payload)
-    luc = out.get("SinhHoaMau_DuongMauLucDoi")
-    bat = out.get("SinhHoaMau_DuongMau")
-    if luc not in (None, "") and bat in (None, ""):
-        out["SinhHoaMau_DuongMau"] = luc
-    return out
+
+def _formviewer_field_retry(token: str, payload: dict, reauth=None):
+    """If bulk Update fails, send key NumberBox fields one-by-one then re-check."""
+    record_id = payload.get("phieukhamId")
+    url_page = _cls_formviewer_urlpage(record_id)
+    q = urllib.parse.urlencode(
+        {
+            "form_id": CLS_FORM_ID,
+            "record_id": str(record_id),
+            "SessionSiteId": SITE_ID,
+            "UrlPage": url_page,
+            "ispopup": "false",
+            "istab": "false",
+        }
+    )
+    path = f"/api/services/app/FormViewer/FormToDataBaseUpdate?{q}"
+    ok_n = 0
+    last_res: dict = {}
+    last_msg = ""
+    # Blood + chemistry first (what empty screenshot shows missing)
+    keys = [
+        k
+        for k in payload
+        if k in NUMBER_FIELDS or k in URINE_TEXT_FIELDS or k == "NuocTieu_NiTrit"
+    ]
+    keys.sort(key=lambda k: (0 if k in NUMBER_FIELDS else 1, k))
+    for k in keys:
+        solo = {"LoaiKham": LOAI_KHAM_DINH_KY, k: payload[k]}
+        s, d, token = api(
+            token,
+            path,
+            "POST",
+            solo,
+            reauth=reauth,
+            extra_headers={"displaymode": "0"},
+        )
+        ok, msg, res = _formviewer_write_result(s, d)
+        last_msg, last_res = msg, res
+        if ok:
+            ok_n += 1
+    return ok_n, last_msg, last_res, token
 
 
 def _formviewer_save_cls(token: str, payload: dict, reauth=None):
-    """Update first (CLS row usually exists), then Insert. DRViewer Set denied only."""
+    """Persist CLS like UI Lưu thay đổi. Only when DRViewer Set is access-denied.
+
+    Steps (proven in historical cls-import):
+      1) FormViewerData open with DataFlowData + SAVE action
+      2) FormToDataBaseUpdate?record_id=TTHCId with lab body
+      3) Field-by-field retry if still empty on FormViewerData read
+    Soft-ok alone is never treated as success.
+    """
+    if "phieukhamId" not in payload:
+        return False, "missing phieukhamId", {}, token
+    record_id = payload["phieukhamId"]
     body = _prepare_formviewer_payload(payload)
-    # Prefer Update: phieukhamId form already exists; Insert soft-ok often saves nothing
+    body["phieukhamId"] = record_id
+
+    # 1) Open form context
+    s_open, d_open, token = _formviewer_open_cls(token, record_id, reauth=reauth)
+    if _is_access_denied(s_open, d_open):
+        return (
+            False,
+            f"FormViewer open Access denied http={s_open}",
+            {"open": d_open},
+            token,
+        )
+
+    # 2) Bulk Update (Lưu thay đổi)
     ok_u, msg_u, res_u, token = _formviewer_update_cls(token, body, reauth=reauth)
-    if ok_u and "soft-ok" not in (msg_u or ""):
-        return True, f"UPDATE-fallback:{msg_u}", {"update": res_u}, token
+    row, token = get_formviewer_cls(token, record_id, reauth=reauth)
+    if ok_u and cls_has_lab_values(row):
+        return True, f"UPDATE-fallback:{msg_u}", {"update": res_u, "open": d_open}, token
+
+    # 3) Insert then Update again (new CLS phiếu)
     ok_i, msg_i, res_i, token = _formviewer_insert_cls(token, body, reauth=reauth)
-    # Soft-ok Insert is unreliable — always follow with Update when possible
-    if ok_i and "soft-ok" in (msg_i or ""):
+    if ok_i:
         ok_u2, msg_u2, res_u2, token = _formviewer_update_cls(token, body, reauth=reauth)
-        if ok_u2:
+        row, token = get_formviewer_cls(token, record_id, reauth=reauth)
+        if cls_has_lab_values(row):
             return (
                 True,
-                f"INSERT-soft+UPDATE:{msg_i};{msg_u2}",
-                {"insert": res_i, "update": res_u2},
+                f"INSERT+UPDATE:{msg_i};{msg_u2}",
+                {"insert": res_i, "update": res_u2, "open": d_open},
                 token,
             )
-        # Keep soft-ok as tentative success; caller verify will catch empty
-        return True, f"INSERT-fallback:{msg_i}", {"insert": res_i, "update": res_u}, token
-    if ok_i:
-        return True, f"INSERT-fallback:{msg_i}", {"insert": res_i, "update": res_u}, token
-    if ok_u:
-        return True, f"UPDATE-fallback:{msg_u}", {"update": res_u, "insert": res_i}, token
+
+    # 4) Field-by-field
+    ok_n, msg_f, res_f, token = _formviewer_field_retry(token, body, reauth=reauth)
+    time.sleep(0.4)
+    row, token = get_formviewer_cls(token, record_id, reauth=reauth)
+    if cls_has_lab_values(row):
+        return (
+            True,
+            f"FIELD-fallback:n={ok_n}:{msg_f}",
+            {"fields": res_f, "update": res_u, "insert": res_i, "open": d_open},
+            token,
+        )
+
     return (
         False,
-        f"UPDATE:{msg_u}; INSERT:{msg_i}",
-        {"update": res_u, "insert": res_i},
+        f"FormViewer empty after save UPDATE:{msg_u}; INSERT:{msg_i}; FIELDS:{ok_n}:{msg_f}",
+        {"update": res_u, "insert": res_i, "fields": res_f, "open": d_open},
         token,
     )
 

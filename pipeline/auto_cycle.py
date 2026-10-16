@@ -1318,11 +1318,23 @@ def _run_auto_cycle_inner(
         row["ho_ten"] = data.get("ho_ten") or row.get("ho_ten") or ""
         if data.get("cccd"):
             row["cccd"] = data.get("cccd")
+        # Rematch CCCD from chan_doan even when top-level cccd blank
+        if not row.get("cccd"):
+            from tthc_match import pdf_cccd_digits
+
+            cc = pdf_cccd_digits(data) or pdf_cccd_digits(row)
+            if cc:
+                row["cccd"] = cc
+                data["cccd"] = cc
         row["mau_kham"] = data.get("mau_kham") or row.get("mau_kham") or ""
         data["file_name"] = pdf.name
         data["source_file"] = str(pdf)
+        if row.get("cccd") and not data.get("cccd"):
+            data["cccd"] = row.get("cccd")
         if row.get("ma_phieu"):
             data["ma_phieu"] = row.get("ma_phieu")
+        if data.get("ngay_sinh"):
+            row["ngay_sinh"] = data.get("ngay_sinh")
         resolved_name, resolved_year = resolve_name_year(
             {
                 "ho_ten": data.get("ho_ten") or row.get("ho_ten") or "",
